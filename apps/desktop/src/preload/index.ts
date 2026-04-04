@@ -18,6 +18,9 @@ const api = {
   readConfig: () => ipcRenderer.invoke("config:read"),
   writeConfig: (params: ConfigWriteParams) => ipcRenderer.invoke("config:write", params),
   testProvider: () => ipcRenderer.invoke("provider:test"),
+  setTitleBarTheme: (theme: "light" | "dark") => ipcRenderer.invoke("window:set-titlebar-theme", theme),
+  showAppMenu: (params: { menuId: "file" | "edit" | "view" | "window" | "help"; x: number; y: number }) =>
+    ipcRenderer.invoke("window:show-app-menu", params),
   pickWorkspace: () => ipcRenderer.invoke("workspace:pick"),
   onEvent: (listener: (event: HarnessEvent) => void) => {
     const wrapped = (_event: Electron.IpcRendererEvent, payload: HarnessEvent) => listener(payload);

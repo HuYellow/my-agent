@@ -1,9 +1,29 @@
-import { useEffect, useMemo, useState, type CSSProperties, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import {
+  MessageSquarePlus,
+  Zap,
+  Grid3X3,
+  GitBranch,
+  Settings,
+  Send,
+  Plus,
+  Search,
+  FolderOpen,
+  Bot,
+  User,
+  AlertTriangle,
+  Wrench,
+  FileEdit,
+  CheckCircle,
+  XCircle,
+  Clock,
+} from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
   type ApprovalPolicy,
   type ItemKind,
   type ItemRecord,
+  type PendingApproval,
   type SandboxMode,
   type SkillDescriptor,
 } from "@my-agent/protocol";
@@ -18,26 +38,29 @@ interface ProviderFormState {
   sandboxMode: SandboxMode;
 }
 
-type InspectorTab = "skills" | "settings";
+type NavView = "threads" | "skills" | "plugins" | "automation" | "settings";
 
 const EMPTY_PROMPTS = [
   {
-    label: "Map runtime",
-    prompt: "Inspect this repo and explain how the desktop app, harness runtime, and shared protocol fit together.",
+    label: "Read the structure",
+    prompt:
+      "Read this repository carefully and tell me what problem it is truly trying to solve, plus the most disciplined part of the architecture.",
   },
   {
-    label: "Review skills",
-    prompt: "Use $repo-qa to summarize the current skills discovery flow and suggest the next improvements for skills and harness integration.",
+    label: "Break the habit",
+    prompt:
+      "Point out one habit this project needs to break next, from both the product and engineering perspectives, and give me a concrete next step.",
   },
   {
-    label: "Next milestone",
-    prompt: "Based on the current codebase, propose the next milestone after the desktop shell for making the runtime feel more like Codex Desktop.",
+    label: "Name the next act",
+    prompt:
+      "Based on the current code, sketch an ambitious but still shippable next milestone for this project.",
   },
 ];
 
 const ITEM_LABELS: Record<ItemKind, string> = {
-  userMessage: "User",
-  agentMessage: "Agent",
+  userMessage: "Question",
+  agentMessage: "Response",
   reasoning: "Reasoning",
   toolCall: "Tool call",
   toolResult: "Tool result",
@@ -70,9 +93,10 @@ export function App() {
     testProvider,
   } = useAppStore();
 
+  const [activeView, setActiveView] = useState<NavView>("threads");
   const [input, setInput] = useState("");
   const [skillDetail, setSkillDetail] = useState<SkillDescriptor | null>(null);
-  const [inspectorTab, setInspectorTab] = useState<InspectorTab>("skills");
+  const [threadSearch, setThreadSearch] = useState("");
   const [providerForm, setProviderForm] = useState<ProviderFormState>({
     baseUrl: "",
     apiKey: "",
@@ -105,6 +129,10 @@ export function App() {
     () => [...threads].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
     [threads],
   );
+  const orderedItems = useMemo(
+    () => [...items].sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
+    [items],
+  );
   const activeThread = useMemo(
     () => orderedThreads.find((thread) => thread.id === activeThreadId),
     [activeThreadId, orderedThreads],
@@ -114,14 +142,21 @@ export function App() {
     [turns],
   );
   const enabledSkills = useMemo(() => skills.filter((skill) => skill.enabled), [skills]);
-  const implicitSkillsCount = useMemo(
-    () => skills.filter((skill) => skill.metadata.allowImplicitInvocation).length,
-    [skills],
-  );
-  const activeSkills = useMemo(() => {
-    const matches = [...input.matchAll(/(?:^|\s)\$([a-z0-9][a-z0-9-]*)/gi)].map((match) => match[1]!.toLowerCase());
-    return enabledSkills.filter((skill) => matches.includes(skill.name.toLowerCase()));
-  }, [enabledSkills, input]);
+
+  const filteredThreads = useMemo(() => {
+    if (!threadSearch.trim()) return orderedThreads;
+    const search = threadSearch.toLowerCase();
+    return orderedThreads.filter(
+      (thread) =>
+        thread.title.toLowerCase().includes(search) ||
+        thread.workspaceId.toLowerCase().includes(search)
+    );
+  }, [orderedThreads, threadSearch]);
+
+  const handleCreateThread = async () => {
+    await createThread();
+    setActiveView("threads");
+  };
 
   const submitTurn = async () => {
     const message = input.trim();
@@ -131,10 +166,7 @@ export function App() {
     }
 
     setInput("");
-    await sendTurn(
-      message,
-      activeSkills.map((skill) => skill.id),
-    );
+    await sendTurn(message, []);
   };
 
   const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -149,444 +181,170 @@ export function App() {
   }
 
   return (
-    <div className="app-root">
-      <div className="app-grid">
-        <aside className="app-rail">
-          <div className="app-rail__brand">MA</div>
+    <div className="app-container">
+      {/* 左侧导航栏 */}
+      <aside className="sidebar-nav">
+        <div className="sidebar-nav__brand">
+          <div className="sidebar-nav__logo">MA</div>
+        </div>
 
-          <div className="app-rail__group">
-            <button className="app-rail__button app-rail__button--accent" onClick={() => void createThread()} title="New thread">
-              +
-            </button>
-            <button className="app-rail__button app-rail__button--active" title="Threads">
-              TH
-            </button>
-            <button className="app-rail__button" onClick={() => setInspectorTab("skills")} title="Skills">
-              SK
-            </button>
-            <button className="app-rail__button" onClick={() => setInspectorTab("settings")} title="Settings">
-              RT
-            </button>
-          </div>
+        <nav className="sidebar-nav__items">
+          <NavButton
+            icon={<MessageSquarePlus size={20} />}
+            label="New Thread"
+            active={activeView === "threads"}
+            onClick={() => setActiveView("threads")}
+          />
+          <NavButton
+            icon={<Zap size={20} />}
+            label="Skills"
+            active={activeView === "skills"}
+            onClick={() => setActiveView("skills")}
+          />
+          <NavButton
+            icon={<Grid3X3 size={20} />}
+            label="Plugins"
+            active={activeView === "plugins"}
+            onClick={() => setActiveView("plugins")}
+          />
+          <NavButton
+            icon={<GitBranch size={20} />}
+            label="Automation"
+            active={activeView === "automation"}
+            onClick={() => setActiveView("automation")}
+          />
+        </nav>
 
-          <div className="app-rail__footer">
-            <div className={`status-dot ${loading ? "status-dot--live" : "status-dot--idle"}`} />
-            <span>{loading ? "running" : "ready"}</span>
-          </div>
-        </aside>
+        <div className="sidebar-nav__footer">
+          <NavButton
+            icon={<Settings size={20} />}
+            label="Settings"
+            active={activeView === "settings"}
+            onClick={() => setActiveView("settings")}
+          />
+        </div>
+      </aside>
 
-        <aside className="thread-pane">
-          <div className="thread-pane__hero">
-            <div>
-              <p className="eyebrow">Workspace</p>
-              <h1 className="thread-pane__title">{config?.workspace.name ?? "my-agent"}</h1>
-            </div>
-            <p className="thread-pane__subtitle">
-              {config?.workspace.rootPath
-                ? `Local harness attached to ${getLastSegment(config.workspace.rootPath)}`
-                : "Attach a workspace root to start a local agent session."}
-            </p>
-          </div>
+      {/* 次级侧栏 */}
+      <aside className="sidebar-secondary">
+        {activeView === "threads" && (
+          <ThreadsPanel
+            threads={filteredThreads}
+            activeThreadId={activeThreadId}
+            workspaceName={config?.workspace.name}
+            search={threadSearch}
+            onSearchChange={setThreadSearch}
+            onSelectThread={selectThread}
+            onCreateThread={handleCreateThread}
+          />
+        )}
+        {activeView === "skills" && (
+          <SkillsPanel
+            skills={skills}
+            enabledSkills={enabledSkills}
+            onToggleSkill={toggleSkill}
+          />
+        )}
+        {activeView === "plugins" && <PlaceholderPanel title="Plugins" description="Plugin management coming soon." />}
+        {activeView === "automation" && <PlaceholderPanel title="Automation" description="Automation workflows coming soon." />}
+        {activeView === "settings" && (
+          <SettingsPanel
+            providerForm={providerForm}
+            setProviderForm={setProviderForm}
+            providerTestMessage={providerTestMessage}
+            onTestProvider={testProvider}
+            onSaveConfig={() =>
+              void updateConfig({
+                provider: {
+                  ...(config?.provider ?? {
+                    id: "default-provider",
+                    name: "Default Provider",
+                    apiFlavor: "chat_completions",
+                  }),
+                  baseUrl: providerForm.baseUrl,
+                  apiKey: providerForm.apiKey,
+                  model: providerForm.model,
+                },
+                workspace: {
+                  ...(config?.workspace ?? {
+                    id: "default-workspace",
+                    name: "Current Workspace",
+                    shell: "powershell",
+                  }),
+                  rootPath: providerForm.rootPath,
+                  approvalPolicy: providerForm.approvalPolicy,
+                  sandboxMode: providerForm.sandboxMode,
+                },
+              })
+            }
+            onPickWorkspace={async () => {
+              const picked = await window.myAgent.pickWorkspace();
+              if (picked) {
+                setProviderForm((state) => ({ ...state, rootPath: picked }));
+              }
+            }}
+          />
+        )}
+      </aside>
 
-          <div className="thread-pane__stats">
-            <MetricCard label="Threads" value={String(orderedThreads.length)} detail="Persistent session containers" />
-            <MetricCard label="Skills" value={`${enabledSkills.length}/${skills.length}`} detail="Enabled workflow packs" />
-            <MetricCard label="Mode" value={config?.workspace.sandboxMode ?? "workspace-write"} detail="Current sandbox policy" />
-          </div>
-
-          <div className="thread-pane__section thread-pane__section--threads">
-            <div className="section-header">
-              <div>
-                <p className="eyebrow">Threads</p>
-                <h2>Session timeline</h2>
+      {/* 主内容区 */}
+      <main className="main-content">
+        {activeView === "threads" || activeView === "skills" ? (
+          <>
+            {/* 顶部标题栏 */}
+            <header className="main-header">
+              <div className="main-header__title">
+                <h1>{activeThread?.title ?? "New Thread"}</h1>
+                {loading && <span className="main-header__status loading">Working...</span>}
+                {pendingApproval && <span className="main-header__status pending">Approval Required</span>}
+                {!loading && !pendingApproval && activeTurn?.status === "completed" && (
+                  <span className="main-header__status completed">Completed</span>
+                )}
               </div>
-              <button className="button button--ghost" onClick={() => void createThread()}>
-                New thread
-              </button>
-            </div>
+            </header>
 
-            <div className="thread-list">
-              {orderedThreads.length > 0 ? (
-                orderedThreads.map((thread) => (
-                  <button
-                    key={thread.id}
-                    className={`thread-card ${thread.id === activeThreadId ? "thread-card--active" : ""}`}
-                    onClick={() => void selectThread(thread.id)}
-                  >
-                    <div className="thread-card__title-row">
-                      <span className="thread-card__title">{thread.title}</span>
-                      {thread.id === activeThreadId ? <span className="thread-card__badge">Live</span> : null}
-                    </div>
-                    <div className="thread-card__meta">
-                      <span>{formatDateTime(thread.updatedAt)}</span>
-                      <span>{thread.workspaceId}</span>
-                    </div>
-                  </button>
-                ))
+            {/* 消息列表 */}
+            <div className="message-area">
+              {orderedItems.length === 0 ? (
+                <EmptyState onStartConversation={() => {
+                  const el = document.querySelector<HTMLTextAreaElement>(".composer-input");
+                  el?.focus();
+                }} />
               ) : (
-                <div className="thread-empty">
-                  <p>No threads yet.</p>
-                  <span>Create one from the rail or send your first message from the composer.</span>
+                <div className="message-list">
+                  {orderedItems.map((item) => (
+                    <MessageItem key={item.id} item={item} />
+                  ))}
                 </div>
               )}
+
+              {/* 审批请求 */}
+              {pendingApproval && (
+                <ApprovalRequest
+                  approval={pendingApproval}
+                  onApprove={(scope) => void respondApproval(pendingApproval.id, "approve", scope)}
+                  onReject={() => void respondApproval(pendingApproval.id, "reject")}
+                />
+              )}
             </div>
+
+            {/* 底部输入框 */}
+            <ComposerBar
+              input={input}
+              onChange={setInput}
+              onSubmit={submitTurn}
+              onKeyDown={handleComposerKeyDown}
+              loading={loading}
+            />
+          </>
+        ) : (
+          <div className="main-content__placeholder">
+            <p>Select a feature from the sidebar</p>
           </div>
+        )}
+      </main>
 
-          <div className="thread-pane__section thread-pane__section--skills">
-            <div className="section-header">
-              <div>
-                <p className="eyebrow">Quick skills</p>
-                <h2>Fast launch</h2>
-              </div>
-              <span className="section-meta">{implicitSkillsCount} implicit</span>
-            </div>
-
-            <div className="quick-skills">
-              {enabledSkills.slice(0, 6).map((skill) => (
-                <button
-                  key={skill.id}
-                  className="quick-skill"
-                  onClick={() => setInput((value) => `${value}${value ? " " : ""}$${skill.name} `)}
-                  style={buildSkillStyle(skill)}
-                >
-                  <span className="quick-skill__name">{skill.metadata.displayName ?? skill.name}</span>
-                  <span className="quick-skill__hint">{skill.metadata.shortDescription ?? skill.description}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        </aside>
-
-        <main className="workspace-pane">
-          <header className="workspace-pane__header">
-            <div>
-              <p className="eyebrow">Thread</p>
-              <h2 className="workspace-pane__title">{activeThread?.title ?? "Design your local agent workspace"}</h2>
-              <p className="workspace-pane__subtitle">
-                {activeThread
-                  ? `Thread ${activeThread.id.slice(0, 8)} running inside ${getLastSegment(config?.workspace.rootPath)}`
-                  : "Start with a repo walkthrough, a harness task, or an internal workflow skill."}
-              </p>
-            </div>
-
-            <div className="workspace-pane__badges">
-              <span className="meta-pill">{config?.provider.model || "No model"}</span>
-              <span className="meta-pill">{config?.workspace.approvalPolicy ?? "on-request"}</span>
-              <span className="meta-pill">{getLastSegment(config?.workspace.rootPath)}</span>
-              <span className={`meta-pill meta-pill--status meta-pill--status-${normalizeTurnStatus(activeTurn?.status)}`}>
-                {activeTurn?.status ?? "idle"}
-              </span>
-            </div>
-          </header>
-
-          {activeSkills.length > 0 ? (
-            <div className="active-skill-bar">
-              <span className="active-skill-bar__label">Activated this turn</span>
-              <div className="active-skill-bar__list">
-                {activeSkills.map((skill) => (
-                  <button
-                    key={skill.id}
-                    className="active-skill-chip"
-                    onClick={() => setSkillDetail(skill)}
-                    style={buildSkillStyle(skill)}
-                  >
-                    <span className="active-skill-chip__dot" />
-                    {skill.metadata.displayName ?? skill.name}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : null}
-
-          <div className="transcript-pane">
-            {items.length === 0 ? (
-              <div className="empty-state">
-                <div className="empty-state__eyebrow">Codex-like local workflow shell</div>
-                <h3>Thread, turn, and item events will stream here.</h3>
-                <p>
-                  This workspace is ready for multi-turn agent runs, approvals, command traces, file patches, and
-                  skill-driven flows. Pick a prompt to seed the first run or type your own in the composer below.
-                </p>
-                <div className="empty-state__actions">
-                  {EMPTY_PROMPTS.map((entry) => (
-                    <button key={entry.label} className="prompt-card" onClick={() => setInput(entry.prompt)}>
-                      <span className="prompt-card__label">{entry.label}</span>
-                      <span className="prompt-card__body">{entry.prompt}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <div className="stream-list">
-                {items.map((item) => (
-                  <StreamCard key={item.id} item={item} onInspectSkills={() => setInspectorTab("skills")} />
-                ))}
-              </div>
-            )}
-          </div>
-
-          {pendingApproval ? (
-            <section className="approval-dock">
-              <div className="approval-dock__header">
-                <div>
-                  <p className="eyebrow">Approval required</p>
-                  <h3>{pendingApproval.toolName}</h3>
-                </div>
-                <span className="meta-pill meta-pill--warning">{pendingApproval.scope === "session" ? "session scope" : "one shot"}</span>
-              </div>
-              <p className="approval-dock__reason">{pendingApproval.reason}</p>
-              <pre className="approval-dock__payload">{JSON.stringify(pendingApproval.args, null, 2)}</pre>
-              <div className="approval-dock__actions">
-                <button className="button button--ghost" onClick={() => void respondApproval(pendingApproval.id, "reject")}>
-                  Reject
-                </button>
-                <button className="button" onClick={() => void respondApproval(pendingApproval.id, "approve", "once")}>
-                  Approve once
-                </button>
-                <button className="button button--accent" onClick={() => void respondApproval(pendingApproval.id, "approve", "session")}>
-                  Allow for session
-                </button>
-              </div>
-            </section>
-          ) : null}
-
-          <footer className="composer-pane">
-            <div className="composer-pane__meta">
-              <span>{loading ? "Agent is running." : "Ready for the next turn."}</span>
-              <span>
-                {activeSkills.length > 0
-                  ? `Explicit skills: ${activeSkills.map((skill) => skill.name).join(", ")}`
-                  : "Explicit skills: none"}
-              </span>
-            </div>
-
-            <div className="composer-shell">
-              <textarea
-                className="composer-input"
-                placeholder="Ask the agent to inspect the repo, use a skill, review a diff, or run a safe workflow."
-                value={input}
-                onChange={(event) => setInput(event.target.value)}
-                onKeyDown={handleComposerKeyDown}
-              />
-              <div className="composer-shell__footer">
-                <div className="composer-shell__hint">
-                  <span>Use $skill-name for explicit activation.</span>
-                  <span>Press Ctrl/Cmd + Enter to send.</span>
-                </div>
-                <button className="button button--accent button--send" onClick={() => void submitTurn()}>
-                  Send turn
-                </button>
-              </div>
-            </div>
-          </footer>
-        </main>
-
-        <aside className="utility-pane">
-          <div className="utility-pane__switcher">
-            <button
-              className={`utility-pane__switch ${inspectorTab === "skills" ? "utility-pane__switch--active" : ""}`}
-              onClick={() => setInspectorTab("skills")}
-            >
-              Skills
-            </button>
-            <button
-              className={`utility-pane__switch ${inspectorTab === "settings" ? "utility-pane__switch--active" : ""}`}
-              onClick={() => setInspectorTab("settings")}
-            >
-              Runtime
-            </button>
-          </div>
-
-          <div className="utility-pane__content">
-            {inspectorTab === "settings" ? (
-              <section className="utility-card">
-                <div className="section-header">
-                  <div>
-                    <p className="eyebrow">Provider</p>
-                    <h2>Runtime configuration</h2>
-                  </div>
-                  <button className="button button--ghost" onClick={() => void testProvider()}>
-                    Test provider
-                  </button>
-                </div>
-
-                <div className="settings-grid">
-                  <label className="field">
-                    <span>Base URL</span>
-                    <input
-                      value={providerForm.baseUrl}
-                      onChange={(event) => setProviderForm((state) => ({ ...state, baseUrl: event.target.value }))}
-                    />
-                  </label>
-                  <label className="field">
-                    <span>Model</span>
-                    <input
-                      value={providerForm.model}
-                      onChange={(event) => setProviderForm((state) => ({ ...state, model: event.target.value }))}
-                    />
-                  </label>
-                  <label className="field field--full">
-                    <span>API key</span>
-                    <input
-                      value={providerForm.apiKey}
-                      onChange={(event) => setProviderForm((state) => ({ ...state, apiKey: event.target.value }))}
-                    />
-                  </label>
-                  <label className="field field--full">
-                    <span>Workspace root</span>
-                    <div className="field-row">
-                      <input
-                        value={providerForm.rootPath}
-                        onChange={(event) => setProviderForm((state) => ({ ...state, rootPath: event.target.value }))}
-                      />
-                      <button
-                        className="button button--ghost"
-                        onClick={async () => {
-                          const picked = await window.myAgent.pickWorkspace();
-
-                          if (picked) {
-                            setProviderForm((state) => ({ ...state, rootPath: picked }));
-                          }
-                        }}
-                      >
-                        Browse
-                      </button>
-                    </div>
-                  </label>
-                  <label className="field">
-                    <span>Approval policy</span>
-                    <select
-                      value={providerForm.approvalPolicy}
-                      onChange={(event) =>
-                        setProviderForm((state) => ({
-                          ...state,
-                          approvalPolicy: event.target.value as typeof state.approvalPolicy,
-                        }))
-                      }
-                    >
-                      <option value="on-request">on-request</option>
-                      <option value="on-failure">on-failure</option>
-                      <option value="never">never</option>
-                    </select>
-                  </label>
-                  <label className="field">
-                    <span>Sandbox mode</span>
-                    <select
-                      value={providerForm.sandboxMode}
-                      onChange={(event) =>
-                        setProviderForm((state) => ({
-                          ...state,
-                          sandboxMode: event.target.value as typeof state.sandboxMode,
-                        }))
-                      }
-                    >
-                      <option value="read-only">read-only</option>
-                      <option value="workspace-write">workspace-write</option>
-                      <option value="danger-full-access">danger-full-access</option>
-                    </select>
-                  </label>
-                </div>
-
-                <div className="utility-card__footer">
-                  <p className="provider-note">{providerTestMessage ?? "OpenAI-compatible providers can be tested from here."}</p>
-                  <button
-                    className="button button--accent"
-                    onClick={() =>
-                      void updateConfig({
-                        provider: {
-                          ...(config?.provider ?? {
-                            id: "default-provider",
-                            name: "Default Provider",
-                            apiFlavor: "chat_completions",
-                          }),
-                          baseUrl: providerForm.baseUrl,
-                          apiKey: providerForm.apiKey,
-                          model: providerForm.model,
-                        },
-                        workspace: {
-                          ...(config?.workspace ?? {
-                            id: "default-workspace",
-                            name: "Current Workspace",
-                            shell: "powershell",
-                          }),
-                          rootPath: providerForm.rootPath,
-                          approvalPolicy: providerForm.approvalPolicy,
-                          sandboxMode: providerForm.sandboxMode,
-                        },
-                      })
-                    }
-                  >
-                    Save changes
-                  </button>
-                </div>
-              </section>
-            ) : (
-              <section className="utility-card utility-card--skills">
-                <div className="section-header">
-                  <div>
-                    <p className="eyebrow">Skills</p>
-                    <h2>Discovery and control</h2>
-                  </div>
-                  <span className="section-meta">{enabledSkills.length} enabled</span>
-                </div>
-
-                <div className="skills-summary">
-                  <div className="skills-summary__card">
-                    <span>Implicit invocation</span>
-                    <strong>{implicitSkillsCount}</strong>
-                  </div>
-                  <div className="skills-summary__card">
-                    <span>Repo and user scopes</span>
-                    <strong>{skills.filter((skill) => skill.scope !== "SYSTEM").length}</strong>
-                  </div>
-                </div>
-
-                <div className="skill-list">
-                  {skills.map((skill) => (
-                    <article
-                      key={skill.id}
-                      className={`skill-card ${skill.enabled ? "" : "skill-card--disabled"}`}
-                      style={buildSkillStyle(skill)}
-                    >
-                      <div className="skill-card__header">
-                        <div>
-                          <div className="skill-card__title-row">
-                            <h3>{skill.metadata.displayName ?? skill.name}</h3>
-                            <span className="skill-card__scope">{skill.scope}</span>
-                          </div>
-                          <p>{skill.metadata.shortDescription ?? skill.description}</p>
-                        </div>
-                        <button className={`button ${skill.enabled ? "" : "button--ghost"}`} onClick={() => void toggleSkill(skill.id)}>
-                          {skill.enabled ? "Enabled" : "Disabled"}
-                        </button>
-                      </div>
-
-                      <div className="skill-card__footer">
-                        <div className="skill-card__meta">
-                          <span>{skill.metadata.allowImplicitInvocation ? "Implicit allowed" : "Explicit only"}</span>
-                          <span>{skill.path}</span>
-                        </div>
-                        <div className="skill-card__actions">
-                          <button
-                            className="button button--ghost"
-                            onClick={() => setInput((value) => `${value}${value ? " " : ""}$${skill.name} `)}
-                          >
-                            Insert
-                          </button>
-                          <button className="button button--ghost" onClick={() => setSkillDetail(skill)}>
-                            Details
-                          </button>
-                        </div>
-                      </div>
-                    </article>
-                  ))}
-                </div>
-              </section>
-            )}
-          </div>
-        </aside>
-      </div>
-
+      {/* 技能详情对话框 */}
       <Dialog.Root open={Boolean(skillDetail)} onOpenChange={(open) => !open && setSkillDetail(null)}>
         <Dialog.Portal>
           <Dialog.Overlay className="dialog-overlay" />
@@ -614,11 +372,6 @@ export function App() {
               <span>Path</span>
               <code>{skillDetail?.path}</code>
             </div>
-
-            <div className="dialog-detail">
-              <span>Summary</span>
-              <p>{skillDetail?.metadata.shortDescription ?? skillDetail?.description}</p>
-            </div>
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
@@ -626,64 +379,379 @@ export function App() {
   );
 }
 
+function NavButton({ icon, label, active, onClick }: { icon: React.ReactNode; label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      className={`nav-button ${active ? "nav-button--active" : ""}`}
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+    >
+      {icon}
+    </button>
+  );
+}
+
+function ThreadsPanel({
+  threads,
+  activeThreadId,
+  workspaceName,
+  search,
+  onSearchChange,
+  onSelectThread,
+  onCreateThread,
+}: {
+  threads: import("@my-agent/protocol").ThreadRecord[];
+  activeThreadId?: string;
+  workspaceName?: string;
+  search: string;
+  onSearchChange: (value: string) => void;
+  onSelectThread: (threadId: string) => Promise<void>;
+  onCreateThread: () => Promise<void>;
+}) {
+  return (
+    <div className="sidebar-secondary__content">
+      <div className="sidebar-secondary__header">
+        <div className="sidebar-secondary__workspace">
+          <FolderOpen size={14} />
+          <span>{workspaceName ?? "No workspace"}</span>
+        </div>
+        <div className="sidebar-secondary__search">
+          <Search size={14} />
+          <input
+            type="text"
+            placeholder="Search threads..."
+            value={search}
+            onChange={(e) => onSearchChange(e.target.value)}
+          />
+        </div>
+      </div>
+
+      <div className="sidebar-secondary__list">
+        {threads.length > 0 ? (
+          threads.map((thread) => (
+            <button
+              key={thread.id}
+              className={`thread-item ${thread.id === activeThreadId ? "thread-item--active" : ""}`}
+              onClick={() => void onSelectThread(thread.id)}
+            >
+              <div className="thread-item__content">
+                <div className="thread-item__title">{thread.title}</div>
+                <div className="thread-item__meta">
+                  <Clock size={12} />
+                  <span>{formatDateTime(thread.updatedAt)}</span>
+                </div>
+              </div>
+              {thread.id === activeThreadId && <div className="thread-item__indicator" />}
+            </button>
+          ))
+        ) : (
+          <div className="sidebar-secondary__empty">
+            <MessageSquarePlus size={24} />
+            <p>No threads yet</p>
+            <span>Start a new conversation</span>
+          </div>
+        )}
+      </div>
+
+      <div className="sidebar-secondary__footer">
+        <button className="sidebar-secondary__new-thread" onClick={() => void onCreateThread()}>
+          <Plus size={16} />
+          <span>New Thread</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function SkillsPanel({
+  skills,
+  enabledSkills,
+  onToggleSkill,
+}: {
+  skills: SkillDescriptor[];
+  enabledSkills: SkillDescriptor[];
+  onToggleSkill: (skillId: string) => Promise<void>;
+}) {
+  return (
+    <div className="sidebar-secondary__content">
+      <div className="sidebar-secondary__header">
+        <h2>Skills</h2>
+        <span className="sidebar-secondary__count">{enabledSkills.length} enabled</span>
+      </div>
+
+      <div className="sidebar-secondary__list">
+        {skills.map((skill) => (
+          <div key={skill.id} className={`skill-item ${skill.enabled ? "" : "skill-item--disabled"}`}>
+            <div className="skill-item__content">
+              <div className="skill-item__name">{skill.metadata.displayName ?? skill.name}</div>
+              <div className="skill-item__desc">{skill.metadata.shortDescription ?? skill.description}</div>
+            </div>
+            <button
+              className={`skill-item__toggle ${skill.enabled ? "skill-item__toggle--on" : ""}`}
+              onClick={() => void onToggleSkill(skill.id)}
+            >
+              {skill.enabled ? "On" : "Off"}
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SettingsPanel({
+  providerForm,
+  setProviderForm,
+  providerTestMessage,
+  onTestProvider,
+  onSaveConfig,
+  onPickWorkspace,
+}: {
+  providerForm: ProviderFormState;
+  setProviderForm: React.Dispatch<React.SetStateAction<ProviderFormState>>;
+  providerTestMessage?: string;
+  onTestProvider: () => Promise<void>;
+  onSaveConfig: () => void;
+  onPickWorkspace: () => Promise<void>;
+}) {
+  return (
+    <div className="sidebar-secondary__content settings-panel">
+      <div className="sidebar-secondary__header">
+        <h2>Settings</h2>
+      </div>
+
+      <div className="settings-panel__content">
+        <div className="settings-panel__section">
+          <h3>Provider</h3>
+          <label className="settings-field">
+            <span>Base URL</span>
+            <input
+              value={providerForm.baseUrl}
+              onChange={(e) => setProviderForm((s) => ({ ...s, baseUrl: e.target.value }))}
+              placeholder="https://api.example.com"
+            />
+          </label>
+          <label className="settings-field">
+            <span>Model</span>
+            <input
+              value={providerForm.model}
+              onChange={(e) => setProviderForm((s) => ({ ...s, model: e.target.value }))}
+              placeholder="gpt-4"
+            />
+          </label>
+          <label className="settings-field">
+            <span>API Key</span>
+            <input
+              value={providerForm.apiKey}
+              onChange={(e) => setProviderForm((s) => ({ ...s, apiKey: e.target.value }))}
+              type="password"
+              placeholder="sk-..."
+            />
+          </label>
+        </div>
+
+        <div className="settings-panel__section">
+          <h3>Workspace</h3>
+          <label className="settings-field">
+            <span>Root Path</span>
+            <div className="settings-field__row">
+              <input
+                value={providerForm.rootPath}
+                onChange={(e) => setProviderForm((s) => ({ ...s, rootPath: e.target.value }))}
+                placeholder="/path/to/workspace"
+              />
+              <button className="button--small" onClick={() => void onPickWorkspace()}>
+                <FolderOpen size={14} />
+              </button>
+            </div>
+          </label>
+        </div>
+
+        <div className="settings-panel__section">
+          <h3>Policy</h3>
+          <label className="settings-field">
+            <span>Approval Policy</span>
+            <select
+              value={providerForm.approvalPolicy}
+              onChange={(e) => setProviderForm((s) => ({ ...s, approvalPolicy: e.target.value as typeof s.approvalPolicy }))}
+            >
+              <option value="on-request">on-request</option>
+              <option value="on-failure">on-failure</option>
+              <option value="never">never</option>
+            </select>
+          </label>
+          <label className="settings-field">
+            <span>Sandbox Mode</span>
+            <select
+              value={providerForm.sandboxMode}
+              onChange={(e) => setProviderForm((s) => ({ ...s, sandboxMode: e.target.value as typeof s.sandboxMode }))}
+            >
+              <option value="read-only">read-only</option>
+              <option value="workspace-write">workspace-write</option>
+              <option value="danger-full-access">danger-full-access</option>
+            </select>
+          </label>
+        </div>
+
+        <div className="settings-panel__actions">
+          <button className="button" onClick={() => void onTestProvider()}>
+            Test Provider
+          </button>
+          <button className="button button--primary" onClick={onSaveConfig}>
+            Save Settings
+          </button>
+        </div>
+
+        {providerTestMessage && (
+          <div className="settings-panel__message">{providerTestMessage}</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PlaceholderPanel({ title, description }: { title: string; description: string }) {
+  return (
+    <div className="sidebar-secondary__content">
+      <div className="sidebar-secondary__header">
+        <h2>{title}</h2>
+      </div>
+      <div className="sidebar-secondary__empty">
+        <p>{description}</p>
+      </div>
+    </div>
+  );
+}
+
+function EmptyState({ onStartConversation }: { onStartConversation: () => void }) {
+  return (
+    <div className="empty-state">
+      <div className="empty-state__icon">
+        <MessageSquarePlus size={48} />
+      </div>
+      <h2>Start a conversation</h2>
+      <p>Ask anything to begin exploring your workspace</p>
+      <div className="empty-state__prompts">
+        {EMPTY_PROMPTS.map((entry) => (
+          <button key={entry.label} className="prompt-card" onClick={onStartConversation}>
+            <span>{entry.label}</span>
+            <small>{entry.prompt}</small>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MessageItem({ item }: { item: ItemRecord }) {
+  const isUser = item.kind === "userMessage";
+  const isAgent = item.kind === "agentMessage" || item.kind === "reasoning";
+  const isTool = ["toolCall", "toolResult", "commandExecution"].includes(item.kind);
+
+  return (
+    <div className={`message-item ${isUser ? "message-item--user" : "message-item--agent"} message-item--${item.kind}`}>
+      <div className="message-item__icon">
+        {isUser && <User size={16} />}
+        {isAgent && <Bot size={16} />}
+        {isTool && <Wrench size={16} />}
+        {item.kind === "fileChange" && <FileEdit size={16} />}
+        {item.kind === "approvalRequest" && <AlertTriangle size={16} />}
+        {item.kind === "error" && <XCircle size={16} />}
+      </div>
+      <div className="message-item__content">
+        <div className="message-item__header">
+          <span className="message-item__label">{ITEM_LABELS[item.kind]}</span>
+          <span className="message-item__time">{formatTime(item.updatedAt)}</span>
+        </div>
+        <div className="message-item__title">{item.title}</div>
+        {item.body && <pre className="message-item__body">{item.body}</pre>}
+      </div>
+    </div>
+  );
+}
+
+function ApprovalRequest({
+  approval,
+  onApprove,
+  onReject,
+}: {
+  approval: PendingApproval;
+  onApprove: (scope: "once" | "session") => void;
+  onReject: () => void;
+}) {
+  return (
+    <div className="approval-request">
+      <div className="approval-request__header">
+        <AlertTriangle size={18} />
+        <h3>Approval Required</h3>
+      </div>
+      <div className="approval-request__content">
+        <p><strong>{approval.toolName}</strong></p>
+        <p>{approval.reason}</p>
+        <pre>{JSON.stringify(approval.args, null, 2)}</pre>
+      </div>
+      <div className="approval-request__actions">
+        <button className="button button--danger" onClick={onReject}>
+          <XCircle size={14} />
+          Reject
+        </button>
+        <button className="button" onClick={() => onApprove("once")}>
+          <CheckCircle size={14} />
+          Approve Once
+        </button>
+        <button className="button button--primary" onClick={() => onApprove("session")}>
+          Allow Session
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ComposerBar({
+  input,
+  onChange,
+  onSubmit,
+  onKeyDown,
+  loading,
+}: {
+  input: string;
+  onChange: (value: string) => void;
+  onSubmit: () => Promise<void>;
+  onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
+  loading: boolean;
+}) {
+  return (
+    <div className="composer-bar">
+      <div className="composer-bar__input-wrapper">
+        <textarea
+          className="composer-input"
+          placeholder="Type a message... (Ctrl+Enter to send)"
+          value={input}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={onKeyDown}
+          rows={1}
+        />
+        <button
+          className="composer-bar__send"
+          onClick={() => void onSubmit()}
+          disabled={loading || !input.trim()}
+        >
+          <Send size={18} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function LoadingShell() {
   return (
-    <div className="app-root">
-      <div className="loading-grid">
-        <div className="loading-rail" />
-        <div className="loading-panel" />
-        <div className="loading-panel loading-panel--wide" />
-        <div className="loading-panel" />
-      </div>
+    <div className="app-container app-container--loading">
+      <aside className="sidebar-nav sidebar-nav--loading" />
+      <aside className="sidebar-secondary sidebar-secondary--loading" />
+      <main className="main-content main-content--loading" />
     </div>
   );
-}
-
-function MetricCard(props: { label: string; value: string; detail: string }) {
-  return (
-    <div className="metric-card">
-      <span>{props.label}</span>
-      <strong>{props.value}</strong>
-      <small>{props.detail}</small>
-    </div>
-  );
-}
-
-function StreamCard(props: { item: ItemRecord; onInspectSkills: () => void }) {
-  return (
-    <article className={`stream-card stream-card--${props.item.kind} stream-card--${props.item.status}`}>
-      <div className="stream-card__header">
-        <div className="stream-card__eyebrow">
-          <span>{ITEM_LABELS[props.item.kind]}</span>
-          <span>{formatTime(props.item.updatedAt)}</span>
-        </div>
-        <div className="stream-card__title-row">
-          <h3>{props.item.title}</h3>
-          {props.item.kind === "toolCall" || props.item.kind === "toolResult" ? (
-            <button className="stream-card__link" onClick={props.onInspectSkills}>
-              Inspect skills
-            </button>
-          ) : null}
-        </div>
-      </div>
-      <pre className="stream-card__body">{props.item.body || " "}</pre>
-    </article>
-  );
-}
-
-function buildSkillStyle(skill: SkillDescriptor): CSSProperties {
-  return {
-    "--skill-color": skill.metadata.brandColor ?? "#6ad7ff",
-  } as CSSProperties;
-}
-
-function getLastSegment(path?: string) {
-  if (!path) {
-    return "No workspace";
-  }
-
-  const parts = path.split(/[\\/]/).filter(Boolean);
-  return parts.at(-1) ?? path;
 }
 
 function formatDateTime(value: string) {
@@ -700,12 +768,4 @@ function formatTime(value: string) {
     hour: "2-digit",
     minute: "2-digit",
   });
-}
-
-function normalizeTurnStatus(value?: string) {
-  if (!value) {
-    return "idle";
-  }
-
-  return value.replace(/[^a-z_]/gi, "_");
 }

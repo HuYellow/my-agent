@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, type MenuItemConstructorOptions } from "electron";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -15,6 +15,9 @@ import {
   type StartThreadParams,
   type StartTurnParams,
 } from "@my-agent/protocol";
+
+type TitleBarTheme = "light" | "dark";
+type AppMenuId = "file" | "edit" | "view" | "window" | "help";
 
 class HarnessClient {
   private child: ChildProcessWithoutNullStreams | null = null;
@@ -136,6 +139,13 @@ async function createWindow(): Promise<void> {
     minHeight: 760,
     backgroundColor: "#0b1020",
     title: "my-agent",
+    ...(process.platform === "win32"
+      ? {
+          titleBarStyle: "hidden",
+          titleBarOverlay: getTitleBarOverlay("dark"),
+          autoHideMenuBar: true,
+        }
+      : {}),
     webPreferences: {
       preload,
       contextIsolation: true,
@@ -153,6 +163,10 @@ async function createWindow(): Promise<void> {
   mainWindow.webContents.on("console-message", (_event, level, message, line, sourceId) => {
     console.log(`[renderer:${level}] ${sourceId}:${line} ${message}`);
   });
+
+  if (process.platform === "win32") {
+    mainWindow.setMenuBarVisibility(false);
+  }
 
   if (devServerUrl) {
     await mainWindow.loadURL(devServerUrl);
@@ -183,6 +197,30 @@ function registerIpc(): void {
   ipcMain.handle("config:read", () => harness.request("config/read"));
   ipcMain.handle("config:write", (_event, params: ConfigWriteParams) => harness.request("config/write", params));
   ipcMain.handle("provider:test", () => harness.request("provider/test"));
+  ipcMain.handle("window:set-titlebar-theme", (_event, theme: TitleBarTheme) => {
+    if (process.platform !== "win32" || !mainWindow) {
+      return;
+    }
+
+    mainWindow.setTitleBarOverlay(getTitleBarOverlay(theme));
+  });
+  ipcMain.handle("window:show-app-menu", (_event, params: { menuId: AppMenuId; x: number; y: number }) => {
+    if (!mainWindow) {
+      return;
+    }
+
+    const section = getAppMenuSections().find((entry) => entry.id === params.menuId);
+
+    if (!section) {
+      return;
+    }
+
+    Menu.buildFromTemplate(section.submenu).popup({
+      window: mainWindow,
+      x: Math.round(params.x),
+      y: Math.round(params.y),
+    });
+  });
   ipcMain.handle("workspace:pick", async () => {
     const result = await dialog.showOpenDialog(mainWindow!, {
       properties: ["openDirectory"],
@@ -195,6 +233,7 @@ function registerIpc(): void {
 app.whenReady().then(async () => {
   const coreEntry = resolve(app.getAppPath(), "../../packages/core/dist/index.js");
   harness.start(coreEntry);
+  Menu.setApplicationMenu(buildApplicationMenu());
   registerIpc();
   await createWindow();
 
@@ -233,4 +272,109 @@ function resolveNodeBinary(): string {
   }
 
   return "node";
+}
+
+function buildApplicationMenu() {
+  return Menu.buildFromTemplate(
+    getAppMenuSections().map((section) => ({
+      label: section.label,
+      submenu: section.submenu,
+    })),
+  );
+}
+
+function getAppMenuSections(): Array<{ id: AppMenuId; label: string; submenu: MenuItemConstructorOptions[] }> {
+  return [
+    {
+      id: "file",
+      label: "File",
+      submenu: [
+        {
+          label: "Close Window",
+          role: "close",
+        },
+        {
+          type: "separator",
+        },
+        {
+          label: "Quit my-agent",
+          role: "quit",
+        },
+      ],
+    },
+    {
+      id: "edit",
+      label: "Edit",
+      submenu: [
+        { role: "undo" },
+        { role: "redo" },
+        { type: "separator" },
+        { role: "cut" },
+        { role: "copy" },
+        { role: "paste" },
+        { role: "delete" },
+        { role: "selectAll" },
+      ],
+    },
+    {
+      id: "view",
+      label: "View",
+      submenu: [
+        { role: "reload" },
+        { role: "forceReload" },
+        { role: "toggleDevTools" },
+        { type: "separator" },
+        { role: "resetZoom" },
+        { role: "zoomIn" },
+        { role: "zoomOut" },
+        { type: "separator" },
+        { role: "togglefullscreen" },
+      ],
+    },
+    {
+      id: "window",
+      label: "Window",
+      submenu: [{ role: "minimize" }, { role: "zoom" }, { role: "close" }],
+    },
+    {
+      id: "help",
+      label: "Help",
+      submenu: [
+        {
+          label: "About my-agent",
+          click: () => {
+            const options = {
+              type: "info",
+              title: "About my-agent",
+              message: "my-agent",
+              detail: "Mind Atlas for threads, context, skills, and runtime orchestration.",
+            } as const;
+
+            if (mainWindow) {
+              void dialog.showMessageBox(mainWindow, options);
+              return;
+            }
+
+            void dialog.showMessageBox(options);
+          },
+        },
+      ],
+    },
+  ];
+}
+
+function getTitleBarOverlay(theme: TitleBarTheme) {
+  if (theme === "light") {
+    return {
+      color: "#efe7db",
+      symbolColor: "#221b15",
+      height: 52,
+    };
+  }
+
+  return {
+    color: "#13171c",
+    symbolColor: "#f4ecdc",
+    height: 52,
+  };
 }

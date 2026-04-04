@@ -26,6 +26,8 @@ declare global {
       readConfig: () => Promise<{ config: AppConfig }>;
       writeConfig: (params: ConfigWriteParams) => Promise<{ config: AppConfig }>;
       testProvider: () => Promise<{ ok: boolean; status: number; message: string }>;
+      setTitleBarTheme: (theme: "light" | "dark") => Promise<void>;
+      showAppMenu: (params: { menuId: "file" | "edit" | "view" | "window" | "help"; x: number; y: number }) => Promise<void>;
       pickWorkspace: () => Promise<string | null>;
       onEvent: (listener: (event: HarnessEvent) => void) => () => void;
     };
