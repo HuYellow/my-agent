@@ -1,10 +1,12 @@
 import { create } from "zustand";
 import {
   type AppConfig,
+  type CreateProjectParams,
   type HarnessEvent,
   type InitializeResult,
   type ItemRecord,
   type PendingApproval,
+  type ProjectRecord,
   type SkillDescriptor,
   type ThreadRecord,
   type TurnRecord,
@@ -13,16 +15,21 @@ import {
 interface AppState {
   bootstrapped: boolean;
   loading: boolean;
+  projects: ProjectRecord[];
   threads: ThreadRecord[];
   turns: TurnRecord[];
   items: ItemRecord[];
   skills: SkillDescriptor[];
+  activeProjectId?: string;
   activeThreadId?: string;
   pendingApproval?: PendingApproval | null;
   config?: AppConfig;
   providerTestMessage?: string;
   bootstrap: () => Promise<void>;
-  createThread: (title?: string) => Promise<void>;
+  createProject: (params: CreateProjectParams) => Promise<void>;
+  updateProject: (projectId: string, patch: Partial<Pick<ProjectRecord, "name" | "rootPath" | "shell" | "sandboxMode" | "approvalPolicy">>) => Promise<void>;
+  selectProject: (projectId: string) => Promise<void>;
+  createThread: (title?: string, projectId?: string) => Promise<void>;
   selectThread: (threadId: string) => Promise<void>;
   sendTurn: (input: string, selectedSkillIds?: string[]) => Promise<void>;
   respondApproval: (approvalId: string, decision: "approve" | "reject", scope?: "once" | "session") => Promise<void>;
@@ -35,6 +42,7 @@ interface AppState {
 export const useAppStore = create<AppState>((set, get) => ({
   bootstrapped: false,
   loading: false,
+  projects: [],
   threads: [],
   turns: [],
   items: [],
@@ -43,13 +51,20 @@ export const useAppStore = create<AppState>((set, get) => ({
   bootstrap: async () => {
     set({ loading: true });
     const initial = (await window.myAgent.initialize()) as InitializeResult;
-    const activeThreadId = initial.threads[0]?.id;
+    const activeProjectId =
+      initial.config.selectedProjectId ??
+      initial.projects[0]?.id;
+    const activeThreadId =
+      initial.threads.find((thread) => thread.projectId === activeProjectId)?.id ??
+      initial.threads[0]?.id;
     set({
       bootstrapped: true,
       loading: false,
+      projects: initial.projects,
       threads: initial.threads,
       skills: initial.skills,
       config: initial.config,
+      activeProjectId,
       activeThreadId,
     });
 
@@ -59,11 +74,58 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     window.myAgent.onEvent((event) => get().handleEvent(event));
   },
-  createThread: async (title) => {
-    const result = (await window.myAgent.startThread({ title })) as { thread: ThreadRecord };
+  createProject: async (params) => {
+    const result = (await window.myAgent.createProject(params)) as { project: ProjectRecord };
+    set((state) => ({
+      projects: [result.project, ...state.projects.filter((project) => project.id !== result.project.id)],
+      activeProjectId: result.project.id,
+      config: state.config ? { ...state.config, selectedProjectId: result.project.id } : state.config,
+      activeThreadId: undefined,
+      turns: [],
+      items: [],
+      pendingApproval: null,
+    }));
+  },
+  updateProject: async (projectId, patch) => {
+    const result = (await window.myAgent.updateProject({ projectId, patch })) as { project: ProjectRecord };
+    set((state) => ({
+      projects: state.projects.map((project) => (project.id === result.project.id ? result.project : project)),
+    }));
+  },
+  selectProject: async (projectId) => {
+    const current = get().config;
+    const projectThreads = [...get().threads]
+      .filter((thread) => thread.projectId === projectId)
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+
+    if (current) {
+      const result = (await window.myAgent.writeConfig({ config: { selectedProjectId: projectId } })) as { config: AppConfig };
+      set({ config: result.config });
+    }
+
+    if (projectThreads[0]) {
+      set({ activeProjectId: projectId });
+      await get().selectThread(projectThreads[0].id);
+      return;
+    }
+
+    set({
+      activeProjectId: projectId,
+      activeThreadId: undefined,
+      turns: [],
+      items: [],
+      pendingApproval: null,
+    });
+  },
+  createThread: async (title, projectId) => {
+    const ensuredProjectId = projectId ?? get().activeProjectId ?? get().config?.selectedProjectId;
+    const result = (await window.myAgent.startThread({ title, projectId: ensuredProjectId })) as { thread: ThreadRecord };
+    const currentConfig = get().config;
     set((state) => ({
       threads: [result.thread, ...state.threads],
+      activeProjectId: result.thread.projectId,
       activeThreadId: result.thread.id,
+      config: currentConfig ? { ...currentConfig, selectedProjectId: result.thread.projectId } : currentConfig,
       turns: [],
       items: [],
       pendingApproval: null,
@@ -77,10 +139,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       pendingApproval?: PendingApproval | null;
     };
     set({
+      activeProjectId: result.thread.projectId,
       activeThreadId: threadId,
       turns: result.turns,
       items: result.items,
       pendingApproval: result.pendingApproval ?? null,
+      config: get().config ? { ...get().config!, selectedProjectId: result.thread.projectId } : get().config,
     });
   },
   sendTurn: async (input, selectedSkillIds) => {
@@ -142,7 +206,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   updateConfig: async (config) => {
     const result = (await window.myAgent.writeConfig({ config })) as { config: AppConfig };
-    set({ config: result.config });
+    set({ config: result.config, activeProjectId: result.config.selectedProjectId ?? get().activeProjectId });
   },
   testProvider: async () => {
     const result = (await window.myAgent.testProvider()) as { ok: boolean; status: number; message: string };

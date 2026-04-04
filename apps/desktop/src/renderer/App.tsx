@@ -24,6 +24,7 @@ import {
   type ItemKind,
   type ItemRecord,
   type PendingApproval,
+  type ProjectRecord,
   type SandboxMode,
   type SkillDescriptor,
 } from "@my-agent/protocol";
@@ -75,16 +76,21 @@ export function App() {
   const {
     bootstrapped,
     loading,
+    projects,
     threads,
     turns,
     items,
     skills,
+    activeProjectId,
     activeThreadId,
     pendingApproval,
     config,
     providerTestMessage,
     bootstrap,
+    createProject,
     createThread,
+    updateProject,
+    selectProject,
     selectThread,
     sendTurn,
     respondApproval,
@@ -111,19 +117,28 @@ export function App() {
   }, [bootstrap]);
 
   useEffect(() => {
+    document.documentElement.dataset.theme = "light";
+    void window.myAgent.setTitleBarTheme("light");
+  }, []);
+
+  useEffect(() => {
     if (!config) {
       return;
     }
+
+    const selectedProject =
+      projects.find((project) => project.id === activeProjectId) ??
+      projects[0];
 
     setProviderForm({
       baseUrl: config.provider.baseUrl,
       apiKey: config.provider.apiKey,
       model: config.provider.model,
-      rootPath: config.workspace.rootPath,
-      approvalPolicy: config.workspace.approvalPolicy,
-      sandboxMode: config.workspace.sandboxMode,
+      rootPath: selectedProject?.rootPath ?? config.workspace.rootPath,
+      approvalPolicy: selectedProject?.approvalPolicy ?? config.workspace.approvalPolicy,
+      sandboxMode: selectedProject?.sandboxMode ?? config.workspace.sandboxMode,
     });
-  }, [config]);
+  }, [activeProjectId, config, projects]);
 
   const orderedThreads = useMemo(
     () => [...threads].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
@@ -137,24 +152,43 @@ export function App() {
     () => orderedThreads.find((thread) => thread.id === activeThreadId),
     [activeThreadId, orderedThreads],
   );
+  const activeProject = useMemo(
+    () => projects.find((project) => project.id === activeProjectId),
+    [activeProjectId, projects],
+  );
   const activeTurn = useMemo(
     () => [...turns].sort((left, right) => left.updatedAt.localeCompare(right.updatedAt)).at(-1),
     [turns],
   );
   const enabledSkills = useMemo(() => skills.filter((skill) => skill.enabled), [skills]);
 
+  const projectThreads = useMemo(
+    () => orderedThreads.filter((thread) => thread.projectId === activeProjectId),
+    [activeProjectId, orderedThreads],
+  );
+
   const filteredThreads = useMemo(() => {
-    if (!threadSearch.trim()) return orderedThreads;
+    if (!threadSearch.trim()) return projectThreads;
     const search = threadSearch.toLowerCase();
-    return orderedThreads.filter(
+    return projectThreads.filter(
       (thread) =>
-        thread.title.toLowerCase().includes(search) ||
-        thread.workspaceId.toLowerCase().includes(search)
+        thread.title.toLowerCase().includes(search)
     );
-  }, [orderedThreads, threadSearch]);
+  }, [projectThreads, threadSearch]);
 
   const handleCreateThread = async () => {
-    await createThread();
+    await createThread(undefined, activeProjectId);
+    setActiveView("threads");
+  };
+
+  const handleCreateProject = async () => {
+    const picked = await window.myAgent.pickWorkspace();
+
+    if (!picked) {
+      return;
+    }
+
+    await createProject({ rootPath: picked });
     setActiveView("threads");
   };
 
@@ -229,12 +263,16 @@ export function App() {
       <aside className="sidebar-secondary">
         {activeView === "threads" && (
           <ThreadsPanel
+            projects={projects}
+            activeProjectId={activeProjectId}
             threads={filteredThreads}
             activeThreadId={activeThreadId}
-            workspaceName={config?.workspace.name}
+            project={activeProject}
             search={threadSearch}
             onSearchChange={setThreadSearch}
+            onSelectProject={selectProject}
             onSelectThread={selectThread}
+            onCreateProject={handleCreateProject}
             onCreateThread={handleCreateThread}
           />
         )}
@@ -249,33 +287,33 @@ export function App() {
         {activeView === "automation" && <PlaceholderPanel title="Automation" description="Automation workflows coming soon." />}
         {activeView === "settings" && (
           <SettingsPanel
+            project={activeProject}
             providerForm={providerForm}
             setProviderForm={setProviderForm}
             providerTestMessage={providerTestMessage}
             onTestProvider={testProvider}
             onSaveConfig={() =>
-              void updateConfig({
-                provider: {
-                  ...(config?.provider ?? {
-                    id: "default-provider",
-                    name: "Default Provider",
-                    apiFlavor: "chat_completions",
-                  }),
-                  baseUrl: providerForm.baseUrl,
-                  apiKey: providerForm.apiKey,
-                  model: providerForm.model,
-                },
-                workspace: {
-                  ...(config?.workspace ?? {
-                    id: "default-workspace",
-                    name: "Current Workspace",
-                    shell: "powershell",
-                  }),
-                  rootPath: providerForm.rootPath,
-                  approvalPolicy: providerForm.approvalPolicy,
-                  sandboxMode: providerForm.sandboxMode,
-                },
-              })
+              void Promise.all([
+                updateConfig({
+                  provider: {
+                    ...(config?.provider ?? {
+                      id: "default-provider",
+                      name: "Default Provider",
+                      apiFlavor: "chat_completions",
+                    }),
+                    baseUrl: providerForm.baseUrl,
+                    apiKey: providerForm.apiKey,
+                    model: providerForm.model,
+                  },
+                }),
+                activeProject
+                  ? updateProject(activeProject.id, {
+                      rootPath: providerForm.rootPath,
+                      approvalPolicy: providerForm.approvalPolicy,
+                      sandboxMode: providerForm.sandboxMode,
+                    })
+                  : Promise.resolve(),
+              ])
             }
             onPickWorkspace={async () => {
               const picked = await window.myAgent.pickWorkspace();
@@ -393,20 +431,28 @@ function NavButton({ icon, label, active, onClick }: { icon: React.ReactNode; la
 }
 
 function ThreadsPanel({
+  projects,
+  activeProjectId,
   threads,
   activeThreadId,
-  workspaceName,
+  project,
   search,
   onSearchChange,
+  onSelectProject,
   onSelectThread,
+  onCreateProject,
   onCreateThread,
 }: {
+  projects: ProjectRecord[];
+  activeProjectId?: string;
   threads: import("@my-agent/protocol").ThreadRecord[];
   activeThreadId?: string;
-  workspaceName?: string;
+  project?: ProjectRecord;
   search: string;
   onSearchChange: (value: string) => void;
+  onSelectProject: (projectId: string) => Promise<void>;
   onSelectThread: (threadId: string) => Promise<void>;
+  onCreateProject: () => Promise<void>;
   onCreateThread: () => Promise<void>;
 }) {
   return (
@@ -414,7 +460,7 @@ function ThreadsPanel({
       <div className="sidebar-secondary__header">
         <div className="sidebar-secondary__workspace">
           <FolderOpen size={14} />
-          <span>{workspaceName ?? "No workspace"}</span>
+          <span>{project?.name ?? "No project"}</span>
         </div>
         <div className="sidebar-secondary__search">
           <Search size={14} />
@@ -424,6 +470,27 @@ function ThreadsPanel({
             value={search}
             onChange={(e) => onSearchChange(e.target.value)}
           />
+        </div>
+      </div>
+
+      <div className="project-list">
+        <div className="project-list__header">
+          <span>Projects</span>
+          <button className="button--small" onClick={() => void onCreateProject()}>
+            <Plus size={14} />
+          </button>
+        </div>
+        <div className="project-list__items">
+          {projects.map((entry) => (
+            <button
+              key={entry.id}
+              className={`project-item ${entry.id === activeProjectId ? "project-item--active" : ""}`}
+              onClick={() => void onSelectProject(entry.id)}
+            >
+              <div className="project-item__name">{entry.name}</div>
+              <div className="project-item__path">{entry.rootPath}</div>
+            </button>
+          ))}
         </div>
       </div>
 
@@ -449,7 +516,7 @@ function ThreadsPanel({
           <div className="sidebar-secondary__empty">
             <MessageSquarePlus size={24} />
             <p>No threads yet</p>
-            <span>Start a new conversation</span>
+            <span>{project ? "Create the first thread in this project" : "Create a project first"}</span>
           </div>
         )}
       </div>
@@ -501,6 +568,7 @@ function SkillsPanel({
 }
 
 function SettingsPanel({
+  project,
   providerForm,
   setProviderForm,
   providerTestMessage,
@@ -508,6 +576,7 @@ function SettingsPanel({
   onSaveConfig,
   onPickWorkspace,
 }: {
+  project?: ProjectRecord;
   providerForm: ProviderFormState;
   setProviderForm: React.Dispatch<React.SetStateAction<ProviderFormState>>;
   providerTestMessage?: string;
@@ -552,7 +621,7 @@ function SettingsPanel({
         </div>
 
         <div className="settings-panel__section">
-          <h3>Workspace</h3>
+          <h3>{project ? `Project: ${project.name}` : "Project"}</h3>
           <label className="settings-field">
             <span>Root Path</span>
             <div className="settings-field__row">

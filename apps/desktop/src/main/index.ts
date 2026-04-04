@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import {
   type ApprovalResponseParams,
   type ConfigWriteParams,
+  type CreateProjectParams,
   type HarnessEvent,
   type JsonRpcMessage,
   type JsonRpcNotification,
@@ -14,6 +15,7 @@ import {
   type JsonRpcResponse,
   type StartThreadParams,
   type StartTurnParams,
+  type UpdateProjectParams,
 } from "@my-agent/protocol";
 
 type TitleBarTheme = "light" | "dark";
@@ -188,6 +190,8 @@ function registerIpc(): void {
   });
 
   ipcMain.handle("harness:initialize", () => harness.request("initialize"));
+  ipcMain.handle("project:create", (_event, params: CreateProjectParams) => harness.request("project/create", params));
+  ipcMain.handle("project:update", (_event, params: UpdateProjectParams) => harness.request("project/update", params));
   ipcMain.handle("thread:start", (_event, params: StartThreadParams) => harness.request("thread/start", params));
   ipcMain.handle("thread:resume", (_event, params: { threadId: string }) => harness.request("thread/resume", params));
   ipcMain.handle("turn:start", (_event, params: StartTurnParams) => harness.request("turn/start", params));

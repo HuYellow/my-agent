@@ -6,6 +6,7 @@ import {
   type AppConfig,
   type ItemRecord,
   type PendingApproval,
+  type ProjectRecord,
   type ThreadRecord,
   type TurnRecord,
   type WorkspaceProfile,
@@ -39,6 +40,17 @@ export class HarnessDatabase {
       CREATE TABLE IF NOT EXISTS config (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        root_path TEXT NOT NULL,
+        shell TEXT NOT NULL,
+        sandbox_mode TEXT NOT NULL,
+        approval_policy TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
       );
 
       CREATE TABLE IF NOT EXISTS threads (
@@ -100,6 +112,7 @@ export class HarnessDatabase {
         created_at TEXT NOT NULL
       );
     `);
+    this.migrate();
   }
 
   getDefaultConfig(): AppConfig {
@@ -124,6 +137,7 @@ export class HarnessDatabase {
     return {
       ...this.getDefaultConfig(),
       ...parsed,
+      selectedProjectId: parsed.selectedProjectId ?? parsed.selectedWorkspaceId,
       provider: {
         ...DEFAULT_PROVIDER,
         ...parsed.provider,
@@ -150,22 +164,66 @@ export class HarnessDatabase {
       .map((row) => this.mapThread(row as Record<string, unknown>));
   }
 
+  listProjects(): ProjectRecord[] {
+    return this.db
+      .prepare("SELECT * FROM projects ORDER BY updated_at DESC, created_at DESC")
+      .all()
+      .map((row) => this.mapProject(row as Record<string, unknown>));
+  }
+
+  getProject(projectId: string): ProjectRecord | null {
+    const row = this.db.prepare("SELECT * FROM projects WHERE id = ?").get(projectId) as Record<string, unknown> | undefined;
+    return row ? this.mapProject(row) : null;
+  }
+
+  createProject(project: ProjectRecord): ProjectRecord {
+    this.db
+      .prepare(
+        "INSERT INTO projects(id, name, root_path, shell, sandbox_mode, approval_policy, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(project.id, project.name, project.rootPath, project.shell, project.sandboxMode, project.approvalPolicy, project.createdAt, project.updatedAt);
+    return project;
+  }
+
+  updateProject(project: ProjectRecord): ProjectRecord {
+    this.db
+      .prepare(
+        "UPDATE projects SET name = ?, root_path = ?, shell = ?, sandbox_mode = ?, approval_policy = ?, updated_at = ? WHERE id = ?",
+      )
+      .run(project.name, project.rootPath, project.shell, project.sandboxMode, project.approvalPolicy, project.updatedAt, project.id);
+    return project;
+  }
+
   getThread(threadId: string): ThreadRecord | null {
     const row = this.db.prepare("SELECT * FROM threads WHERE id = ?").get(threadId) as Record<string, unknown> | undefined;
     return row ? this.mapThread(row) : null;
   }
 
   createThread(thread: ThreadRecord): ThreadRecord {
+    if (this.columnExists("threads", "project_id")) {
+      this.db
+        .prepare("INSERT INTO threads(id, title, workspace_id, project_id, created_at, updated_at, archived_at) VALUES(?, ?, ?, ?, ?, ?, ?)")
+        .run(thread.id, thread.title, thread.projectId, thread.projectId, thread.createdAt, thread.updatedAt, thread.archivedAt ?? null);
+      return thread;
+    }
+
     this.db
       .prepare("INSERT INTO threads(id, title, workspace_id, created_at, updated_at, archived_at) VALUES(?, ?, ?, ?, ?, ?)")
-      .run(thread.id, thread.title, thread.workspaceId, thread.createdAt, thread.updatedAt, thread.archivedAt ?? null);
+      .run(thread.id, thread.title, thread.projectId, thread.createdAt, thread.updatedAt, thread.archivedAt ?? null);
     return thread;
   }
 
   updateThread(thread: ThreadRecord): ThreadRecord {
+    if (this.columnExists("threads", "project_id")) {
+      this.db
+        .prepare("UPDATE threads SET title = ?, workspace_id = ?, project_id = ?, updated_at = ?, archived_at = ? WHERE id = ?")
+        .run(thread.title, thread.projectId, thread.projectId, thread.updatedAt, thread.archivedAt ?? null, thread.id);
+      return thread;
+    }
+
     this.db
       .prepare("UPDATE threads SET title = ?, workspace_id = ?, updated_at = ?, archived_at = ? WHERE id = ?")
-      .run(thread.title, thread.workspaceId, thread.updatedAt, thread.archivedAt ?? null, thread.id);
+      .run(thread.title, thread.projectId, thread.updatedAt, thread.archivedAt ?? null, thread.id);
     return thread;
   }
 
@@ -320,10 +378,23 @@ export class HarnessDatabase {
     return {
       id: String(row.id),
       title: String(row.title),
-      workspaceId: String(row.workspace_id),
+      projectId: String(row.project_id ?? row.workspace_id),
       createdAt: String(row.created_at),
       updatedAt: String(row.updated_at),
       archivedAt: row.archived_at ? String(row.archived_at) : null,
+    };
+  }
+
+  private mapProject(row: Record<string, unknown>): ProjectRecord {
+    return {
+      id: String(row.id),
+      name: String(row.name),
+      rootPath: String(row.root_path),
+      shell: String(row.shell),
+      sandboxMode: row.sandbox_mode as ProjectRecord["sandboxMode"],
+      approvalPolicy: row.approval_policy as ProjectRecord["approvalPolicy"],
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
     };
   }
 
@@ -364,6 +435,50 @@ export class HarnessDatabase {
       scope: row.scope as PendingApproval["scope"],
       createdAt: String(row.created_at),
     };
+  }
+
+  private migrate(): void {
+    if (!this.columnExists("threads", "project_id")) {
+      this.db.exec("ALTER TABLE threads ADD COLUMN project_id TEXT");
+    }
+
+    const config = this.getConfig();
+    let projects = this.listProjects();
+
+    if (projects.length === 0) {
+      const now = new Date().toISOString();
+      this.createProject({
+        id: config.selectedProjectId ?? config.workspace.id,
+        name: config.workspace.name,
+        rootPath: config.workspace.rootPath,
+        shell: config.workspace.shell,
+        sandboxMode: config.workspace.sandboxMode,
+        approvalPolicy: config.workspace.approvalPolicy,
+        createdAt: now,
+        updatedAt: now,
+      });
+      projects = this.listProjects();
+    }
+
+    const fallbackProject = projects[0]!;
+    this.db
+      .prepare("UPDATE threads SET project_id = COALESCE(project_id, workspace_id, ?) WHERE project_id IS NULL OR project_id = ''")
+      .run(fallbackProject.id);
+
+    const selectedProjectId =
+      config.selectedProjectId && this.getProject(config.selectedProjectId) ? config.selectedProjectId : fallbackProject.id;
+
+    if (selectedProjectId !== config.selectedProjectId) {
+      this.writeConfig({
+        ...config,
+        selectedProjectId,
+      });
+    }
+  }
+
+  private columnExists(tableName: string, columnName: string): boolean {
+    const rows = this.db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
+    return rows.some((row) => row.name === columnName);
   }
 }
 

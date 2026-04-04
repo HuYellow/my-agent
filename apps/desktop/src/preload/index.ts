@@ -2,13 +2,17 @@ import { contextBridge, ipcRenderer } from "electron";
 import {
   type ApprovalResponseParams,
   type ConfigWriteParams,
+  type CreateProjectParams,
   type HarnessEvent,
   type StartThreadParams,
   type StartTurnParams,
+  type UpdateProjectParams,
 } from "@my-agent/protocol";
 
 const api = {
   initialize: () => ipcRenderer.invoke("harness:initialize"),
+  createProject: (params: CreateProjectParams) => ipcRenderer.invoke("project:create", params),
+  updateProject: (params: UpdateProjectParams) => ipcRenderer.invoke("project:update", params),
   startThread: (params: StartThreadParams) => ipcRenderer.invoke("thread:start", params),
   resumeThread: (threadId: string) => ipcRenderer.invoke("thread:resume", { threadId }),
   startTurn: (params: StartTurnParams) => ipcRenderer.invoke("turn:start", params),

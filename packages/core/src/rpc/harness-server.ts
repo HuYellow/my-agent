@@ -4,11 +4,13 @@ import {
   type AppConfig,
   type CommandExecParams,
   type ConfigWriteParams,
+  type CreateProjectParams,
   type ForkThreadParams,
   type HarnessEvent,
   type InitializeResult,
   type JsonRpcNotification,
   type JsonRpcRequest,
+  type ProjectRecord,
   type JsonRpcResponse,
   type ProviderTestResult,
   type ReadFileParams,
@@ -20,10 +22,11 @@ import {
   type StartTurnResult,
   type ThreadRecord,
   type TurnRecord,
+  type UpdateProjectParams,
   type WritePatchParams,
 } from "@my-agent/protocol";
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import { OpenAiCompatibleRunner } from "../agents/openai-compatible-runner.js";
 import { PromptBuilder } from "../services/prompt-builder.js";
 import { ProviderService } from "../services/provider-service.js";
@@ -43,10 +46,11 @@ export class HarnessServer {
     private readonly promptBuilder: PromptBuilder,
     private readonly emitRaw: (notification: JsonRpcNotification) => void,
   ) {
-    const config = this.database.getConfig();
-    this.skills = this.skillService.listSkills(config.workspace.rootPath, config.disabledSkillIds);
+    const config = this.syncProjectSelection(this.database.getConfig());
+    const activeProject = this.resolveWorkspaceByProjectId(config.selectedProjectId);
+    this.skills = this.skillService.listSkills(activeProject.rootPath, config.disabledSkillIds);
     this.runner = new OpenAiCompatibleRunner(this.database, this.promptBuilder, (event) => this.emit(event));
-    this.skillService.startWatching(config.workspace.rootPath, config.disabledSkillIds);
+    this.skillService.startWatching(activeProject.rootPath, config.disabledSkillIds);
   }
 
   async handle(message: JsonRpcRequest): Promise<JsonRpcResponse> {
@@ -73,6 +77,10 @@ export class HarnessServer {
     switch (message.method) {
       case "initialize":
         return this.initialize();
+      case "project/create":
+        return this.createProject((message.params ?? {}) as CreateProjectParams);
+      case "project/update":
+        return this.updateProject(message.params as UpdateProjectParams);
       case "thread/start":
         return this.startThread((message.params ?? {}) as StartThreadParams);
       case "thread/resume":
@@ -111,8 +119,8 @@ export class HarnessServer {
   }
 
   private initialize(): InitializeResult {
-    const config = this.database.getConfig();
-    const skills = this.refreshSkills();
+    const config = this.syncProjectSelection(this.database.getConfig());
+    const skills = this.refreshSkills(config.selectedProjectId);
     return {
       protocolVersion: "0.1.0",
       server: {
@@ -120,29 +128,79 @@ export class HarnessServer {
         version: "0.1.0",
       },
       config,
+      projects: this.database.listProjects(),
       threads: this.database.listThreads(),
       skills,
     };
   }
 
+  private createProject(params: CreateProjectParams): { project: ProjectRecord } {
+    const config = this.database.getConfig();
+
+    if (!existsSync(params.rootPath)) {
+      throw new Error(`Project path does not exist: ${params.rootPath}`);
+    }
+
+    const now = new Date().toISOString();
+    const project: ProjectRecord = {
+      id: createId("project"),
+      name: params.name?.trim() || basename(params.rootPath) || "New Project",
+      rootPath: params.rootPath,
+      shell: params.shell ?? config.workspace.shell,
+      sandboxMode: params.sandboxMode ?? config.workspace.sandboxMode,
+      approvalPolicy: params.approvalPolicy ?? config.workspace.approvalPolicy,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    this.database.createProject(project);
+    this.database.writeConfig({
+      ...config,
+      selectedProjectId: project.id,
+    });
+    this.refreshSkills(project.id);
+    return { project };
+  }
+
+  private updateProject(params: UpdateProjectParams): { project: ProjectRecord } {
+    const project = this.database.getProject(params.projectId);
+
+    if (!project) {
+      throw new Error(`Project not found: ${params.projectId}`);
+    }
+
+    if (params.patch.rootPath && !existsSync(params.patch.rootPath)) {
+      throw new Error(`Project path does not exist: ${params.patch.rootPath}`);
+    }
+
+    const updated = this.database.updateProject({
+      ...project,
+      ...params.patch,
+      updatedAt: new Date().toISOString(),
+    });
+
+    if (this.database.getConfig().selectedProjectId === updated.id) {
+      this.refreshSkills(updated.id);
+    }
+
+    return { project: updated };
+  }
+
   private startThread(params: StartThreadParams): StartThreadResult {
     const config = this.database.getConfig();
+    const project = this.requireProject(params.projectId ?? config.selectedProjectId);
     const now = new Date().toISOString();
-    const workspace = {
-      ...config.workspace,
-      ...params.workspace,
-    };
     const thread: ThreadRecord = {
       id: createId("thread"),
       title: params.title?.trim() || "New Thread",
-      workspaceId: workspace.id,
+      projectId: project.id,
       createdAt: now,
       updatedAt: now,
       archivedAt: null,
     };
     this.database.writeConfig({
       ...config,
-      workspace,
+      selectedProjectId: project.id,
     });
     this.database.createThread(thread);
     this.emit({ type: "thread/started", payload: { thread } });
@@ -155,6 +213,14 @@ export class HarnessServer {
     if (!thread) {
       throw new Error(`Thread not found: ${params.threadId}`);
     }
+
+    this.syncProjectSelection(
+      this.database.writeConfig({
+        ...this.database.getConfig(),
+        selectedProjectId: thread.projectId,
+      }),
+    );
+    this.refreshSkills(thread.projectId);
 
     return {
       thread,
@@ -193,7 +259,7 @@ export class HarnessServer {
     const thread: ThreadRecord = {
       id: createId("thread"),
       title: params.title?.trim() || `${source.title} (fork)`,
-      workspaceId: source.workspaceId,
+      projectId: source.projectId,
       createdAt: now,
       updatedAt: now,
       archivedAt: null,
@@ -221,6 +287,7 @@ export class HarnessServer {
     }
 
     const config = this.database.getConfig();
+    const project = this.requireProject(thread.projectId);
     const turn: TurnRecord = {
       id: createId("turn"),
       threadId: thread.id,
@@ -233,11 +300,17 @@ export class HarnessServer {
     this.database.createTurn(turn);
     this.emit({ type: "turn/started", payload: { turn } });
 
-    const discoveredSkills = this.refreshSkills();
+    this.syncProjectSelection(
+      this.database.writeConfig({
+        ...config,
+        selectedProjectId: project.id,
+      }),
+    );
+    const discoveredSkills = this.refreshSkills(project.id);
     const selectedSkills = this.skillService.resolveSelectedSkills(params.input, params.selectedSkillIds, discoveredSkills);
     const finalTurn = await this.runner.runTurn({
       provider: config.provider,
-      workspace: config.workspace,
+      workspace: project,
       thread,
       turn,
       discoveredSkills,
@@ -315,12 +388,14 @@ export class HarnessServer {
       throw new Error("Thread or turn not found for approval.");
     }
 
+    const project = this.requireProject(thread.projectId);
+
     const updated = await this.runner.resumeAfterApproval(
       {
         approval: pending.approval,
         turn,
         thread,
-        workspace: config.workspace,
+        workspace: project,
         provider: config.provider,
       },
       params,
@@ -330,8 +405,8 @@ export class HarnessServer {
   }
 
   private async execCommand(params: CommandExecParams): Promise<{ code: number; stdout: string; stderr: string }> {
-    const config = this.database.getConfig();
-    const toolService = new ToolService(config.workspace, {
+    const workspace = this.resolveWorkspace(params.threadId);
+    const toolService = new ToolService(workspace, {
       database: this.database,
       threadId: params.threadId,
     });
@@ -339,7 +414,7 @@ export class HarnessServer {
       "run_shell",
       { command: params.command, cwd: params.cwd },
       {
-        workspace: config.workspace,
+        workspace,
         emitCommandDelta: () => undefined,
       },
     );
@@ -347,8 +422,8 @@ export class HarnessServer {
   }
 
   private async readFile(params: ReadFileParams): Promise<{ path: string; content: string }> {
-    const config = this.database.getConfig();
-    const toolService = new ToolService(config.workspace, {
+    const workspace = this.resolveWorkspace();
+    const toolService = new ToolService(workspace, {
       database: this.database,
       threadId: undefined,
     });
@@ -356,19 +431,19 @@ export class HarnessServer {
       "read_file",
       { path: params.path },
       {
-        workspace: config.workspace,
+        workspace,
         emitCommandDelta: () => undefined,
       },
     );
     return {
-      path: resolve(config.workspace.rootPath, params.path),
+      path: resolve(workspace.rootPath, params.path),
       content,
     };
   }
 
   private async writePatch(params: WritePatchParams): Promise<{ path: string; bytesWritten: number }> {
-    const config = this.database.getConfig();
-    const toolService = new ToolService(config.workspace, {
+    const workspace = this.resolveWorkspace(params.threadId);
+    const toolService = new ToolService(workspace, {
       database: this.database,
       threadId: params.threadId,
     });
@@ -376,7 +451,7 @@ export class HarnessServer {
       "write_patch",
       { path: params.path, content: params.content },
       {
-        workspace: config.workspace,
+        workspace,
         emitCommandDelta: () => undefined,
       },
     );
@@ -390,9 +465,7 @@ export class HarnessServer {
       ...config,
       disabledSkillIds: params.disabledSkillIds,
     });
-    this.skillService.startWatching(config.workspace.rootPath, params.disabledSkillIds);
-
-    return { skills: this.refreshSkills() };
+    return { skills: this.refreshSkills(config.selectedProjectId) };
   }
 
   private async providerTest(): Promise<ProviderTestResult> {
@@ -415,22 +488,83 @@ export class HarnessServer {
       disabledSkillIds: params.config.disabledSkillIds ?? current.disabledSkillIds,
     };
 
-    if (params.config.workspace?.rootPath && existsSync(params.config.workspace.rootPath)) {
-      this.skillService.startWatching(next.workspace.rootPath, next.disabledSkillIds);
-    } else if (params.config.disabledSkillIds) {
-      this.skillService.startWatching(next.workspace.rootPath, next.disabledSkillIds);
-    }
-
     const stored = this.database.writeConfig(next);
-    this.refreshSkills();
-    return { config: stored };
+    const synced = this.syncProjectSelection(stored);
+    this.refreshSkills(synced.selectedProjectId);
+    return { config: synced };
   }
 
-  private refreshSkills() {
+  private refreshSkills(projectId?: string) {
     const config = this.database.getConfig();
-    this.skills = this.skillService.listSkills(config.workspace.rootPath, config.disabledSkillIds);
+    const workspace = this.resolveWorkspaceByProjectId(projectId ?? config.selectedProjectId);
+    this.skillService.startWatching(workspace.rootPath, config.disabledSkillIds);
+    this.skills = this.skillService.listSkills(workspace.rootPath, config.disabledSkillIds);
     this.emit({ type: "skills/changed", payload: { skills: this.skills } });
     return this.skills;
+  }
+
+  private requireProject(projectId?: string): ProjectRecord {
+    const project = this.resolveWorkspaceByProjectId(projectId);
+
+    if (!project) {
+      throw new Error("No project is available. Create a project first.");
+    }
+
+    return project;
+  }
+
+  private resolveWorkspace(threadId?: string): ProjectRecord {
+    if (threadId) {
+      const thread = this.database.getThread(threadId);
+
+      if (thread) {
+        return this.requireProject(thread.projectId);
+      }
+    }
+
+    return this.requireProject(this.database.getConfig().selectedProjectId);
+  }
+
+  private resolveWorkspaceByProjectId(projectId?: string): ProjectRecord {
+    if (projectId) {
+      const project = this.database.getProject(projectId);
+
+      if (project) {
+        return project;
+      }
+    }
+
+    const fallback = this.database.listProjects()[0];
+
+    if (fallback) {
+      return fallback;
+    }
+
+    const config = this.database.getConfig();
+    const now = new Date().toISOString();
+    return this.database.createProject({
+      id: createId("project"),
+      name: config.workspace.name,
+      rootPath: config.workspace.rootPath,
+      shell: config.workspace.shell,
+      sandboxMode: config.workspace.sandboxMode,
+      approvalPolicy: config.workspace.approvalPolicy,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
+  private syncProjectSelection(config: AppConfig): AppConfig {
+    const project = this.resolveWorkspaceByProjectId(config.selectedProjectId);
+
+    if (config.selectedProjectId === project.id) {
+      return config;
+    }
+
+    return this.database.writeConfig({
+      ...config,
+      selectedProjectId: project.id,
+    });
   }
 
   private emit(event: HarnessEvent): void {

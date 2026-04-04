@@ -2,21 +2,26 @@ import {
   type ApprovalResponseParams,
   type AppConfig,
   type ConfigWriteParams,
+  type CreateProjectParams,
   type HarnessEvent,
   type InitializeResult,
   type ItemRecord,
   type PendingApproval,
+  type ProjectRecord,
   type SkillDescriptor,
   type StartThreadParams,
   type StartTurnParams,
   type ThreadRecord,
   type TurnRecord,
+  type UpdateProjectParams,
 } from "@my-agent/protocol";
 
 declare global {
   interface Window {
     myAgent: {
       initialize: () => Promise<InitializeResult>;
+      createProject: (params: CreateProjectParams) => Promise<{ project: ProjectRecord }>;
+      updateProject: (params: UpdateProjectParams) => Promise<{ project: ProjectRecord }>;
       startThread: (params: StartThreadParams) => Promise<{ thread: ThreadRecord }>;
       resumeThread: (threadId: string) => Promise<{ thread: ThreadRecord; turns: TurnRecord[]; items: ItemRecord[]; pendingApproval?: PendingApproval | null }>;
       startTurn: (params: StartTurnParams) => Promise<{ turn: TurnRecord }>;

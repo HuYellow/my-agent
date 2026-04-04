@@ -68,10 +68,21 @@ export interface WorkspaceProfile {
   approvalPolicy: ApprovalPolicy;
 }
 
+export interface ProjectRecord {
+  id: string;
+  name: string;
+  rootPath: string;
+  shell: string;
+  sandboxMode: SandboxMode;
+  approvalPolicy: ApprovalPolicy;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ThreadRecord {
   id: string;
   title: string;
-  workspaceId: string;
+  projectId: string;
   createdAt: string;
   updatedAt: string;
   archivedAt?: string | null;
@@ -127,6 +138,7 @@ export interface PendingApproval {
 
 export interface AppConfig {
   globalInstructions: string;
+  selectedProjectId?: string;
   selectedWorkspaceId?: string;
   provider: ProviderProfile;
   workspace: WorkspaceProfile;
@@ -140,6 +152,7 @@ export interface InitializeResult {
     version: string;
   };
   config: AppConfig;
+  projects: ProjectRecord[];
   threads: ThreadRecord[];
   skills: SkillDescriptor[];
 }
@@ -147,6 +160,7 @@ export interface InitializeResult {
 export interface StartThreadParams {
   title?: string;
   workspace?: Partial<WorkspaceProfile>;
+  projectId?: string;
 }
 
 export interface StartThreadResult {
@@ -213,6 +227,27 @@ export interface ProviderTestResult {
   ok: boolean;
   status: number;
   message: string;
+}
+
+export interface CreateProjectParams {
+  name?: string;
+  rootPath: string;
+  shell?: string;
+  sandboxMode?: SandboxMode;
+  approvalPolicy?: ApprovalPolicy;
+}
+
+export interface CreateProjectResult {
+  project: ProjectRecord;
+}
+
+export interface UpdateProjectParams {
+  projectId: string;
+  patch: Partial<Pick<ProjectRecord, "name" | "rootPath" | "shell" | "sandboxMode" | "approvalPolicy">>;
+}
+
+export interface UpdateProjectResult {
+  project: ProjectRecord;
 }
 
 export interface ConfigReadResult {
