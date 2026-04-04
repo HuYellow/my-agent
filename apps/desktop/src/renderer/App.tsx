@@ -16,7 +16,7 @@ import {
   FileEdit,
   CheckCircle,
   XCircle,
-  Clock,
+  ChevronRight,
 } from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
@@ -162,20 +162,6 @@ export function App() {
   );
   const enabledSkills = useMemo(() => skills.filter((skill) => skill.enabled), [skills]);
 
-  const projectThreads = useMemo(
-    () => orderedThreads.filter((thread) => thread.projectId === activeProjectId),
-    [activeProjectId, orderedThreads],
-  );
-
-  const filteredThreads = useMemo(() => {
-    if (!threadSearch.trim()) return projectThreads;
-    const search = threadSearch.toLowerCase();
-    return projectThreads.filter(
-      (thread) =>
-        thread.title.toLowerCase().includes(search)
-    );
-  }, [projectThreads, threadSearch]);
-
   const handleCreateThread = async () => {
     await createThread(undefined, activeProjectId);
     setActiveView("threads");
@@ -265,12 +251,11 @@ export function App() {
           <ThreadsPanel
             projects={projects}
             activeProjectId={activeProjectId}
-            threads={filteredThreads}
+            threads={orderedThreads}
             activeThreadId={activeThreadId}
             project={activeProject}
             search={threadSearch}
             onSearchChange={setThreadSearch}
-            onSelectProject={selectProject}
             onSelectThread={selectThread}
             onCreateProject={handleCreateProject}
             onCreateThread={handleCreateThread}
@@ -438,7 +423,6 @@ function ThreadsPanel({
   project,
   search,
   onSearchChange,
-  onSelectProject,
   onSelectThread,
   onCreateProject,
   onCreateThread,
@@ -450,17 +434,64 @@ function ThreadsPanel({
   project?: ProjectRecord;
   search: string;
   onSearchChange: (value: string) => void;
-  onSelectProject: (projectId: string) => Promise<void>;
   onSelectThread: (threadId: string) => Promise<void>;
   onCreateProject: () => Promise<void>;
   onCreateThread: () => Promise<void>;
 }) {
+  const [expandedProjectIds, setExpandedProjectIds] = useState<string[]>(() =>
+    activeProjectId ? [activeProjectId] : projects[0] ? [projects[0].id] : [],
+  );
+
+  useEffect(() => {
+    if (!activeProjectId) {
+      return;
+    }
+
+    setExpandedProjectIds((current) => (current.includes(activeProjectId) ? current : [...current, activeProjectId]));
+  }, [activeProjectId]);
+
+  useEffect(() => {
+    if (projects.length === 0) {
+      setExpandedProjectIds([]);
+      return;
+    }
+
+    setExpandedProjectIds((current) => current.filter((projectId) => projects.some((projectEntry) => projectEntry.id === projectId)));
+  }, [projects]);
+
+  const searchTerm = search.trim().toLowerCase();
+  const projectGroups = projects.map((entry) => {
+    const projectThreads = threads.filter((thread) => thread.projectId === entry.id);
+    const visibleThreads = searchTerm
+      ? projectThreads.filter((thread) => thread.title.toLowerCase().includes(searchTerm))
+      : projectThreads;
+
+    return {
+      project: entry,
+      totalCount: projectThreads.length,
+      visibleThreads,
+    };
+  });
+
+  const toggleProject = (projectId: string) => {
+    setExpandedProjectIds((current) =>
+      current.includes(projectId)
+        ? current.filter((entry) => entry !== projectId)
+        : [...current, projectId],
+    );
+  };
+
   return (
     <div className="sidebar-secondary__content">
-      <div className="sidebar-secondary__header">
-        <div className="sidebar-secondary__workspace">
-          <FolderOpen size={14} />
-          <span>{project?.name ?? "No project"}</span>
+      <div className="sidebar-secondary__header sidebar-secondary__header--stacked">
+        <div className="sidebar-secondary__headline">
+          <div className="sidebar-secondary__workspace">
+            <FolderOpen size={14} />
+            <span>{project?.name ?? "No project"}</span>
+          </div>
+          <button className="button--small" onClick={() => void onCreateProject()} aria-label="Create project">
+            <Plus size={14} />
+          </button>
         </div>
         <div className="sidebar-secondary__search">
           <Search size={14} />
@@ -473,45 +504,65 @@ function ThreadsPanel({
         </div>
       </div>
 
-      <div className="project-list">
-        <div className="project-list__header">
-          <span>Projects</span>
-          <button className="button--small" onClick={() => void onCreateProject()}>
-            <Plus size={14} />
-          </button>
-        </div>
-        <div className="project-list__items">
-          {projects.map((entry) => (
-            <button
-              key={entry.id}
-              className={`project-item ${entry.id === activeProjectId ? "project-item--active" : ""}`}
-              onClick={() => void onSelectProject(entry.id)}
-            >
-              <div className="project-item__name">{entry.name}</div>
-              <div className="project-item__path">{entry.rootPath}</div>
-            </button>
-          ))}
-        </div>
-      </div>
-
       <div className="sidebar-secondary__list">
-        {threads.length > 0 ? (
-          threads.map((thread) => (
-            <button
-              key={thread.id}
-              className={`thread-item ${thread.id === activeThreadId ? "thread-item--active" : ""}`}
-              onClick={() => void onSelectThread(thread.id)}
-            >
-              <div className="thread-item__content">
-                <div className="thread-item__title">{thread.title}</div>
-                <div className="thread-item__meta">
-                  <Clock size={12} />
-                  <span>{formatDateTime(thread.updatedAt)}</span>
-                </div>
-              </div>
-              {thread.id === activeThreadId && <div className="thread-item__indicator" />}
-            </button>
-          ))
+        {projects.length > 0 ? (
+          <div className="project-tree">
+            {projectGroups.map(({ project: entry, totalCount, visibleThreads }) => {
+              const expanded = expandedProjectIds.includes(entry.id);
+              const isActiveProject = entry.id === activeProjectId;
+              const emptyLabel = searchTerm
+                ? "No matching threads"
+                : "No threads yet";
+
+              return (
+                <section
+                  key={entry.id}
+                  className={`project-tree__group ${isActiveProject ? "project-tree__group--active" : ""}`}
+                >
+                  <div className="project-tree__project">
+                    <button
+                      className={`project-tree__toggle ${expanded ? "project-tree__toggle--open" : ""}`}
+                      onClick={() => toggleProject(entry.id)}
+                      aria-label={expanded ? `Collapse ${entry.name}` : `Expand ${entry.name}`}
+                    >
+                      <ChevronRight size={14} />
+                    </button>
+                    <button
+                      className={`project-item ${isActiveProject ? "project-item--active" : ""}`}
+                      onClick={() => toggleProject(entry.id)}
+                    >
+                      <div className="project-item__name">{entry.name}</div>
+                      <div className="project-item__count">
+                        {searchTerm && visibleThreads.length !== totalCount ? `${visibleThreads.length}/${totalCount}` : totalCount}
+                      </div>
+                    </button>
+                  </div>
+
+                  {expanded && (
+                    <div className="project-tree__threads">
+                      {visibleThreads.length > 0 ? (
+                        visibleThreads.map((thread) => (
+                          <button
+                            key={thread.id}
+                            className={`thread-item thread-item--nested ${thread.id === activeThreadId ? "thread-item--active" : ""}`}
+                            onClick={() => void onSelectThread(thread.id)}
+                          >
+                            <div className="thread-item__content thread-item__content--compact">
+                              <div className="thread-item__title">{thread.title}</div>
+                              <div className="thread-item__age">{formatRelativeTime(thread.updatedAt)}</div>
+                            </div>
+                            {thread.id === activeThreadId && <div className="thread-item__indicator" />}
+                          </button>
+                        ))
+                      ) : (
+                        <div className="project-tree__empty">{emptyLabel}</div>
+                      )}
+                    </div>
+                  )}
+                </section>
+              );
+            })}
+          </div>
         ) : (
           <div className="sidebar-secondary__empty">
             <MessageSquarePlus size={24} />
@@ -823,18 +874,49 @@ function LoadingShell() {
   );
 }
 
-function formatDateTime(value: string) {
-  return new Date(value).toLocaleString([], {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
 function formatTime(value: string) {
   return new Date(value).toLocaleTimeString([], {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function formatRelativeTime(value: string) {
+  const target = new Date(value).getTime();
+  const deltaMs = Date.now() - target;
+  const deltaMinutes = Math.max(0, Math.floor(deltaMs / 60000));
+
+  if (deltaMinutes < 1) {
+    return "now";
+  }
+
+  if (deltaMinutes < 60) {
+    return `${deltaMinutes}m`;
+  }
+
+  const deltaHours = Math.floor(deltaMinutes / 60);
+
+  if (deltaHours < 24) {
+    return `${deltaHours}h`;
+  }
+
+  const deltaDays = Math.floor(deltaHours / 24);
+
+  if (deltaDays < 7) {
+    return `${deltaDays}d`;
+  }
+
+  const deltaWeeks = Math.floor(deltaDays / 7);
+
+  if (deltaWeeks < 5) {
+    return `${deltaWeeks}w`;
+  }
+
+  const deltaMonths = Math.floor(deltaDays / 30);
+
+  if (deltaMonths < 12) {
+    return `${Math.max(1, deltaMonths)}mo`;
+  }
+
+  return `${Math.floor(deltaDays / 365)}y`;
 }

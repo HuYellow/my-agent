@@ -12,6 +12,13 @@ import {
   type TurnRecord,
 } from "@my-agent/protocol";
 
+let bootstrapPromise: Promise<void> | null = null;
+let detachEventListener: (() => void) | null = null;
+
+function upsertThread(threads: ThreadRecord[], thread: ThreadRecord): ThreadRecord[] {
+  return [thread, ...threads.filter((entry) => entry.id !== thread.id)];
+}
+
 interface AppState {
   bootstrapped: boolean;
   loading: boolean;
@@ -49,30 +56,47 @@ export const useAppStore = create<AppState>((set, get) => ({
   skills: [],
   pendingApproval: null,
   bootstrap: async () => {
-    set({ loading: true });
-    const initial = (await window.myAgent.initialize()) as InitializeResult;
-    const activeProjectId =
-      initial.config.selectedProjectId ??
-      initial.projects[0]?.id;
-    const activeThreadId =
-      initial.threads.find((thread) => thread.projectId === activeProjectId)?.id ??
-      initial.threads[0]?.id;
-    set({
-      bootstrapped: true,
-      loading: false,
-      projects: initial.projects,
-      threads: initial.threads,
-      skills: initial.skills,
-      config: initial.config,
-      activeProjectId,
-      activeThreadId,
-    });
-
-    if (activeThreadId) {
-      await get().selectThread(activeThreadId);
+    if (get().bootstrapped) {
+      return;
     }
 
-    window.myAgent.onEvent((event) => get().handleEvent(event));
+    if (bootstrapPromise) {
+      await bootstrapPromise;
+      return;
+    }
+
+    bootstrapPromise = (async () => {
+      set({ loading: true });
+      const initial = (await window.myAgent.initialize()) as InitializeResult;
+      const activeProjectId =
+        initial.config.selectedProjectId ??
+        initial.projects[0]?.id;
+      const activeThreadId =
+        initial.threads.find((thread) => thread.projectId === activeProjectId)?.id ??
+        initial.threads[0]?.id;
+      set({
+        bootstrapped: true,
+        loading: false,
+        projects: initial.projects,
+        threads: initial.threads,
+        skills: initial.skills,
+        config: initial.config,
+        activeProjectId,
+        activeThreadId,
+      });
+
+      if (activeThreadId) {
+        await get().selectThread(activeThreadId);
+      }
+
+      if (!detachEventListener) {
+        detachEventListener = window.myAgent.onEvent((event) => get().handleEvent(event));
+      }
+    })().finally(() => {
+      bootstrapPromise = null;
+    });
+
+    await bootstrapPromise;
   },
   createProject: async (params) => {
     const result = (await window.myAgent.createProject(params)) as { project: ProjectRecord };
@@ -122,7 +146,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const result = (await window.myAgent.startThread({ title, projectId: ensuredProjectId })) as { thread: ThreadRecord };
     const currentConfig = get().config;
     set((state) => ({
-      threads: [result.thread, ...state.threads],
+      threads: upsertThread(state.threads, result.thread),
       activeProjectId: result.thread.projectId,
       activeThreadId: result.thread.id,
       config: currentConfig ? { ...currentConfig, selectedProjectId: result.thread.projectId } : currentConfig,
@@ -217,7 +241,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   handleEvent: (event) => {
     switch (event.type) {
       case "thread/started":
-        set((state) => ({ threads: [event.payload.thread, ...state.threads] }));
+        set((state) => ({ threads: upsertThread(state.threads, event.payload.thread) }));
         break;
       case "turn/started":
         set((state) => ({ turns: [...state.turns.filter((turn) => turn.id !== event.payload.turn.id), event.payload.turn] }));
