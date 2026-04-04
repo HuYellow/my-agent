@@ -139,12 +139,11 @@ async function createWindow(): Promise<void> {
     height: 980,
     minWidth: 1240,
     minHeight: 760,
-    backgroundColor: "#0b1020",
+    backgroundColor: "#efe7dc",
     title: "my-agent",
     ...(process.platform === "win32"
       ? {
-          titleBarStyle: "hidden",
-          titleBarOverlay: getTitleBarOverlay("dark"),
+          titleBarStyle: "hiddenInset",
           autoHideMenuBar: true,
         }
       : {}),
@@ -202,11 +201,8 @@ function registerIpc(): void {
   ipcMain.handle("config:write", (_event, params: ConfigWriteParams) => harness.request("config/write", params));
   ipcMain.handle("provider:test", () => harness.request("provider/test"));
   ipcMain.handle("window:set-titlebar-theme", (_event, theme: TitleBarTheme) => {
-    if (process.platform !== "win32" || !mainWindow) {
-      return;
-    }
-
-    mainWindow.setTitleBarOverlay(getTitleBarOverlay(theme));
+    // 不再动态设置标题栏覆盖层，因为使用 hiddenInset 样式
+    // 系统会自动适配主题
   });
   ipcMain.handle("window:show-app-menu", (_event, params: { menuId: AppMenuId; x: number; y: number }) => {
     if (!mainWindow) {
@@ -365,20 +361,4 @@ function getAppMenuSections(): Array<{ id: AppMenuId; label: string; submenu: Me
       ],
     },
   ];
-}
-
-function getTitleBarOverlay(theme: TitleBarTheme) {
-  if (theme === "light") {
-    return {
-      color: "#f2eadf",
-      symbolColor: "#6c5a49",
-      height: 40,
-    };
-  }
-
-  return {
-    color: "#202225",
-    symbolColor: "#f2f4f7",
-    height: 40,
-  };
 }

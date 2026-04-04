@@ -126,7 +126,8 @@ export function App() {
 
   useEffect(() => {
     document.documentElement.dataset.theme = "light";
-    void window.myAgent.setTitleBarTheme("dark");
+    // hiddenInset 样式会自动适配，无需手动设置标题栏主题
+    // void window.myAgent.setTitleBarTheme("dark");
   }, []);
 
   useEffect(() => {
@@ -229,17 +230,17 @@ export function App() {
   return (
     <div className={`app-shell ${sidebarCollapsed ? "app-shell--sidebar-collapsed" : ""}`}>
       <header className="app-toolbar">
-        <button
-          className="app-toolbar__brand"
-          onClick={() => setSidebarCollapsed((current) => !current)}
-          aria-label={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
-          title={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
-        >
-          <div className="app-toolbar__logo" aria-hidden="true">
-            <span className="app-toolbar__logo-core" />
-          </div>
-        </button>
         <div className="app-toolbar__menus">
+          <button
+            className="app-toolbar__brand"
+            onClick={() => setSidebarCollapsed((current) => !current)}
+            aria-label={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
+            title={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
+          >
+            <div className="app-toolbar__logo" aria-hidden="true">
+              <span className="app-toolbar__logo-core" />
+            </div>
+          </button>
           {APP_MENU_ITEMS.map((item) => (
             <button
               key={item.id}
@@ -250,7 +251,6 @@ export function App() {
             </button>
           ))}
         </div>
-        <div className="app-toolbar__window-gap" aria-hidden="true" />
       </header>
       <div className="app-container">
       {/* 左侧边栏：三层结构 */}
