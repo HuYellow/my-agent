@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
 import {
   MessageSquarePlus,
   Zap,
@@ -72,6 +72,14 @@ const ITEM_LABELS: Record<ItemKind, string> = {
   error: "Error",
 };
 
+const APP_MENU_ITEMS = [
+  { id: "file", label: "File" },
+  { id: "edit", label: "Edit" },
+  { id: "view", label: "View" },
+  { id: "window", label: "Window" },
+  { id: "help", label: "Help" },
+] as const;
+
 export function App() {
   const {
     bootstrapped,
@@ -90,7 +98,6 @@ export function App() {
     createProject,
     createThread,
     updateProject,
-    selectProject,
     selectThread,
     sendTurn,
     respondApproval,
@@ -103,6 +110,7 @@ export function App() {
   const [input, setInput] = useState("");
   const [skillDetail, setSkillDetail] = useState<SkillDescriptor | null>(null);
   const [threadSearch, setThreadSearch] = useState("");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [providerForm, setProviderForm] = useState<ProviderFormState>({
     baseUrl: "",
     apiKey: "",
@@ -118,7 +126,7 @@ export function App() {
 
   useEffect(() => {
     document.documentElement.dataset.theme = "light";
-    void window.myAgent.setTitleBarTheme("light");
+    void window.myAgent.setTitleBarTheme("dark");
   }, []);
 
   useEffect(() => {
@@ -167,6 +175,11 @@ export function App() {
     setActiveView("threads");
   };
 
+  const handleSelectThread = async (threadId: string) => {
+    await selectThread(threadId);
+    setActiveView("threads");
+  };
+
   const handleCreateProject = async () => {
     const picked = await window.myAgent.pickWorkspace();
 
@@ -176,6 +189,19 @@ export function App() {
 
     await createProject({ rootPath: picked });
     setActiveView("threads");
+  };
+
+  const handleShowAppMenu = (
+    menuId: (typeof APP_MENU_ITEMS)[number]["id"],
+    event: ReactMouseEvent<HTMLButtonElement>,
+  ) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+
+    void window.myAgent.showAppMenu({
+      menuId,
+      x: Math.round(rect.left),
+      y: Math.round(rect.bottom + 6),
+    });
   };
 
   const submitTurn = async () => {
@@ -201,43 +227,83 @@ export function App() {
   }
 
   return (
-    <div className="app-container">
-      {/* 左侧导航栏 */}
-      <aside className="sidebar-nav">
-        <div className="sidebar-nav__brand">
-          <div className="sidebar-nav__logo">MA</div>
+    <div className={`app-shell ${sidebarCollapsed ? "app-shell--sidebar-collapsed" : ""}`}>
+      <header className="app-toolbar">
+        <button
+          className="app-toolbar__brand"
+          onClick={() => setSidebarCollapsed((current) => !current)}
+          aria-label={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
+          title={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
+        >
+          <div className="app-toolbar__logo" aria-hidden="true">
+            <span className="app-toolbar__logo-core" />
+          </div>
+        </button>
+        <div className="app-toolbar__menus">
+          {APP_MENU_ITEMS.map((item) => (
+            <button
+              key={item.id}
+              className="app-toolbar__menu-button"
+              onClick={(event) => handleShowAppMenu(item.id, event)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+        <div className="app-toolbar__window-gap" aria-hidden="true" />
+      </header>
+      <div className="app-container">
+      {/* 左侧边栏：三层结构 */}
+      <aside className="sidebar">
+        {/* 第一层：功能Tab */}
+        <div className="sidebar__section sidebar__section--tabs">
+          <nav className="sidebar__nav">
+            <NavButton
+              icon={<MessageSquarePlus size={18} />}
+              label="New Thread"
+              active={activeView === "threads"}
+              onClick={() => setActiveView("threads")}
+            />
+            <NavButton
+              icon={<Zap size={18} />}
+              label="Skills"
+              active={activeView === "skills"}
+              onClick={() => setActiveView("skills")}
+            />
+            <NavButton
+              icon={<Grid3X3 size={18} />}
+              label="Plugins"
+              active={activeView === "plugins"}
+              onClick={() => setActiveView("plugins")}
+            />
+            <NavButton
+              icon={<GitBranch size={18} />}
+              label="Automation"
+              active={activeView === "automation"}
+              onClick={() => setActiveView("automation")}
+            />
+          </nav>
         </div>
 
-        <nav className="sidebar-nav__items">
-          <NavButton
-            icon={<MessageSquarePlus size={20} />}
-            label="New Thread"
-            active={activeView === "threads"}
-            onClick={() => setActiveView("threads")}
+        {/* 第二层：Project工作区 */}
+        <div className="sidebar__section sidebar__section--projects">
+          <ThreadsPanel
+            projects={projects}
+            activeProjectId={activeProjectId}
+            threads={orderedThreads}
+            activeThreadId={activeThreadId}
+            search={threadSearch}
+            onSearchChange={setThreadSearch}
+            onSelectThread={handleSelectThread}
+            onCreateProject={handleCreateProject}
+            onCreateThread={handleCreateThread}
           />
-          <NavButton
-            icon={<Zap size={20} />}
-            label="Skills"
-            active={activeView === "skills"}
-            onClick={() => setActiveView("skills")}
-          />
-          <NavButton
-            icon={<Grid3X3 size={20} />}
-            label="Plugins"
-            active={activeView === "plugins"}
-            onClick={() => setActiveView("plugins")}
-          />
-          <NavButton
-            icon={<GitBranch size={20} />}
-            label="Automation"
-            active={activeView === "automation"}
-            onClick={() => setActiveView("automation")}
-          />
-        </nav>
+        </div>
 
-        <div className="sidebar-nav__footer">
+        {/* 第三层：设置 */}
+        <div className="sidebar__section sidebar__section--footer">
           <NavButton
-            icon={<Settings size={20} />}
+            icon={<Settings size={18} />}
             label="Settings"
             active={activeView === "settings"}
             onClick={() => setActiveView("settings")}
@@ -245,74 +311,9 @@ export function App() {
         </div>
       </aside>
 
-      {/* 次级侧栏 */}
-      <aside className="sidebar-secondary">
-        {activeView === "threads" && (
-          <ThreadsPanel
-            projects={projects}
-            activeProjectId={activeProjectId}
-            threads={orderedThreads}
-            activeThreadId={activeThreadId}
-            project={activeProject}
-            search={threadSearch}
-            onSearchChange={setThreadSearch}
-            onSelectThread={selectThread}
-            onCreateProject={handleCreateProject}
-            onCreateThread={handleCreateThread}
-          />
-        )}
-        {activeView === "skills" && (
-          <SkillsPanel
-            skills={skills}
-            enabledSkills={enabledSkills}
-            onToggleSkill={toggleSkill}
-          />
-        )}
-        {activeView === "plugins" && <PlaceholderPanel title="Plugins" description="Plugin management coming soon." />}
-        {activeView === "automation" && <PlaceholderPanel title="Automation" description="Automation workflows coming soon." />}
-        {activeView === "settings" && (
-          <SettingsPanel
-            project={activeProject}
-            providerForm={providerForm}
-            setProviderForm={setProviderForm}
-            providerTestMessage={providerTestMessage}
-            onTestProvider={testProvider}
-            onSaveConfig={() =>
-              void Promise.all([
-                updateConfig({
-                  provider: {
-                    ...(config?.provider ?? {
-                      id: "default-provider",
-                      name: "Default Provider",
-                      apiFlavor: "chat_completions",
-                    }),
-                    baseUrl: providerForm.baseUrl,
-                    apiKey: providerForm.apiKey,
-                    model: providerForm.model,
-                  },
-                }),
-                activeProject
-                  ? updateProject(activeProject.id, {
-                      rootPath: providerForm.rootPath,
-                      approvalPolicy: providerForm.approvalPolicy,
-                      sandboxMode: providerForm.sandboxMode,
-                    })
-                  : Promise.resolve(),
-              ])
-            }
-            onPickWorkspace={async () => {
-              const picked = await window.myAgent.pickWorkspace();
-              if (picked) {
-                setProviderForm((state) => ({ ...state, rootPath: picked }));
-              }
-            }}
-          />
-        )}
-      </aside>
-
       {/* 主内容区 */}
       <main className="main-content">
-        {activeView === "threads" || activeView === "skills" ? (
+        {activeView === "threads" ? (
           <>
             {/* 顶部标题栏 */}
             <header className="main-header">
@@ -360,12 +361,56 @@ export function App() {
               loading={loading}
             />
           </>
+        ) : activeView === "skills" ? (
+          <SkillsPanel
+            skills={skills}
+            enabledSkills={enabledSkills}
+            onToggleSkill={toggleSkill}
+          />
+        ) : activeView === "plugins" ? (
+          <PlaceholderPanel title="Plugins" description="Plugin management coming soon." />
+        ) : activeView === "automation" ? (
+          <PlaceholderPanel title="Automation" description="Automation workflows coming soon." />
         ) : (
-          <div className="main-content__placeholder">
-            <p>Select a feature from the sidebar</p>
-          </div>
+          <SettingsPanel
+            project={activeProject}
+            providerForm={providerForm}
+            setProviderForm={setProviderForm}
+            providerTestMessage={providerTestMessage}
+            onTestProvider={testProvider}
+            onSaveConfig={() =>
+              void Promise.all([
+                updateConfig({
+                  provider: {
+                    ...(config?.provider ?? {
+                      id: "default-provider",
+                      name: "Default Provider",
+                      apiFlavor: "chat_completions",
+                    }),
+                    baseUrl: providerForm.baseUrl,
+                    apiKey: providerForm.apiKey,
+                    model: providerForm.model,
+                  },
+                }),
+                activeProject
+                  ? updateProject(activeProject.id, {
+                      rootPath: providerForm.rootPath,
+                      approvalPolicy: providerForm.approvalPolicy,
+                      sandboxMode: providerForm.sandboxMode,
+                    })
+                  : Promise.resolve(),
+              ])
+            }
+            onPickWorkspace={async () => {
+              const picked = await window.myAgent.pickWorkspace();
+              if (picked) {
+                setProviderForm((state) => ({ ...state, rootPath: picked }));
+              }
+            }}
+          />
         )}
-      </main>
+        </main>
+      </div>
 
       {/* 技能详情对话框 */}
       <Dialog.Root open={Boolean(skillDetail)} onOpenChange={(open) => !open && setSkillDetail(null)}>
@@ -410,7 +455,8 @@ function NavButton({ icon, label, active, onClick }: { icon: React.ReactNode; la
       title={label}
       aria-label={label}
     >
-      {icon}
+      <span className="nav-button__icon">{icon}</span>
+      <span className="nav-button__label">{label}</span>
     </button>
   );
 }
@@ -420,7 +466,6 @@ function ThreadsPanel({
   activeProjectId,
   threads,
   activeThreadId,
-  project,
   search,
   onSearchChange,
   onSelectThread,
@@ -431,7 +476,6 @@ function ThreadsPanel({
   activeProjectId?: string;
   threads: import("@my-agent/protocol").ThreadRecord[];
   activeThreadId?: string;
-  project?: ProjectRecord;
   search: string;
   onSearchChange: (value: string) => void;
   onSelectThread: (threadId: string) => Promise<void>;
@@ -482,29 +526,41 @@ function ThreadsPanel({
   };
 
   return (
-    <div className="sidebar-secondary__content">
-      <div className="sidebar-secondary__header sidebar-secondary__header--stacked">
-        <div className="sidebar-secondary__headline">
-          <div className="sidebar-secondary__workspace">
-            <FolderOpen size={14} />
-            <span>{project?.name ?? "No project"}</span>
+    <div className="sidebar-secondary__content thread-sidebar">
+      <div className="thread-sidebar__header">
+        <div className="thread-sidebar__title-row">
+          <span className="thread-sidebar__title">Threads</span>
+          <div className="thread-sidebar__actions">
+            <button
+              className="thread-sidebar__action"
+              onClick={() => void onCreateThread()}
+              aria-label="Create thread"
+              title="Create thread"
+            >
+              <MessageSquarePlus size={14} />
+            </button>
+            <button
+              className="thread-sidebar__action"
+              onClick={() => void onCreateProject()}
+              aria-label="Create project"
+              title="Create project"
+            >
+              <Plus size={14} />
+            </button>
           </div>
-          <button className="button--small" onClick={() => void onCreateProject()} aria-label="Create project">
-            <Plus size={14} />
-          </button>
         </div>
-        <div className="sidebar-secondary__search">
+        <div className="thread-sidebar__search">
           <Search size={14} />
           <input
             type="text"
-            placeholder="Search threads..."
+            placeholder="Search threads"
             value={search}
             onChange={(e) => onSearchChange(e.target.value)}
           />
         </div>
       </div>
 
-      <div className="sidebar-secondary__list">
+      <div className="thread-sidebar__list">
         {projects.length > 0 ? (
           <div className="project-tree">
             {projectGroups.map(({ project: entry, totalCount, visibleThreads }) => {
@@ -567,16 +623,9 @@ function ThreadsPanel({
           <div className="sidebar-secondary__empty">
             <MessageSquarePlus size={24} />
             <p>No threads yet</p>
-            <span>{project ? "Create the first thread in this project" : "Create a project first"}</span>
+            <span>Create a project or start a new thread</span>
           </div>
         )}
-      </div>
-
-      <div className="sidebar-secondary__footer">
-        <button className="sidebar-secondary__new-thread" onClick={() => void onCreateThread()}>
-          <Plus size={16} />
-          <span>New Thread</span>
-        </button>
       </div>
     </div>
   );
@@ -866,10 +915,12 @@ function ComposerBar({
 
 function LoadingShell() {
   return (
-    <div className="app-container app-container--loading">
-      <aside className="sidebar-nav sidebar-nav--loading" />
-      <aside className="sidebar-secondary sidebar-secondary--loading" />
-      <main className="main-content main-content--loading" />
+    <div className="app-shell app-shell--loading">
+      <header className="app-toolbar" />
+      <div className="app-container app-container--loading">
+        <aside className="sidebar sidebar--loading" />
+        <main className="main-content main-content--loading" />
+      </div>
     </div>
   );
 }

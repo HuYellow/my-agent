@@ -370,15 +370,15 @@ function getAppMenuSections(): Array<{ id: AppMenuId; label: string; submenu: Me
 function getTitleBarOverlay(theme: TitleBarTheme) {
   if (theme === "light") {
     return {
-      color: "#efe7db",
-      symbolColor: "#221b15",
-      height: 52,
+      color: "#f2eadf",
+      symbolColor: "#6c5a49",
+      height: 40,
     };
   }
 
   return {
-    color: "#13171c",
-    symbolColor: "#f4ecdc",
-    height: 52,
+    color: "#202225",
+    symbolColor: "#f2f4f7",
+    height: 40,
   };
 }
