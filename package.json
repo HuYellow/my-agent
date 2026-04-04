@@ -1,0 +1,31 @@
+{
+  "name": "my-agent",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace @my-agent/protocol && npm run build --workspace @my-agent/core && npm run build --workspace @my-agent/desktop",
+    "dev": "npm run dev --workspace @my-agent/desktop",
+    "test": "npm run test --workspace @my-agent/core && npm run test --workspace @my-agent/desktop",
+    "typecheck": "npm run typecheck --workspace @my-agent/protocol && npm run typecheck --workspace @my-agent/core && npm run typecheck --workspace @my-agent/desktop"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.3",
+    "@types/node": "^22.15.3",
+    "@types/react": "^19.1.2",
+    "@types/react-dom": "^19.1.2",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
+    "electron": "^35.1.5",
+    "tailwindcss": "^4.1.3",
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.2",
+    "vitest": "^3.1.1",
+    "wait-on": "^8.0.3"
+  }
+}

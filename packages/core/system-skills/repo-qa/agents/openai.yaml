@@ -1,0 +1,6 @@
+interface:
+  display_name: "Repo QA"
+  short_description: "Explain repository layout and likely edit points."
+  brand_color: "#3b82f6"
+policy:
+  allow_implicit_invocation: true
