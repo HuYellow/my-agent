@@ -17,6 +17,9 @@ import {
   CheckCircle,
   XCircle,
   ChevronRight,
+  Minus,
+  Square,
+  X,
 } from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
@@ -250,6 +253,33 @@ export function App() {
               {item.label}
             </button>
           ))}
+        </div>
+        <div className="app-toolbar__drag-region" aria-hidden="true" />
+        <div className="app-toolbar__controls">
+          <button
+            className="app-toolbar__control"
+            onClick={() => window.myAgent.windowMinimize()}
+            aria-label="Minimize"
+            title="Minimize"
+          >
+            <Minus size={14} />
+          </button>
+          <button
+            className="app-toolbar__control"
+            onClick={() => window.myAgent.windowToggleFullscreen()}
+            aria-label="Toggle fullscreen"
+            title="Toggle fullscreen"
+          >
+            <Square size={12} />
+          </button>
+          <button
+            className="app-toolbar__control app-toolbar__control--close"
+            onClick={() => window.myAgent.windowClose()}
+            aria-label="Close"
+            title="Close"
+          >
+            <X size={14} />
+          </button>
         </div>
       </header>
       <div className="app-container">

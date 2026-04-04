@@ -1395,9 +1395,9 @@ code {
   position: relative;
   z-index: 30;
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: max-content minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   height: var(--toolbar-height);
   padding: 0 8px;
   background: rgba(255, 255, 255, 0.85);
@@ -1406,6 +1406,11 @@ code {
   border-bottom: 1px solid var(--sidebar-border);
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.6);
   -webkit-app-region: drag;
+}
+
+.app-toolbar__menus,
+.app-toolbar__controls {
+  -webkit-app-region: no-drag;
 }
 
 .app-toolbar__brand,
@@ -1456,12 +1461,13 @@ code {
   display: flex;
   align-items: center;
   gap: 2px;
-  min-width: 0;
+  width: fit-content;
+  min-width: max-content;
   height: 100%;
 }
 
 .app-toolbar__menu-button {
-  padding: 4px 9px;
+  padding: 4px 7px;
   border: none;
   border-radius: 6px;
   background: transparent;
@@ -1478,8 +1484,40 @@ code {
   color: var(--text);
 }
 
-.app-toolbar__window-gap {
+.app-toolbar__controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
   height: 100%;
+}
+
+.app-toolbar__drag-region {
+  align-self: stretch;
+  min-width: 40px;
+  -webkit-app-region: drag;
+}
+
+.app-toolbar__control {
+  width: 42px;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  border: none;
+  background: transparent;
+  color: var(--text-soft);
+  transition:
+    background 160ms ease,
+    color 160ms ease;
+}
+
+.app-toolbar__control:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--text);
+}
+
+.app-toolbar__control--close:hover {
+  background: #e81123;
+  color: white;
 }
 
 .app-container {

@@ -26,6 +26,9 @@ const api = {
   showAppMenu: (params: { menuId: "file" | "edit" | "view" | "window" | "help"; x: number; y: number }) =>
     ipcRenderer.invoke("window:show-app-menu", params),
   pickWorkspace: () => ipcRenderer.invoke("workspace:pick"),
+  windowMinimize: () => ipcRenderer.invoke("window:minimize"),
+  windowToggleFullscreen: () => ipcRenderer.invoke("window:toggle-fullscreen"),
+  windowClose: () => ipcRenderer.invoke("window:close"),
   onEvent: (listener: (event: HarnessEvent) => void) => {
     const wrapped = (_event: Electron.IpcRendererEvent, payload: HarnessEvent) => listener(payload);
     ipcRenderer.on("harness:event", wrapped);

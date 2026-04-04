@@ -141,12 +141,8 @@ async function createWindow(): Promise<void> {
     minHeight: 760,
     backgroundColor: "#efe7dc",
     title: "my-agent",
-    ...(process.platform === "win32"
-      ? {
-          titleBarStyle: "hiddenInset",
-          autoHideMenuBar: true,
-        }
-      : {}),
+    frame: false,
+    titleBarStyle: "hidden",
     webPreferences: {
       preload,
       contextIsolation: true,
@@ -201,8 +197,27 @@ function registerIpc(): void {
   ipcMain.handle("config:write", (_event, params: ConfigWriteParams) => harness.request("config/write", params));
   ipcMain.handle("provider:test", () => harness.request("provider/test"));
   ipcMain.handle("window:set-titlebar-theme", (_event, theme: TitleBarTheme) => {
-    // 不再动态设置标题栏覆盖层，因为使用 hiddenInset 样式
-    // 系统会自动适配主题
+    // 不再动态设置标题栏覆盖层，因为使用 frameless 窗口
+  });
+  ipcMain.handle("window:minimize", () => {
+    mainWindow?.minimize();
+  });
+  ipcMain.handle("window:maximize", () => {
+    if (mainWindow?.isMaximized()) {
+      mainWindow.unmaximize();
+    } else {
+      mainWindow?.maximize();
+    }
+  });
+  ipcMain.handle("window:toggle-fullscreen", () => {
+    if (!mainWindow) {
+      return;
+    }
+
+    mainWindow.setFullScreen(!mainWindow.isFullScreen());
+  });
+  ipcMain.handle("window:close", () => {
+    mainWindow?.close();
   });
   ipcMain.handle("window:show-app-menu", (_event, params: { menuId: AppMenuId; x: number; y: number }) => {
     if (!mainWindow) {

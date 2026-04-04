@@ -34,6 +34,9 @@ declare global {
       setTitleBarTheme: (theme: "light" | "dark") => Promise<void>;
       showAppMenu: (params: { menuId: "file" | "edit" | "view" | "window" | "help"; x: number; y: number }) => Promise<void>;
       pickWorkspace: () => Promise<string | null>;
+      windowMinimize: () => Promise<void>;
+      windowToggleFullscreen: () => Promise<void>;
+      windowClose: () => Promise<void>;
       onEvent: (listener: (event: HarnessEvent) => void) => () => void;
     };
   }
