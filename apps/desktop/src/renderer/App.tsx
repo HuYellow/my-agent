@@ -9,11 +9,7 @@ import {
   Plus,
   Search,
   FolderOpen,
-  Bot,
-  User,
   AlertTriangle,
-  Wrench,
-  FileEdit,
   CheckCircle,
   XCircle,
   ChevronRight,
@@ -82,6 +78,20 @@ const APP_MENU_ITEMS = [
   { id: "window", label: "Window" },
   { id: "help", label: "Help" },
 ] as const;
+
+type ConversationEntry =
+  | { id: string; kind: "user"; item: ItemRecord }
+  | { id: string; kind: "thought"; items: ItemRecord[]; completed: boolean; durationMs: number }
+  | { id: string; kind: "answer"; item: ItemRecord }
+  | { id: string; kind: "system"; item: ItemRecord };
+
+const THOUGHT_ITEM_KINDS: ItemKind[] = [
+  "reasoning",
+  "toolCall",
+  "toolResult",
+  "commandExecution",
+  "fileChange",
+];
 
 export function App() {
   const {
@@ -160,6 +170,10 @@ export function App() {
     () => [...items].sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
     [items],
   );
+  const conversationEntries = useMemo(
+    () => buildConversationEntries(orderedItems),
+    [orderedItems],
+  );
   const activeThread = useMemo(
     () => orderedThreads.find((thread) => thread.id === activeThreadId),
     [activeThreadId, orderedThreads],
@@ -220,7 +234,7 @@ export function App() {
   };
 
   const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+    if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       void submitTurn();
     }
@@ -365,11 +379,7 @@ export function App() {
                   el?.focus();
                 }} />
               ) : (
-                <div className="message-list">
-                  {orderedItems.map((item) => (
-                    <MessageItem key={item.id} item={item} />
-                  ))}
-                </div>
+                <ConversationFeed entries={conversationEntries} />
               )}
 
               {/* 审批请求 */}
@@ -843,29 +853,82 @@ function EmptyState({ onStartConversation }: { onStartConversation: () => void }
   );
 }
 
-function MessageItem({ item }: { item: ItemRecord }) {
-  const isUser = item.kind === "userMessage";
-  const isAgent = item.kind === "agentMessage" || item.kind === "reasoning";
-  const isTool = ["toolCall", "toolResult", "commandExecution"].includes(item.kind);
+function ConversationFeed({ entries }: { entries: ConversationEntry[] }) {
+  const [expandedThoughts, setExpandedThoughts] = useState<Record<string, boolean>>({});
 
   return (
-    <div className={`message-item ${isUser ? "message-item--user" : "message-item--agent"} message-item--${item.kind}`}>
-      <div className="message-item__icon">
-        {isUser && <User size={16} />}
-        {isAgent && <Bot size={16} />}
-        {isTool && <Wrench size={16} />}
-        {item.kind === "fileChange" && <FileEdit size={16} />}
-        {item.kind === "approvalRequest" && <AlertTriangle size={16} />}
-        {item.kind === "error" && <XCircle size={16} />}
-      </div>
-      <div className="message-item__content">
-        <div className="message-item__header">
-          <span className="message-item__label">{ITEM_LABELS[item.kind]}</span>
-          <span className="message-item__time">{formatTime(item.updatedAt)}</span>
-        </div>
-        <div className="message-item__title">{item.title}</div>
-        {item.body && <pre className="message-item__body">{item.body}</pre>}
-      </div>
+    <div className="conversation-feed">
+      {entries.map((entry) => {
+        if (entry.kind === "user") {
+          return (
+            <div key={entry.id} className="conversation-entry conversation-entry--user">
+              <div className="user-bubble">
+                <pre className="user-bubble__text">{getUserDisplayText(entry.item)}</pre>
+              </div>
+            </div>
+          );
+        }
+
+        if (entry.kind === "thought") {
+          const expanded = expandedThoughts[entry.id] ?? !entry.completed;
+
+          return (
+            <section key={entry.id} className={`thought-group ${expanded ? "thought-group--expanded" : ""}`}>
+              <button
+                className="thought-group__toggle"
+                onClick={() =>
+                  setExpandedThoughts((current) => ({
+                    ...current,
+                    [entry.id]: !expanded,
+                  }))
+                }
+                aria-expanded={expanded}
+              >
+                <span className="thought-group__rule" />
+                <span className="thought-group__summary">
+                  {entry.completed ? `Processed ${formatElapsedTime(entry.durationMs)}` : "Thinking"}
+                </span>
+                <ChevronRight className={`thought-group__chevron ${expanded ? "thought-group__chevron--open" : ""}`} size={16} />
+                <span className="thought-group__rule" />
+              </button>
+
+              {expanded && (
+                <div className="thought-group__content">
+                  {entry.items.map((item) => (
+                    <div
+                      key={item.id}
+                      className={`thought-group__item ${item.kind === "reasoning" ? "" : "thought-group__item--meta"}`}
+                    >
+                      <pre className="thought-group__text">{formatThoughtItemText(item)}</pre>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          );
+        }
+
+        if (entry.kind === "answer") {
+          return (
+            <section key={entry.id} className="answer-group">
+              <div className="answer-group__header">
+                <span className="answer-group__rule" />
+                <span className="answer-group__summary">Final answer</span>
+                <span className="answer-group__rule" />
+              </div>
+              <div className="answer-group__content">
+                <pre className="answer-group__text">{getItemDisplayText(entry.item)}</pre>
+              </div>
+            </section>
+          );
+        }
+
+        return (
+          <section key={entry.id} className="system-note">
+            <pre className="system-note__text">{getItemDisplayText(entry.item)}</pre>
+          </section>
+        );
+      })}
     </div>
   );
 }
@@ -925,7 +988,7 @@ function ComposerBar({
       <div className="composer-bar__input-wrapper">
         <textarea
           className="composer-input"
-          placeholder="Type a message... (Ctrl+Enter to send)"
+          placeholder="Type a message..."
           value={input}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={onKeyDown}
@@ -955,11 +1018,83 @@ function LoadingShell() {
   );
 }
 
-function formatTime(value: string) {
-  return new Date(value).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+function buildConversationEntries(items: ItemRecord[]): ConversationEntry[] {
+  const entries: ConversationEntry[] = [];
+  let pendingThoughtItems: ItemRecord[] = [];
+
+  const flushThoughts = (completed: boolean) => {
+    if (pendingThoughtItems.length === 0) {
+      return;
+    }
+
+    const first = pendingThoughtItems[0]!;
+    const last = pendingThoughtItems[pendingThoughtItems.length - 1]!;
+
+    entries.push({
+      id: `thought-${first.id}`,
+      kind: "thought",
+      items: pendingThoughtItems,
+      completed,
+      durationMs: Math.max(0, new Date(last.updatedAt).getTime() - new Date(first.createdAt).getTime()),
+    });
+
+    pendingThoughtItems = [];
+  };
+
+  for (const item of items) {
+    if (item.kind === "userMessage") {
+      flushThoughts(true);
+      entries.push({ id: item.id, kind: "user", item });
+      continue;
+    }
+
+    if (THOUGHT_ITEM_KINDS.includes(item.kind)) {
+      pendingThoughtItems.push(item);
+      continue;
+    }
+
+    if (item.kind === "agentMessage") {
+      flushThoughts(true);
+      entries.push({ id: item.id, kind: "answer", item });
+      continue;
+    }
+
+    flushThoughts(true);
+    entries.push({ id: item.id, kind: "system", item });
+  }
+
+  flushThoughts(false);
+  return entries;
+}
+
+function getItemDisplayText(item: ItemRecord) {
+  return [item.title, item.body].filter(Boolean).join("\n\n");
+}
+
+function getUserDisplayText(item: ItemRecord) {
+  return item.body?.trim() || item.title?.trim() || "";
+}
+
+function formatThoughtItemText(item: ItemRecord) {
+  const content = getItemDisplayText(item);
+
+  if (item.kind === "reasoning") {
+    return content;
+  }
+
+  return `${ITEM_LABELS[item.kind]}: ${content}`;
+}
+
+function formatElapsedTime(durationMs: number) {
+  const totalSeconds = Math.max(1, Math.round(durationMs / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  if (minutes === 0) {
+    return `${seconds}s`;
+  }
+
+  return `${minutes}m ${seconds}s`;
 }
 
 function formatRelativeTime(value: string) {
