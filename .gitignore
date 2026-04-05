@@ -8,3 +8,4 @@ coverage
 Thumbs.db
 npm-debug.log*
 .my-agent
+.qoder

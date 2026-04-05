@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import {
   type ApprovalResponseParams,
+  type CommandExecParams,
   type ConfigWriteParams,
   type CreateProjectParams,
   type HarnessEvent,
@@ -32,6 +33,8 @@ const api = {
     ipcRenderer.invoke("window:show-app-menu", params),
   pickWorkspace: () => ipcRenderer.invoke("workspace:pick"),
   pickFiles: () => ipcRenderer.invoke("files:pick") as Promise<TurnInputAttachment[]>,
+  execCommand: (params: CommandExecParams) =>
+    ipcRenderer.invoke("command:exec", params) as Promise<{ code: number; stdout: string; stderr: string }>,
   windowMinimize: () => ipcRenderer.invoke("window:minimize"),
   windowToggleFullscreen: () => ipcRenderer.invoke("window:toggle-fullscreen"),
   windowClose: () => ipcRenderer.invoke("window:close"),

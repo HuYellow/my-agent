@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { PDFParse } from "pdf-parse";
 import {
   type ApprovalResponseParams,
+  type CommandExecParams,
   type ConfigWriteParams,
   type CreateProjectParams,
   type HarnessEvent,
@@ -194,6 +195,7 @@ function registerIpc(): void {
   ipcMain.handle("thread:resume", (_event, params: { threadId: string }) => harness.request("thread/resume", params));
   ipcMain.handle("turn:start", (_event, params: StartTurnParams) => harness.request("turn/start", params));
   ipcMain.handle("turn:interrupt", (_event, params: InterruptTurnParams) => harness.request("turn/interrupt", params));
+  ipcMain.handle("command:exec", (_event, params: CommandExecParams) => harness.request("command/exec", params));
   ipcMain.handle("approval:respond", (_event, params: ApprovalResponseParams) => harness.request("approval/respond", params));
   ipcMain.handle("skills:list", () => harness.request("skills/list"));
   ipcMain.handle("skills:config:write", (_event, params: { disabledSkillIds: string[] }) => harness.request("skills/config/write", params));

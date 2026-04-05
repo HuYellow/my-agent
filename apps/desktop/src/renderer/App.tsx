@@ -109,6 +109,7 @@ type ConversationEntry =
   | { id: string; kind: "user"; item: ItemRecord }
   | { id: string; kind: "thought"; items: ItemRecord[]; completed: boolean; durationMs: number }
   | { id: string; kind: "answer"; item: ItemRecord }
+  | { id: string; kind: "changes"; items: ItemRecord[] }
   | { id: string; kind: "system"; item: ItemRecord };
 
 const THOUGHT_ITEM_KINDS: ItemKind[] = [
@@ -116,8 +117,16 @@ const THOUGHT_ITEM_KINDS: ItemKind[] = [
   "toolCall",
   "toolResult",
   "commandExecution",
-  "fileChange",
 ];
+
+interface ChangedFileReview {
+  path: string;
+  additions?: number;
+  deletions?: number;
+  diff?: string;
+  status: "idle" | "loading" | "ready" | "error";
+  error?: string;
+}
 
 export function App() {
   const {
@@ -543,7 +552,7 @@ export function App() {
                   el?.focus();
                 }} />
               ) : (
-                <ConversationFeed entries={conversationEntries} />
+                <ConversationFeed entries={conversationEntries} threadId={activeThreadId} />
               )}
 
               {/* 审批请求 */}
@@ -1099,7 +1108,7 @@ function EmptyState({ onStartConversation }: { onStartConversation: () => void }
   );
 }
 
-function ConversationFeed({ entries }: { entries: ConversationEntry[] }) {
+function ConversationFeed({ entries, threadId }: { entries: ConversationEntry[]; threadId?: string }) {
   const [expandedThoughts, setExpandedThoughts] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
@@ -1172,6 +1181,10 @@ function ConversationFeed({ entries }: { entries: ConversationEntry[] }) {
           );
         }
 
+        if (entry.kind === "changes") {
+          return <ChangedFilesCard key={entry.id} items={entry.items} threadId={threadId} />;
+        }
+
         if (entry.kind === "answer") {
           return (
             <section key={entry.id} className="answer-group">
@@ -1194,6 +1207,169 @@ function ConversationFeed({ entries }: { entries: ConversationEntry[] }) {
         );
       })}
     </div>
+  );
+}
+
+function ChangedFilesCard({ items, threadId }: { items: ItemRecord[]; threadId?: string }) {
+  const files = useMemo(
+    () =>
+      items
+        .map((item) => ({
+          itemId: item.id,
+          path: getChangedFilePath(item),
+        }))
+        .filter((entry): entry is { itemId: string; path: string } => Boolean(entry.path))
+        .filter((entry, index, all) => all.findIndex((candidate) => candidate.path === entry.path) === index),
+    [items],
+  );
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [reviews, setReviews] = useState<Record<string, ChangedFileReview>>(() =>
+    Object.fromEntries(files.map((file) => [file.path, { path: file.path, status: "idle" as const }])),
+  );
+
+  useEffect(() => {
+    setReviews((current) => {
+      const next: Record<string, ChangedFileReview> = {};
+
+      for (const file of files) {
+        next[file.path] = current[file.path] ?? { path: file.path, status: "idle" };
+      }
+
+      return next;
+    });
+  }, [files]);
+
+  useEffect(() => {
+    if (!threadId || files.length === 0) {
+      return;
+    }
+
+    void loadChangedFileSummaries(threadId, files.map((file) => file.path))
+      .then((summary) => {
+        setReviews((current) => {
+          const next = { ...current };
+
+          for (const file of files) {
+            next[file.path] = {
+              ...next[file.path],
+              path: file.path,
+              additions: summary[file.path]?.additions,
+              deletions: summary[file.path]?.deletions,
+              status: next[file.path]?.diff ? "ready" : "idle",
+            };
+          }
+
+          return next;
+        });
+      })
+      .catch(() => undefined);
+  }, [files, threadId]);
+
+  const toggleFile = (path: string) => {
+    const nextExpanded = !(expanded[path] ?? false);
+
+    setExpanded((current) => ({
+      ...current,
+      [path]: nextExpanded,
+    }));
+
+    if (!nextExpanded || !threadId) {
+      return;
+    }
+
+    const existing = reviews[path];
+
+    if (existing?.status === "loading" || existing?.status === "ready") {
+      return;
+    }
+
+    setReviews((current) => ({
+      ...current,
+      [path]: {
+        ...current[path],
+        path,
+        status: "loading",
+      },
+    }));
+
+    void loadChangedFileDiff(threadId, path)
+      .then((diff) => {
+        setReviews((current) => ({
+          ...current,
+          [path]: {
+            ...current[path],
+            path,
+            diff,
+            status: "ready",
+          },
+        }));
+      })
+      .catch((error) => {
+        setReviews((current) => ({
+          ...current,
+          [path]: {
+            ...current[path],
+            path,
+            status: "error",
+            error: error instanceof Error ? error.message : String(error),
+          },
+        }));
+      });
+  };
+
+  if (files.length === 0) {
+    return null;
+  }
+
+  return (
+    <section className="changed-files-card">
+      <div className="changed-files-card__header">
+        <span className="changed-files-card__title">{files.length} 个文件已更改</span>
+      </div>
+
+      <div className="changed-files-card__list">
+        {files.map((file) => {
+          const review = reviews[file.path];
+          const isExpanded = expanded[file.path] ?? false;
+
+          return (
+            <div key={file.path} className={`changed-file ${isExpanded ? "changed-file--expanded" : ""}`}>
+              <button className="changed-file__summary" onClick={() => toggleFile(file.path)} type="button">
+                <span className="changed-file__path">{file.path}</span>
+                <span className="changed-file__stats">
+                  {typeof review?.additions === "number" && (
+                    <span className="changed-file__stat changed-file__stat--add">+{review.additions}</span>
+                  )}
+                  {typeof review?.deletions === "number" && (
+                    <span className="changed-file__stat changed-file__stat--del">-{review.deletions}</span>
+                  )}
+                </span>
+                <ChevronDown className={`changed-file__chevron ${isExpanded ? "changed-file__chevron--open" : ""}`} size={16} />
+              </button>
+
+              {isExpanded && (
+                <div className="changed-file__diff">
+                  {review?.status === "loading" && <div className="changed-file__empty">正在加载 diff…</div>}
+                  {review?.status === "error" && (
+                    <div className="changed-file__empty">
+                      {review.error ?? "无法读取该文件的 diff。"}
+                    </div>
+                  )}
+                  {review?.status === "ready" && review.diff ? (
+                    <div className="changed-file__diff-lines">
+                      {renderDiffLines(review.diff)}
+                    </div>
+                  ) : null}
+                  {review?.status === "ready" && !review.diff && (
+                    <div className="changed-file__empty">这个文件目前没有可展示的 git diff，可能是新文件或已被进一步整理。</div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
@@ -1505,48 +1681,90 @@ function buildConversationEntries(items: ItemRecord[]): ConversationEntry[] {
   const entries: ConversationEntry[] = [];
   let pendingThoughtItems: ItemRecord[] = [];
 
-  const flushThoughts = (completed: boolean) => {
+  const flushThoughts = (completed: boolean): ItemRecord[] => {
     if (pendingThoughtItems.length === 0) {
-      return;
+      return [];
     }
 
-    const first = pendingThoughtItems[0]!;
-    const last = pendingThoughtItems[pendingThoughtItems.length - 1]!;
+    const changeItems = pendingThoughtItems.filter((item) => item.kind === "fileChange");
+    const thoughtItems = pendingThoughtItems.filter((item) => item.kind !== "fileChange");
 
-    entries.push({
-      id: `thought-${first.id}`,
-      kind: "thought",
-      items: pendingThoughtItems,
-      completed,
-      durationMs: Math.max(0, new Date(last.updatedAt).getTime() - new Date(first.createdAt).getTime()),
-    });
+    if (thoughtItems.length > 0) {
+      const first = thoughtItems[0]!;
+      const last = thoughtItems[thoughtItems.length - 1]!;
+
+      entries.push({
+        id: `thought-${first.id}`,
+        kind: "thought",
+        items: thoughtItems,
+        completed,
+        durationMs: Math.max(0, new Date(last.updatedAt).getTime() - new Date(first.createdAt).getTime()),
+      });
+    }
 
     pendingThoughtItems = [];
+    return changeItems;
   };
 
   for (const item of items) {
     if (item.kind === "userMessage") {
-      flushThoughts(true);
+      const pendingChanges = flushThoughts(true);
+
+      if (pendingChanges.length > 0) {
+        entries.push({
+          id: `changes-${pendingChanges[0]!.id}`,
+          kind: "changes",
+          items: pendingChanges,
+        });
+      }
+
       entries.push({ id: item.id, kind: "user", item });
       continue;
     }
 
-    if (THOUGHT_ITEM_KINDS.includes(item.kind)) {
+    if (THOUGHT_ITEM_KINDS.includes(item.kind) || item.kind === "fileChange") {
       pendingThoughtItems.push(item);
       continue;
     }
 
     if (item.kind === "agentMessage") {
-      flushThoughts(true);
+      const pendingChanges = flushThoughts(true);
       entries.push({ id: item.id, kind: "answer", item });
+
+      if (pendingChanges.length > 0) {
+        entries.push({
+          id: `changes-${item.id}`,
+          kind: "changes",
+          items: pendingChanges,
+        });
+      }
+
       continue;
     }
 
-    flushThoughts(true);
+    const pendingChanges = flushThoughts(true);
+
+    if (pendingChanges.length > 0) {
+      entries.push({
+        id: `changes-${pendingChanges[0]!.id}`,
+        kind: "changes",
+        items: pendingChanges,
+      });
+    }
+
     entries.push({ id: item.id, kind: "system", item });
   }
 
-  flushThoughts(false);
+  const trailingChanges = flushThoughts(false);
+
+  if (trailingChanges.length > 0) {
+    entries.push({
+      id: `changes-${trailingChanges[0]!.id}`,
+      kind: "changes",
+      items: trailingChanges,
+    });
+  }
+
   return entries;
 }
 
@@ -1671,6 +1889,118 @@ function buildComposerInput(params: {
   }
 
   return sections.join("\n\n");
+}
+
+function getChangedFilePath(item: ItemRecord): string | null {
+  const metadataPath = typeof item.metadata?.path === "string" ? item.metadata.path : null;
+
+  if (metadataPath) {
+    return metadataPath;
+  }
+
+  const match = item.title.match(/^File change:\s+(.+)$/);
+  return match?.[1] ?? null;
+}
+
+async function loadChangedFileSummaries(
+  threadId: string,
+  paths: string[],
+): Promise<Record<string, { additions?: number; deletions?: number }>> {
+  if (paths.length === 0) {
+    return {};
+  }
+
+  const command = `git -c core.quotepath=false diff --numstat --no-ext-diff -- ${paths.map(quoteGitPath).join(" ")}`;
+  const result = await window.myAgent.execCommand({ threadId, command });
+  const output = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
+
+  if (result.code !== 0 && !output) {
+    throw new Error(`git diff summary failed with exit code ${result.code}.`);
+  }
+
+  return parseNumstatOutput(result.stdout);
+}
+
+async function loadChangedFileDiff(threadId: string, path: string): Promise<string> {
+  const command = `git -c core.quotepath=false diff --no-ext-diff --unified=3 -- ${quoteGitPath(path)}`;
+  const result = await window.myAgent.execCommand({ threadId, command });
+
+  if (result.code !== 0 && !result.stdout.trim()) {
+    const message = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
+    throw new Error(message || `git diff failed with exit code ${result.code}.`);
+  }
+
+  return stripUnifiedDiffPreamble(result.stdout);
+}
+
+function parseNumstatOutput(output: string): Record<string, { additions?: number; deletions?: number }> {
+  const summary: Record<string, { additions?: number; deletions?: number }> = {};
+
+  for (const rawLine of output.split(/\r?\n/)) {
+    const line = rawLine.trim();
+
+    if (!line) {
+      continue;
+    }
+
+    const [additions, deletions, ...rest] = rawLine.split("\t");
+    const path = rest.join("\t").trim();
+
+    if (!path) {
+      continue;
+    }
+
+    summary[path] = {
+      additions: parseNumstatValue(additions),
+      deletions: parseNumstatValue(deletions),
+    };
+  }
+
+  return summary;
+}
+
+function parseNumstatValue(value: string | undefined): number | undefined {
+  if (!value || value === "-") {
+    return undefined;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function stripUnifiedDiffPreamble(diff: string): string {
+  return diff
+    .split(/\r?\n/)
+    .filter((line) => !line.startsWith("diff --git ") && !line.startsWith("index "))
+    .join("\n")
+    .trim();
+}
+
+function renderDiffLines(diff: string) {
+  return diff.split(/\r?\n/).map((line, index) => {
+    let className = "changed-file__diff-line";
+
+    if (line.startsWith("@@")) {
+      className += " changed-file__diff-line--hunk";
+    } else if (line.startsWith("+") && !line.startsWith("+++")) {
+      className += " changed-file__diff-line--add";
+    } else if (line.startsWith("-") && !line.startsWith("---")) {
+      className += " changed-file__diff-line--del";
+    } else if (line.startsWith("---") || line.startsWith("+++")) {
+      className += " changed-file__diff-line--file";
+    }
+
+    return (
+      <div key={`${index}:${line}`} className={className}>
+        <span className="changed-file__diff-gutter">{index + 1}</span>
+        <code>{line || " "}</code>
+      </div>
+    );
+  });
+}
+
+function quoteGitPath(path: string): string {
+  return `"${path.replace(/(["`$\\])/g, "`$1")}"`;
 }
 
 function mergeComposerAttachments(
