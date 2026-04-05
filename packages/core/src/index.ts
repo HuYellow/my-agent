@@ -1,11 +1,16 @@
 #!/usr/bin/env node
 
+import dns from "node:dns";
 import { createInterface } from "node:readline";
 import { type JsonRpcMessage, type JsonRpcNotification, type JsonRpcRequest } from "@my-agent/protocol";
 import { HarnessServer } from "./rpc/harness-server.js";
 import { PromptBuilder } from "./services/prompt-builder.js";
 import { getDefaultHomeDir, getDefaultSystemSkillsRoot, SkillService } from "./services/skill-service.js";
 import { HarnessDatabase, getDefaultDatabasePath } from "./store/database.js";
+
+// Prefer IPv4 first to avoid intermittent undici/OpenAI client connection failures
+// on some Windows + Cloudflare-backed providers where IPv6/dual-stack resolution is flaky.
+dns.setDefaultResultOrder("ipv4first");
 
 const homeDir = process.env.MY_AGENT_HOME ?? getDefaultHomeDir();
 const database = new HarnessDatabase(getDefaultDatabasePath(homeDir));

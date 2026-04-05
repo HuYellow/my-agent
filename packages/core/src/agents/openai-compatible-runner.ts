@@ -42,7 +42,12 @@ import { normalizeProviderBaseUrl } from "../services/provider-url.js";
 import { RuntimeManager } from "../services/runtime-manager.js";
 import { SqliteSession } from "../services/sqlite-session.js";
 import { ToolService } from "../tools/tool-service.js";
-import { ToolExecutionAbortedError, type PlannedToolExecution } from "../tools/types.js";
+import {
+  ToolExecutionAbortedError,
+  type PlannedToolExecution,
+  type RuntimeToolDefinition,
+  type RuntimeToolParameters,
+} from "../tools/types.js";
 import { createId } from "../utils/ids.js";
 
 interface RunnerContext {
@@ -75,6 +80,15 @@ interface RunExecution {
   governor: RunGovernor;
   cleanup: () => void;
   timer: NodeJS.Timeout;
+}
+
+interface ModelToolDefinition {
+  runtimeName: string;
+  modelName: string;
+  description: string;
+  parameters: RuntimeToolParameters;
+  strict: boolean;
+  toRuntimeArgs: (input: unknown) => Record<string, unknown>;
 }
 
 export class OpenAiCompatibleRunner {
@@ -166,6 +180,7 @@ export class OpenAiCompatibleRunner {
         context.turn,
         context.thread.id,
         context.workspace.approvalPolicy,
+        context.provider,
         stream,
         builtPrompt.systemPrompt,
         toolService,
@@ -237,7 +252,7 @@ export class OpenAiCompatibleRunner {
       governor: execution.governor,
     });
     const state = await RunState.fromString(agent, runtime.serializedState);
-    const approvalItem = this.findApprovalItem(state.getInterruptions(), runtime.callId, context.approval);
+    const approvalItem = this.findApprovalItem(state.getInterruptions(), runtime.callId, context.approval, context.provider);
     const session = new SqliteSession(this.database, context.thread.id);
 
     if (!approvalItem) {
@@ -300,6 +315,7 @@ export class OpenAiCompatibleRunner {
         runningTurn,
         context.thread.id,
         context.workspace.approvalPolicy,
+        context.provider,
         stream,
         runtime.systemPrompt,
         toolService,
@@ -336,26 +352,28 @@ export class OpenAiCompatibleRunner {
     toolService: ToolService;
     governor: RunGovernor;
   }): Agent<any, any> {
-    const tools = params.toolService.getDefinitions().map((definition) =>
-      tool({
-        name: definition.name,
-        description: definition.description,
-        parameters: definition.parameters as never,
-        strict: definition.strict,
+    const tools = params.toolService.getDefinitions().map((definition) => {
+      const modelTool = exposeToolToModel(params.provider, definition);
+
+      return tool({
+        name: modelTool.modelName,
+        description: modelTool.description,
+        parameters: modelTool.parameters as never,
+        strict: modelTool.strict,
         needsApproval: async (_runContext: unknown, input: unknown) => {
-          const plan = params.toolService.planExecution(definition.name, input);
+          const plan = params.toolService.planExecution(modelTool.runtimeName, modelTool.toRuntimeArgs(input));
           return plan.permission.requiresApproval;
         },
         execute: async (input: unknown, _runContext: unknown, details?: { signal?: AbortSignal }) =>
-          this.executeToolForSdk(params.toolService, definition.name, input, {
+          this.executeToolForSdk(params.toolService, modelTool.runtimeName, modelTool.toRuntimeArgs(input), {
             workspace: params.workspace,
             turn: params.turn,
             threadId: params.threadId,
             signal: details?.signal,
             governor: params.governor,
           }),
-      }),
-    );
+      });
+    });
 
     return new Agent({
       name: "my-agent",
@@ -382,6 +400,7 @@ export class OpenAiCompatibleRunner {
     const modelProvider = new OpenAIProvider({
       openAIClient,
       useResponses: provider.apiFlavor === "responses",
+      useResponsesWebSocket: false,
     });
 
     return new Runner({
@@ -470,6 +489,7 @@ export class OpenAiCompatibleRunner {
     turn: TurnRecord,
     threadId: string,
     approvalPolicy: WorkspaceProfile["approvalPolicy"],
+    provider: ProviderProfile,
     stream: StreamedRunResult<any, Agent<any, any>>,
     systemPrompt: string,
     toolService: ToolService,
@@ -479,7 +499,7 @@ export class OpenAiCompatibleRunner {
 
     if (interruptions.length > 0) {
       const approvalItem = interruptions[0]!;
-      const approval = this.createApproval(turn, threadId, approvalItem, approvalPolicy, toolService);
+      const approval = this.createApproval(turn, threadId, approvalItem, approvalPolicy, toolService, provider);
       const item = this.createItem({
         turn,
         threadId,
@@ -928,20 +948,25 @@ export class OpenAiCompatibleRunner {
     approvalItem: RunToolApprovalItem,
     approvalPolicy: WorkspaceProfile["approvalPolicy"],
     toolService: ToolService,
+    provider: ProviderProfile,
   ): PendingApproval {
     const toolName = approvalItem.name ?? "unknown";
     const args = parseApprovalArguments(approvalItem.arguments);
-    const plan = safePlan(toolService, toolName, args);
+    const resolved = resolveModelToolCall(provider, toolName, args);
+    const plan = safePlan(toolService, resolved.runtimeName, resolved.runtimeArgs);
 
     return {
       id: createId("approval"),
       turnId: turn.id,
       threadId,
-      toolName,
+      toolName: resolved.runtimeName,
       reason:
         plan?.permission.approvalReason ??
-        ToolService.approvalReason(toolName, `Tool ${toolName} requires approval under policy ${approvalPolicy}.`),
-      args,
+        ToolService.approvalReason(
+          resolved.runtimeName,
+          `Tool ${resolved.runtimeName} requires approval under policy ${approvalPolicy}.`,
+        ),
+      args: resolved.runtimeArgs,
       scope: "once",
       createdAt: now(),
     };
@@ -951,7 +976,12 @@ export class OpenAiCompatibleRunner {
     return safePlan(toolService, toolName, args)?.permission.approvalKey;
   }
 
-  private findApprovalItem(items: RunToolApprovalItem[], callId: string | undefined, approval: PendingApproval): RunToolApprovalItem | undefined {
+  private findApprovalItem(
+    items: RunToolApprovalItem[],
+    callId: string | undefined,
+    approval: PendingApproval,
+    provider: ProviderProfile,
+  ): RunToolApprovalItem | undefined {
     return items.find((item) => {
       const itemCallId = getApprovalCallId(item);
 
@@ -959,7 +989,8 @@ export class OpenAiCompatibleRunner {
         return itemCallId === callId;
       }
 
-      return item.name === approval.toolName;
+      const resolved = resolveModelToolCall(provider, item.name ?? "unknown", parseApprovalArguments(item.arguments));
+      return resolved.runtimeName === approval.toolName;
     });
   }
 
@@ -1002,6 +1033,149 @@ export class OpenAiCompatibleRunner {
 
 function now(): string {
   return new Date().toISOString();
+}
+
+function exposeToolToModel(provider: ProviderProfile, definition: RuntimeToolDefinition): ModelToolDefinition {
+  if (!shouldUseCompatibleToolAliases(provider)) {
+    return {
+      runtimeName: definition.name,
+      modelName: definition.name,
+      description: definition.description,
+      parameters: definition.parameters,
+      strict: definition.strict,
+      toRuntimeArgs: (input) => definition.parseArgs(input),
+    };
+  }
+
+  switch (definition.name) {
+    case "list_repo_tree":
+      return {
+        runtimeName: definition.name,
+        modelName: "list_files",
+        description: "List files and folders in the current project. Pass an empty string for the project root.",
+        parameters: {
+          type: "object",
+          properties: {
+            input: {
+              type: "string",
+              description: "Empty string for the project root, otherwise a relative folder path.",
+            },
+          },
+          required: ["input"],
+          additionalProperties: false,
+        },
+        strict: true,
+        toRuntimeArgs: (input) => {
+          const value = readCompatToolInput(input, "list_files").trim();
+          return value ? { path: value } : {};
+        },
+      };
+    case "run_shell":
+      return {
+        runtimeName: definition.name,
+        modelName: "exec_cmd",
+        description: "Execute a terminal command from the project root.",
+        parameters: {
+          type: "object",
+          properties: {
+            input: {
+              type: "string",
+              description: "The full command to execute from the project root.",
+            },
+          },
+          required: ["input"],
+          additionalProperties: false,
+        },
+        strict: true,
+        toRuntimeArgs: (input) => {
+          const value = readCompatToolInput(input, "exec_cmd");
+
+          if (!value.trim()) {
+            throw new Error("exec_cmd requires a non-empty input string.");
+          }
+
+          return {
+            command: value,
+          };
+        },
+      };
+    default:
+      return {
+        runtimeName: definition.name,
+        modelName: definition.name,
+        description: definition.description,
+        parameters: definition.parameters,
+        strict: definition.strict,
+        toRuntimeArgs: (input) => definition.parseArgs(input),
+      };
+  }
+}
+
+function resolveModelToolCall(
+  provider: ProviderProfile,
+  toolName: string,
+  args: Record<string, unknown>,
+): { runtimeName: string; runtimeArgs: Record<string, unknown> } {
+  if (!shouldUseCompatibleToolAliases(provider)) {
+    return {
+      runtimeName: toolName,
+      runtimeArgs: args,
+    };
+  }
+
+  switch (toolName) {
+    case "list_files": {
+      const value = readCompatToolInput(args, "list_files").trim();
+      return {
+        runtimeName: "list_repo_tree",
+        runtimeArgs: value ? { path: value } : {},
+      };
+    }
+    case "exec_cmd": {
+      const value = readCompatToolInput(args, "exec_cmd");
+
+      if (!value.trim()) {
+        throw new Error("exec_cmd requires a non-empty input string.");
+      }
+
+      return {
+        runtimeName: "run_shell",
+        runtimeArgs: { command: value },
+      };
+    }
+    default:
+      return {
+        runtimeName: toolName,
+        runtimeArgs: args,
+      };
+  }
+}
+
+function shouldUseCompatibleToolAliases(provider: ProviderProfile): boolean {
+  if (provider.apiFlavor !== "responses" || !provider.baseUrl) {
+    return false;
+  }
+
+  try {
+    const hostname = new URL(normalizeProviderBaseUrl(provider.baseUrl)).hostname.toLowerCase();
+    return hostname !== "api.openai.com";
+  } catch {
+    return false;
+  }
+}
+
+function readCompatToolInput(input: unknown, toolName: string): string {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    throw new Error(`${toolName} expects an object payload.`);
+  }
+
+  const value = (input as Record<string, unknown>).input;
+
+  if (typeof value !== "string") {
+    throw new Error(`${toolName} expects an input string.`);
+  }
+
+  return value;
 }
 
 function trimSessionHistory(historyItems: AgentInputItem[], newItems: AgentInputItem[]): AgentInputItem[] {

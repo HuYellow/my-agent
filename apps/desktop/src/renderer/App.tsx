@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ClipboardEvent as ReactClipboardEvent,
+  type KeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import {
   MessageSquarePlus,
   Zap,
@@ -308,15 +316,7 @@ export function App() {
       return;
     }
 
-    setAttachments((current) => {
-      const next = new Map(current.map((attachment) => [attachment.path, attachment]));
-
-      for (const attachment of pickedFiles) {
-        next.set(attachment.path, attachment);
-      }
-
-      return [...next.values()];
-    });
+    setAttachments((current) => mergeComposerAttachments(current, pickedFiles));
     setComposerMenuOpen(false);
   };
 
@@ -383,6 +383,25 @@ export function App() {
       event.preventDefault();
       void submitTurn();
     }
+  };
+
+  const handleComposerPaste = async (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
+    const imageFiles = Array.from(event.clipboardData.items)
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => file !== null);
+
+    if (imageFiles.length === 0) {
+      return;
+    }
+
+    event.preventDefault();
+
+    const pastedAttachments = await Promise.all(
+      imageFiles.map((file, index) => createPastedImageAttachment(file, index)),
+    );
+
+    setAttachments((current) => mergeComposerAttachments(current, pastedAttachments));
   };
 
   if (!bootstrapped) {
@@ -544,6 +563,7 @@ export function App() {
               onSubmit={submitTurn}
               onInterrupt={() => interruptibleTurnId && void interruptTurn(interruptibleTurnId)}
               onKeyDown={handleComposerKeyDown}
+              onPaste={handleComposerPaste}
               attachments={attachments}
               onAddFiles={() => void handlePickFiles()}
               onRemoveAttachment={(path) =>
@@ -1220,6 +1240,7 @@ function ComposerBar({
   onSubmit,
   onInterrupt,
   onKeyDown,
+  onPaste,
   attachments,
   onAddFiles,
   onRemoveAttachment,
@@ -1251,6 +1272,7 @@ function ComposerBar({
   onSubmit: () => Promise<void>;
   onInterrupt: () => void;
   onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
+  onPaste: (event: ReactClipboardEvent<HTMLTextAreaElement>) => void;
   attachments: ComposerAttachment[];
   onAddFiles: () => void;
   onRemoveAttachment: (path: string) => void;
@@ -1314,6 +1336,7 @@ function ComposerBar({
             value={input}
             onChange={(e) => onChange(e.target.value)}
             onKeyDown={onKeyDown}
+            onPaste={onPaste}
             rows={1}
             disabled={canInterrupt}
           />
@@ -1418,7 +1441,7 @@ function ComposerBar({
                 onClick={onToggleReasoningMenu}
                 disabled={loading}
               >
-                <span className="composer-tool-button__label">推理 {selectedReasoning.label}</span>
+                <span className="composer-tool-button__label">{selectedReasoning.label}</span>
                 <ChevronDown size={14} />
               </button>
 
@@ -1648,6 +1671,69 @@ function buildComposerInput(params: {
   }
 
   return sections.join("\n\n");
+}
+
+function mergeComposerAttachments(
+  current: ComposerAttachment[],
+  incoming: ComposerAttachment[],
+): ComposerAttachment[] {
+  const next = new Map(current.map((attachment) => [attachment.path, attachment]));
+
+  for (const attachment of incoming) {
+    next.set(attachment.path, attachment);
+  }
+
+  return [...next.values()];
+}
+
+async function createPastedImageAttachment(file: File, index: number): Promise<ComposerAttachment> {
+  const timestamp = Date.now();
+  const extension = inferImageExtension(file.type);
+  const name = `pasted-image-${timestamp}-${index + 1}.${extension}`;
+
+  return {
+    path: `clipboard://${name}`,
+    name,
+    kind: "image",
+    mediaType: file.type || `image/${extension}`,
+    sizeBytes: file.size,
+    imageDataUrl: await readFileAsDataUrl(file),
+  };
+}
+
+function inferImageExtension(mediaType: string): string {
+  if (!mediaType.startsWith("image/")) {
+    return "png";
+  }
+
+  const subtype = mediaType.slice("image/".length).toLowerCase();
+
+  if (!subtype || subtype.includes("svg")) {
+    return "png";
+  }
+
+  return subtype.replace(/[^a-z0-9]+/g, "-");
+}
+
+function readFileAsDataUrl(file: Blob): Promise<string> {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        resolvePromise(reader.result);
+        return;
+      }
+
+      rejectPromise(new Error("Failed to read pasted image."));
+    };
+
+    reader.onerror = () => {
+      rejectPromise(reader.error ?? new Error("Failed to read pasted image."));
+    };
+
+    reader.readAsDataURL(file);
+  });
 }
 
 function getFileName(path: string) {
