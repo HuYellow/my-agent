@@ -10,24 +10,24 @@ interface TomlDocument {
   sections: Record<string, Record<string, TomlValue>>;
 }
 
-interface ParsedCodexAuth {
+interface ParsedMyAgentAuth {
   OPENAI_API_KEY?: string;
   [key: string]: unknown;
 }
 
-export interface ExternalCodexProviderConfig {
+export interface StoredProviderConfig {
   providerId: string;
   provider: ProviderProfile;
   source: {
-    codexHome: string;
+    myAgentHome: string;
     configPath: string;
     authPath?: string;
   };
 }
 
-export function loadExternalCodexProvider(): ExternalCodexProviderConfig | null {
-  const codexHome = getDefaultCodexHomeDir();
-  const configPath = join(codexHome, "config.toml");
+export function loadStoredProviderConfig(): StoredProviderConfig | null {
+  const myAgentHome = getDefaultMyAgentHomeDir();
+  const configPath = join(myAgentHome, "config.toml");
 
   if (!existsSync(configPath)) {
     return null;
@@ -46,9 +46,8 @@ export function loadExternalCodexProvider(): ExternalCodexProviderConfig | null 
     return null;
   }
 
-  const authPath = join(codexHome, "auth.json");
-  const auth = existsSync(authPath) ? parseCodexAuth(readFileSync(authPath, "utf8")) : {};
-  const requiresOpenAiAuth = asBoolean(providerSection.requires_openai_auth);
+  const authPath = join(myAgentHome, "auth.json");
+  const auth = existsSync(authPath) ? parseMyAgentAuth(readFileSync(authPath, "utf8")) : {};
   const baseUrl = asString(providerSection.base_url);
   const model = asString(document.root.model);
 
@@ -59,25 +58,26 @@ export function loadExternalCodexProvider(): ExternalCodexProviderConfig | null 
   return {
     providerId,
     provider: {
-      id: `codex:${providerId}`,
+      id: `my-agent:${providerId}`,
       name: asString(providerSection.name) || providerId,
       baseUrl,
-      apiKey: requiresOpenAiAuth ? String(auth.OPENAI_API_KEY ?? "") : String(auth.OPENAI_API_KEY ?? ""),
+      apiKey: String(auth.OPENAI_API_KEY ?? ""),
       model,
       apiFlavor: toApiFlavor(asString(providerSection.wire_api)),
+      reasoningEffort: toReasoningEffort(asString(document.root.model_reasoning_effort)),
     },
     source: {
-      codexHome,
+      myAgentHome,
       configPath,
       authPath: existsSync(authPath) ? authPath : undefined,
     },
   };
 }
 
-export function mergeExternalCodexProvider<TConfig extends { provider: ProviderProfile }>(config: TConfig): TConfig {
-  const external = loadExternalCodexProvider();
+export function mergeStoredProviderConfig<TConfig extends { provider: ProviderProfile }>(config: TConfig): TConfig {
+  const stored = loadStoredProviderConfig();
 
-  if (!external) {
+  if (!stored) {
     return config;
   }
 
@@ -85,23 +85,28 @@ export function mergeExternalCodexProvider<TConfig extends { provider: ProviderP
     ...config,
     provider: {
       ...config.provider,
-      ...external.provider,
+      ...stored.provider,
     },
   };
 }
 
-export function syncExternalCodexProvider(provider: ProviderProfile): void {
-  const codexHome = getDefaultCodexHomeDir();
-  const configPath = join(codexHome, "config.toml");
-  const authPath = join(codexHome, "auth.json");
+export function syncStoredProviderConfig(provider: ProviderProfile): void {
+  const myAgentHome = getDefaultMyAgentHomeDir();
+  const configPath = join(myAgentHome, "config.toml");
+  const authPath = join(myAgentHome, "auth.json");
   const existingDocument = existsSync(configPath) ? parseTomlDocument(readFileSync(configPath, "utf8")) : createEmptyTomlDocument();
-  const existingExternal = loadExternalCodexProvider();
-  const providerId = existingExternal?.providerId ?? slugifyProviderId(provider.name || provider.id || "default");
+  const existingStored = loadStoredProviderConfig();
+  const providerId = existingStored?.providerId ?? slugifyProviderId(provider.name || provider.id || "default");
   const sectionKey = `model_providers.${providerId}`;
   const section = (existingDocument.sections[sectionKey] ??= {});
 
   existingDocument.root.model_provider = providerId;
   existingDocument.root.model = provider.model;
+
+  if (provider.reasoningEffort) {
+    existingDocument.root.model_reasoning_effort = provider.reasoningEffort;
+  }
+
   section.name = provider.name || providerId;
   section.base_url = provider.baseUrl;
   section.wire_api = fromApiFlavor(provider.apiFlavor);
@@ -110,15 +115,26 @@ export function syncExternalCodexProvider(provider: ProviderProfile): void {
   mkdirSync(dirname(configPath), { recursive: true });
   writeFileSync(configPath, serializeTomlDocument(existingDocument), "utf8");
 
-  const auth = existsSync(authPath) ? parseCodexAuth(readFileSync(authPath, "utf8")) : {};
+  const auth = existsSync(authPath) ? parseMyAgentAuth(readFileSync(authPath, "utf8")) : {};
   auth.OPENAI_API_KEY = provider.apiKey;
   mkdirSync(dirname(authPath), { recursive: true });
   writeFileSync(authPath, `${JSON.stringify(auth, null, 2)}\n`, "utf8");
 }
 
-export function watchExternalCodexConfig(onChange: () => void): () => void {
-  const codexHome = getDefaultCodexHomeDir();
-  mkdirSync(codexHome, { recursive: true });
+export function ensureStoredProviderConfig(provider: ProviderProfile): void {
+  const configPath = join(getDefaultMyAgentHomeDir(), "config.toml");
+  const authPath = join(getDefaultMyAgentHomeDir(), "auth.json");
+
+  if (existsSync(configPath) && existsSync(authPath)) {
+    return;
+  }
+
+  syncStoredProviderConfig(provider);
+}
+
+export function watchStoredConfig(onChange: () => void): () => void {
+  const myAgentHome = getDefaultMyAgentHomeDir();
+  mkdirSync(myAgentHome, { recursive: true });
 
   let timer: NodeJS.Timeout | undefined;
   const schedule = () => {
@@ -132,7 +148,7 @@ export function watchExternalCodexConfig(onChange: () => void): () => void {
     timer.unref?.();
   };
 
-  const watcher = watch(codexHome, () => {
+  const watcher = watch(myAgentHome, () => {
     schedule();
   });
 
@@ -145,8 +161,8 @@ export function watchExternalCodexConfig(onChange: () => void): () => void {
   };
 }
 
-export function getDefaultCodexHomeDir(): string {
-  return process.env.CODEX_HOME ?? process.env.MY_AGENT_CODEX_HOME ?? join(homedir(), ".codex");
+export function getDefaultMyAgentHomeDir(): string {
+  return process.env.MY_AGENT_HOME ?? join(homedir(), ".my-agent");
 }
 
 export function parseTomlDocument(input: string): TomlDocument {
@@ -219,9 +235,9 @@ function createEmptyTomlDocument(): TomlDocument {
   };
 }
 
-function parseCodexAuth(input: string): ParsedCodexAuth {
+function parseMyAgentAuth(input: string): ParsedMyAgentAuth {
   try {
-    return JSON.parse(input) as ParsedCodexAuth;
+    return JSON.parse(input) as ParsedMyAgentAuth;
   } catch {
     return {};
   }
@@ -281,10 +297,6 @@ function asString(value: TomlValue | undefined): string {
   return typeof value === "string" ? value : "";
 }
 
-function asBoolean(value: TomlValue | undefined): boolean {
-  return value === true || value === "true";
-}
-
 function toApiFlavor(wireApi: string): ApiFlavor {
   switch (wireApi) {
     case "responses":
@@ -307,8 +319,23 @@ function fromApiFlavor(apiFlavor: ApiFlavor): string {
   }
 }
 
+function toReasoningEffort(value: string): ProviderProfile["reasoningEffort"] | undefined {
+  switch (value) {
+    case "none":
+    case "minimal":
+    case "low":
+    case "medium":
+    case "high":
+    case "xhigh":
+      return value;
+    default:
+      return undefined;
+  }
+}
+
 function slugifyProviderId(value: string): string {
   const normalized = value
+    .replace(/^my-agent:/, "")
     .replace(/^codex:/, "")
     .trim()
     .toLowerCase()

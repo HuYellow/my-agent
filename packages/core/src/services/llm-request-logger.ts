@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { type ProviderProfile } from "@my-agent/protocol";
-import { getDefaultCodexHomeDir } from "./codex-config.js";
+import { getDefaultMyAgentHomeDir } from "./my-agent-config.js";
 
 export interface LlmRequestLogEntry {
   timestamp?: string;
@@ -23,7 +23,7 @@ export interface LlmRequestLogEntry {
   responsePreview?: string;
 }
 
-const LOG_DIR = join(getDefaultCodexHomeDir(), "log");
+const LOG_DIR = join(getDefaultMyAgentHomeDir(), "log");
 const LOG_PATH = join(LOG_DIR, "llm-requests.jsonl");
 const PREVIEW_LIMIT = 240;
 

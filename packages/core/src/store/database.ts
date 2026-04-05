@@ -11,7 +11,7 @@ import {
   type TurnRecord,
   type WorkspaceProfile,
 } from "@my-agent/protocol";
-import { mergeExternalCodexProvider } from "../services/codex-config.js";
+import { mergeStoredProviderConfig } from "../services/my-agent-config.js";
 
 const DEFAULT_PROVIDER = {
   id: "default-provider",
@@ -132,11 +132,11 @@ export class HarnessDatabase {
     if (!row?.value) {
       const defaults = this.getDefaultConfig();
       this.writeConfig(defaults);
-      return mergeExternalCodexProvider(defaults);
+      return mergeStoredProviderConfig(defaults);
     }
 
     const parsed = JSON.parse(row.value) as AppConfig;
-    return mergeExternalCodexProvider({
+    return mergeStoredProviderConfig({
       ...this.getDefaultConfig(),
       ...parsed,
       selectedProjectId: parsed.selectedProjectId ?? parsed.selectedWorkspaceId,

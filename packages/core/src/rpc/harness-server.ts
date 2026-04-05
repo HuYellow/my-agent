@@ -30,7 +30,7 @@ import {
 import { existsSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { OpenAiCompatibleRunner } from "../agents/openai-compatible-runner.js";
-import { syncExternalCodexProvider, watchExternalCodexConfig } from "../services/codex-config.js";
+import { ensureStoredProviderConfig, syncStoredProviderConfig, watchStoredConfig } from "../services/my-agent-config.js";
 import { PromptBuilder } from "../services/prompt-builder.js";
 import { ProviderService } from "../services/provider-service.js";
 import { SkillService } from "../services/skill-service.js";
@@ -55,7 +55,8 @@ export class HarnessServer {
     this.skills = this.skillService.listSkills(activeProject.rootPath, config.disabledSkillIds);
     this.runner = new OpenAiCompatibleRunner(this.database, this.promptBuilder, (event) => this.emit(event));
     this.skillService.startWatching(activeProject.rootPath, config.disabledSkillIds);
-    this.stopWatchingExternalConfig = watchExternalCodexConfig(() => {
+    ensureStoredProviderConfig(config.provider);
+    this.stopWatchingExternalConfig = watchStoredConfig(() => {
       this.emit({
         type: "config/changed",
         payload: {
@@ -517,7 +518,7 @@ export class HarnessServer {
     const stored = this.database.writeConfig(next);
 
     if (params.config.provider) {
-      syncExternalCodexProvider(stored.provider);
+      syncStoredProviderConfig(stored.provider);
     }
 
     const synced = this.syncProjectSelection(stored);
