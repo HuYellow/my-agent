@@ -43,6 +43,8 @@ describe("PromptBuilder", () => {
 
     expect(built.systemPrompt).toContain("Project rule: be careful.");
     expect(built.systemPrompt).toContain("Detailed workflow.");
+    expect(built.systemPrompt).toContain("# Run Completion Rules");
+    expect(built.systemPrompt).toContain("Do not repeat the same tool call");
     expect(built.userMessage).toBe("explain the app");
   });
 });

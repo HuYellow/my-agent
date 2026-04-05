@@ -7,7 +7,9 @@ import {
   type ItemRecord,
   type PendingApproval,
   type ProjectRecord,
+  type ProviderModelRecord,
   type SkillDescriptor,
+  type TurnInputAttachment,
   type ThreadRecord,
   type TurnRecord,
 } from "@my-agent/protocol";
@@ -32,17 +34,22 @@ interface AppState {
   pendingApproval?: PendingApproval | null;
   config?: AppConfig;
   providerTestMessage?: string;
+  providerModels: ProviderModelRecord[];
+  providerModelsLoading: boolean;
+  providerModelsError?: string;
   bootstrap: () => Promise<void>;
   createProject: (params: CreateProjectParams) => Promise<void>;
   updateProject: (projectId: string, patch: Partial<Pick<ProjectRecord, "name" | "rootPath" | "shell" | "sandboxMode" | "approvalPolicy">>) => Promise<void>;
   selectProject: (projectId: string) => Promise<void>;
   createThread: (title?: string, projectId?: string) => Promise<void>;
   selectThread: (threadId: string) => Promise<void>;
-  sendTurn: (input: string, selectedSkillIds?: string[]) => Promise<void>;
+  sendTurn: (input: string, selectedSkillIds?: string[], attachments?: TurnInputAttachment[]) => Promise<void>;
+  interruptTurn: (turnId: string) => Promise<void>;
   respondApproval: (approvalId: string, decision: "approve" | "reject", scope?: "once" | "session") => Promise<void>;
   toggleSkill: (skillId: string) => Promise<void>;
   updateConfig: (config: Partial<AppConfig>) => Promise<void>;
   testProvider: () => Promise<void>;
+  refreshProviderModels: () => Promise<void>;
   handleEvent: (event: HarnessEvent) => void;
 }
 
@@ -55,6 +62,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   items: [],
   skills: [],
   pendingApproval: null,
+  providerModels: [],
+  providerModelsLoading: false,
   bootstrap: async () => {
     if (get().bootstrapped) {
       return;
@@ -88,6 +97,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (activeThreadId) {
         await get().selectThread(activeThreadId);
       }
+
+      await get().refreshProviderModels();
 
       if (!detachEventListener) {
         detachEventListener = window.myAgent.onEvent((event) => get().handleEvent(event));
@@ -171,7 +182,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       config: get().config ? { ...get().config!, selectedProjectId: result.thread.projectId } : get().config,
     });
   },
-  sendTurn: async (input, selectedSkillIds) => {
+  sendTurn: async (input, selectedSkillIds, attachments) => {
     const threadId = get().activeThreadId;
 
     if (!threadId) {
@@ -183,12 +194,22 @@ export const useAppStore = create<AppState>((set, get) => ({
     const result = (await window.myAgent.startTurn({
       threadId: ensuredThreadId,
       input,
+      attachments,
       selectedSkillIds,
     })) as { turn: TurnRecord };
 
     set((state) => ({
       loading: false,
       turns: [...state.turns.filter((turn) => turn.id !== result.turn.id), result.turn],
+    }));
+  },
+  interruptTurn: async (turnId) => {
+    const result = (await window.myAgent.interruptTurn({ turnId })) as { turn: TurnRecord };
+
+    set((state) => ({
+      loading: false,
+      turns: state.turns.map((turn) => (turn.id === result.turn.id ? result.turn : turn)),
+      pendingApproval: state.pendingApproval?.turnId === result.turn.id ? null : state.pendingApproval,
     }));
   },
   respondApproval: async (approvalId, decision, scope) => {
@@ -237,6 +258,38 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({
       providerTestMessage: result.ok ? `Provider OK (${result.status})` : `Provider failed (${result.status}): ${result.message}`,
     });
+  },
+  refreshProviderModels: async () => {
+    const provider = get().config?.provider;
+
+    if (!provider?.baseUrl) {
+      set({
+        providerModels: [],
+        providerModelsLoading: false,
+        providerModelsError: undefined,
+      });
+      return;
+    }
+
+    set({
+      providerModelsLoading: true,
+      providerModelsError: undefined,
+    });
+
+    try {
+      const result = (await window.myAgent.listProviderModels()) as { models: ProviderModelRecord[] };
+      set({
+        providerModels: result.models,
+        providerModelsLoading: false,
+        providerModelsError: undefined,
+      });
+    } catch (error) {
+      set({
+        providerModels: [],
+        providerModelsLoading: false,
+        providerModelsError: error instanceof Error ? error.message : String(error),
+      });
+    }
   },
   handleEvent: (event) => {
     switch (event.type) {
@@ -287,6 +340,13 @@ export const useAppStore = create<AppState>((set, get) => ({
           loading: false,
           turns: state.turns.map((turn) => (turn.id === event.payload.turn.id ? event.payload.turn : turn)),
         }));
+        break;
+      case "config/changed":
+        set((state) => ({
+          config: event.payload.config,
+          activeProjectId: event.payload.config.selectedProjectId ?? state.activeProjectId,
+        }));
+        void get().refreshProviderModels();
         break;
       case "skills/changed":
         set({ skills: event.payload.skills });

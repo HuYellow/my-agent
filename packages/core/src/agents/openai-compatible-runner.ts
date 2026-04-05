@@ -5,11 +5,14 @@ import {
   RunMessageOutputItem,
   RunReasoningItem,
   RunState,
+  ToolCallError,
   RunToolApprovalItem,
   RunToolCallItem,
   RunToolCallOutputItem,
   tool,
   type AgentInputItem,
+  type CallModelInputFilter,
+  type RunErrorHandlers,
   type RunStreamEvent,
   type StreamedRunResult,
 } from "@openai/agents";
@@ -21,11 +24,19 @@ import {
   type ProviderProfile,
   type SkillDescriptor,
   type ThreadRecord,
+  type TurnInputAttachment,
   type TurnRecord,
   type WorkspaceProfile,
 } from "@my-agent/protocol";
 import { HarnessDatabase } from "../store/database.js";
+import {
+  ControlledRunAbortError,
+  RunGovernor,
+  type RunGuardrailDecision,
+  type RunGovernorSnapshot,
+} from "./run-governor.js";
 import { PromptBuilder } from "../services/prompt-builder.js";
+import { normalizeProviderBaseUrl } from "../services/provider-url.js";
 import { RuntimeManager } from "../services/runtime-manager.js";
 import { SqliteSession } from "../services/sqlite-session.js";
 import { ToolService } from "../tools/tool-service.js";
@@ -40,6 +51,7 @@ interface RunnerContext {
   discoveredSkills: SkillDescriptor[];
   selectedSkills: SkillDescriptor[];
   userInput: string;
+  userAttachments: TurnInputAttachment[];
   globalInstructions: string;
 }
 
@@ -48,10 +60,19 @@ interface PendingRuntime {
   systemPrompt: string;
   callId?: string;
   approvalKey?: string;
+  governorSnapshot?: RunGovernorSnapshot;
 }
 
 interface StreamTracker {
   messageItem?: ItemRecord;
+  hasCompletedMessage: boolean;
+}
+
+interface RunExecution {
+  controller: AbortController;
+  governor: RunGovernor;
+  cleanup: () => void;
+  timer: NodeJS.Timeout;
 }
 
 export class OpenAiCompatibleRunner {
@@ -88,8 +109,16 @@ export class OpenAiCompatibleRunner {
       threadId: context.thread.id,
       kind: "userMessage",
       title: "User request",
-      body: context.userInput,
-      metadata: {},
+      body: renderUserInputSummary(context.userInput, context.userAttachments),
+      metadata: {
+        attachments: context.userAttachments.map((attachment) => ({
+          name: attachment.name,
+          path: attachment.path,
+          kind: attachment.kind,
+          mediaType: attachment.mediaType,
+          truncated: attachment.truncated ?? false,
+        })),
+      },
       status: "completed",
     });
 
@@ -106,7 +135,9 @@ export class OpenAiCompatibleRunner {
       return this.completeTurn({ ...context.turn, status: "completed", updatedAt: now() });
     }
 
-    const controller = this.runtimeManager.startTurn(context.turn.id);
+    const runner = this.createRunner(context.provider, context.thread.id);
+    const session = new SqliteSession(this.database, context.thread.id);
+    const execution = this.beginRunExecution(context.turn, context.thread.id, runner, undefined);
     const agent = this.createAgent({
       provider: context.provider,
       workspace: context.workspace,
@@ -114,20 +145,21 @@ export class OpenAiCompatibleRunner {
       turn: context.turn,
       threadId: context.thread.id,
       toolService,
+      governor: execution.governor,
     });
-    const runner = this.createRunner(context.provider, context.thread.id);
-    const session = new SqliteSession(this.database, context.thread.id);
 
     try {
-      const stream = await runner.run(agent, builtPrompt.userMessage, {
+      const stream = await runner.run(agent, buildTurnInput(builtPrompt.userMessage, context.userAttachments), {
         stream: true,
-        maxTurns: 10,
+        maxTurns: execution.governor.policy.maxTurns,
         session,
-        signal: controller.signal,
+        signal: execution.controller.signal,
         sessionInputCallback: trimSessionHistory,
+        callModelInputFilter: this.createCallModelInputFilter(execution.governor),
+        errorHandlers: this.createRunErrorHandlers(execution.governor),
       });
 
-      await this.consumeStream(stream, context.turn, context.thread.id);
+      await this.consumeStream(stream, context.turn, context.thread.id, execution.governor);
       return this.finishStream(
         context.turn,
         context.thread.id,
@@ -135,9 +167,20 @@ export class OpenAiCompatibleRunner {
         stream,
         builtPrompt.systemPrompt,
         toolService,
+        execution.governor,
       );
     } catch (error) {
-      if (controller.signal.aborted || isAbortError(error)) {
+      if (execution.governor.getDecision()) {
+        return this.completeTurnWithGuardrail(context.turn, context.thread.id, execution.governor);
+      }
+
+      const controlled = findControlledRunAbort(error);
+
+      if (controlled) {
+        return this.completeTurnWithGuardrail(context.turn, context.thread.id, execution.governor, controlled.decision);
+      }
+
+      if (execution.controller.signal.aborted || isAbortError(error)) {
         return this.cancelTurn(context.turn, context.thread.id, "Run interrupted by user.");
       }
 
@@ -152,6 +195,7 @@ export class OpenAiCompatibleRunner {
       });
       return this.failTurn(context.turn, error instanceof Error ? error.message : String(error));
     } finally {
+      execution.cleanup();
       this.runtimeManager.finishTurn(context.turn.id);
     }
   }
@@ -179,6 +223,8 @@ export class OpenAiCompatibleRunner {
     });
 
     await this.ensureThreadSessionSeeded(context.thread.id);
+    const runner = this.createRunner(context.provider, context.thread.id);
+    const execution = this.beginRunExecution(context.turn, context.thread.id, runner, runtime.governorSnapshot);
     const agent = this.createAgent({
       provider: context.provider,
       workspace: context.workspace,
@@ -186,8 +232,8 @@ export class OpenAiCompatibleRunner {
       turn: context.turn,
       threadId: context.thread.id,
       toolService,
+      governor: execution.governor,
     });
-    const runner = this.createRunner(context.provider, context.thread.id);
     const state = await RunState.fromString(agent, runtime.serializedState);
     const approvalItem = this.findApprovalItem(state.getInterruptions(), runtime.callId, context.approval);
     const session = new SqliteSession(this.database, context.thread.id);
@@ -235,18 +281,19 @@ export class OpenAiCompatibleRunner {
       status: "running",
       updatedAt: now(),
     });
-    const controller = this.runtimeManager.startTurn(runningTurn.id);
 
     try {
       const stream = await runner.run(agent, state, {
         stream: true,
-        maxTurns: 10,
+        maxTurns: execution.governor.policy.maxTurns,
         session,
-        signal: controller.signal,
+        signal: execution.controller.signal,
         sessionInputCallback: trimSessionHistory,
+        callModelInputFilter: this.createCallModelInputFilter(execution.governor),
+        errorHandlers: this.createRunErrorHandlers(execution.governor),
       });
 
-      await this.consumeStream(stream, runningTurn, context.thread.id);
+      await this.consumeStream(stream, runningTurn, context.thread.id, execution.governor);
       return this.finishStream(
         runningTurn,
         context.thread.id,
@@ -254,14 +301,26 @@ export class OpenAiCompatibleRunner {
         stream,
         runtime.systemPrompt,
         toolService,
+        execution.governor,
       );
     } catch (error) {
-      if (controller.signal.aborted || isAbortError(error)) {
+      if (execution.governor.getDecision()) {
+        return this.completeTurnWithGuardrail(runningTurn, context.thread.id, execution.governor);
+      }
+
+      const controlled = findControlledRunAbort(error);
+
+      if (controlled) {
+        return this.completeTurnWithGuardrail(runningTurn, context.thread.id, execution.governor, controlled.decision);
+      }
+
+      if (execution.controller.signal.aborted || isAbortError(error)) {
         return this.cancelTurn(runningTurn, context.thread.id, "Run interrupted by user.");
       }
 
       return this.failTurn(runningTurn, error instanceof Error ? error.message : String(error));
     } finally {
+      execution.cleanup();
       this.runtimeManager.finishTurn(runningTurn.id);
     }
   }
@@ -273,6 +332,7 @@ export class OpenAiCompatibleRunner {
     turn: TurnRecord;
     threadId: string;
     toolService: ToolService;
+    governor: RunGovernor;
   }): Agent<any, any> {
     const tools = params.toolService.getDefinitions().map((definition) =>
       tool({
@@ -290,6 +350,7 @@ export class OpenAiCompatibleRunner {
             turn: params.turn,
             threadId: params.threadId,
             signal: details?.signal,
+            governor: params.governor,
           }),
       }),
     );
@@ -299,6 +360,7 @@ export class OpenAiCompatibleRunner {
       instructions: params.systemPrompt,
       handoffDescription: "A local coding assistant with workspace tools, skills, and approval-aware execution.",
       model: params.provider.model,
+      modelSettings: buildModelSettings(params.provider),
       tools,
     });
   }
@@ -306,7 +368,7 @@ export class OpenAiCompatibleRunner {
   private createRunner(provider: ProviderProfile, threadId: string): Runner {
     const modelProvider = new OpenAIProvider({
       apiKey: provider.apiKey,
-      baseURL: provider.baseUrl,
+      baseURL: normalizeProviderBaseUrl(provider.baseUrl),
       useResponses: provider.apiFlavor === "responses",
     });
 
@@ -363,15 +425,25 @@ export class OpenAiCompatibleRunner {
     await session.addItems(seedItems);
   }
 
-  private async consumeStream(stream: StreamedRunResult<any, Agent<any, any>>, turn: TurnRecord, threadId: string): Promise<void> {
-    const tracker: StreamTracker = {};
+  private async consumeStream(
+    stream: StreamedRunResult<any, Agent<any, any>>,
+    turn: TurnRecord,
+    threadId: string,
+    governor: RunGovernor,
+  ): Promise<void> {
+    const tracker: StreamTracker = {
+      hasCompletedMessage: false,
+    };
 
     try {
       for await (const event of stream) {
+        governor.updateProgress(stream.currentTurn, stream.maxTurns);
         this.handleStreamEvent(event, turn, threadId, tracker);
       }
 
       await stream.completed;
+      governor.updateProgress(stream.currentTurn, stream.maxTurns);
+      this.ensureFinalOutputItem(turn, threadId, stream, tracker);
     } finally {
       if (tracker.messageItem) {
         this.completeItem(tracker.messageItem, {
@@ -389,6 +461,7 @@ export class OpenAiCompatibleRunner {
     stream: StreamedRunResult<any, Agent<any, any>>,
     systemPrompt: string,
     toolService: ToolService,
+    governor: RunGovernor,
   ): TurnRecord {
     const interruptions = stream.interruptions;
 
@@ -413,6 +486,7 @@ export class OpenAiCompatibleRunner {
         systemPrompt,
         callId: getApprovalCallId(approvalItem),
         approvalKey: this.getApprovalKey(toolService, approval.toolName, approval.args),
+        governorSnapshot: governor.toSnapshot(),
       } satisfies PendingRuntime);
 
       const pendingTurn = this.database.updateTurn({
@@ -428,6 +502,170 @@ export class OpenAiCompatibleRunner {
 
       return pendingTurn;
     }
+
+    this.emitGuardrailDiagnostics(turn, threadId, governor);
+
+    return this.completeTurn({
+      ...turn,
+      status: "completed",
+      updatedAt: now(),
+    });
+  }
+
+  private beginRunExecution(
+    turn: TurnRecord,
+    threadId: string,
+    runner: Runner,
+    snapshot?: RunGovernorSnapshot,
+  ): RunExecution {
+    const governor = snapshot ? RunGovernor.fromSnapshot(snapshot) : new RunGovernor();
+    const controller = this.runtimeManager.startTurn(turn.id);
+    const cleanupHooks = this.attachGovernanceHooks(runner, governor, controller);
+    const timer = setTimeout(() => {
+      governor.activateWallClockDecision();
+      controller.abort();
+    }, governor.policy.maxWallClockMs);
+
+    timer.unref?.();
+    this.createBudgetItem(turn, threadId, governor, Boolean(snapshot));
+
+    return {
+      controller,
+      governor,
+      timer,
+      cleanup: () => {
+        clearTimeout(timer);
+        cleanupHooks();
+      },
+    };
+  }
+
+  private attachGovernanceHooks(runner: Runner, governor: RunGovernor, controller: AbortController): () => void {
+    const onAgentHandoff = (_context: unknown, fromAgent: Agent<any, any>, toAgent: Agent<any, any>) => {
+      const decision = governor.noteHandoff(fromAgent.name, toAgent.name);
+
+      if (decision) {
+        controller.abort();
+      }
+    };
+
+    runner.on("agent_handoff", onAgentHandoff);
+
+    return () => {
+      runner.off("agent_handoff", onAgentHandoff);
+    };
+  }
+
+  private createCallModelInputFilter(governor: RunGovernor): CallModelInputFilter {
+    return ({ modelData }) => {
+      const adaptiveInstructions = governor.buildAdaptiveInstructions();
+
+      if (!adaptiveInstructions) {
+        return modelData;
+      }
+
+      return {
+        ...modelData,
+        instructions: modelData.instructions ? `${modelData.instructions}\n\n# Budget Reminder\n${adaptiveInstructions}` : adaptiveInstructions,
+      };
+    };
+  }
+
+  private createRunErrorHandlers(governor: RunGovernor): RunErrorHandlers<unknown, Agent<any, any>> {
+    return {
+      maxTurns: () => {
+        const decision = governor.activateMaxTurnsDecision();
+        return {
+          finalOutput: decision.userMessage,
+          includeInHistory: true,
+        };
+      },
+    };
+  }
+
+  private createBudgetItem(turn: TurnRecord, threadId: string, governor: RunGovernor, resumed: boolean): void {
+    this.createItem({
+      turn,
+      threadId,
+      kind: "reasoning",
+      title: resumed ? "Run governance resumed" : "Run governance",
+      body: governor.buildBudgetItemBody(),
+      metadata: governor.buildMetadata(),
+      status: "completed",
+    });
+  }
+
+  private emitGuardrailDiagnostics(turn: TurnRecord, threadId: string, governor: RunGovernor): void {
+    const decision = governor.getDecision();
+
+    if (!decision || governor.hasDiagnosticsEmitted()) {
+      return;
+    }
+
+    this.createItem({
+      turn,
+      threadId,
+      kind: "reasoning",
+      title: "Run guardrail",
+      body: decision.message,
+      metadata: decision.metadata,
+      status: "completed",
+    });
+    governor.markDiagnosticsEmitted();
+  }
+
+  private ensureFinalOutputItem(
+    turn: TurnRecord,
+    threadId: string,
+    stream: StreamedRunResult<any, Agent<any, any>>,
+    tracker: StreamTracker,
+  ): void {
+    if (tracker.hasCompletedMessage) {
+      return;
+    }
+
+    const body = typeof stream.finalOutput === "string" ? stream.finalOutput : undefined;
+
+    if (!body) {
+      return;
+    }
+
+    this.createItem({
+      turn,
+      threadId,
+      kind: "agentMessage",
+      title: "Agent response",
+      body,
+      metadata: {},
+      status: "completed",
+    });
+    tracker.hasCompletedMessage = true;
+  }
+
+  private completeTurnWithGuardrail(
+    turn: TurnRecord,
+    threadId: string,
+    governor: RunGovernor,
+    decision = governor.getDecision(),
+  ): TurnRecord {
+    if (!decision) {
+      return this.completeTurn({
+        ...turn,
+        status: "completed",
+        updatedAt: now(),
+      });
+    }
+
+    this.emitGuardrailDiagnostics(turn, threadId, governor);
+    this.createItem({
+      turn,
+      threadId,
+      kind: "agentMessage",
+      title: "Agent response",
+      body: decision.userMessage,
+      metadata: decision.metadata,
+      status: "completed",
+    });
 
     return this.completeTurn({
       ...turn,
@@ -467,6 +705,7 @@ export class OpenAiCompatibleRunner {
           status: "completed",
         });
         tracker.messageItem = undefined;
+        tracker.hasCompletedMessage = true;
         return;
       }
 
@@ -479,6 +718,7 @@ export class OpenAiCompatibleRunner {
         metadata: { agent: event.item.agent.name },
         status: "completed",
       });
+      tracker.hasCompletedMessage = true;
       return;
     }
 
@@ -583,8 +823,9 @@ export class OpenAiCompatibleRunner {
     toolService: ToolService,
     toolName: string,
     args: unknown,
-    context: { workspace: WorkspaceProfile; turn: TurnRecord; threadId: string; signal?: AbortSignal },
+    context: { workspace: WorkspaceProfile; turn: TurnRecord; threadId: string; signal?: AbortSignal; governor: RunGovernor },
   ): Promise<string> {
+    context.governor.beforeToolCall(toolName, args);
     const plan = toolService.planExecution(toolName, args);
 
     if (toolName === "run_shell") {
@@ -613,6 +854,7 @@ export class OpenAiCompatibleRunner {
         this.completeItem(commandItem, {
           status: "completed",
         });
+        context.governor.noteToolResult();
         return payload;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -643,6 +885,7 @@ export class OpenAiCompatibleRunner {
           },
           status: "completed",
         });
+        context.governor.noteToolResult();
         return payload;
       } catch (error) {
         this.createItem({
@@ -658,11 +901,13 @@ export class OpenAiCompatibleRunner {
       }
     }
 
-    return toolService.executePlanned(plan, {
+    const payload = await toolService.executePlanned(plan, {
       workspace: context.workspace,
       signal: context.signal,
       emitCommandDelta: () => undefined,
     });
+    context.governor.noteToolResult();
+    return payload;
   }
 
   private createApproval(
@@ -801,6 +1046,26 @@ function safePlan(toolService: ToolService, toolName: string, args: Record<strin
   }
 }
 
+function findControlledRunAbort(error: unknown): ControlledRunAbortError | undefined {
+  if (error instanceof ControlledRunAbortError) {
+    return error;
+  }
+
+  if (error instanceof ToolCallError) {
+    return findControlledRunAbort(error.error);
+  }
+
+  if (error instanceof Error && "cause" in error) {
+    return findControlledRunAbort((error as Error & { cause?: unknown }).cause);
+  }
+
+  if (typeof error === "object" && error !== null && "error" in error) {
+    return findControlledRunAbort((error as { error?: unknown }).error);
+  }
+
+  return undefined;
+}
+
 function isAbortError(error: unknown): boolean {
   return (
     error instanceof ToolExecutionAbortedError ||
@@ -811,4 +1076,128 @@ function isAbortError(error: unknown): boolean {
       typeof (error as { name?: unknown }).name === "string" &&
       (error as { name: string }).name === "AbortError")
   );
+}
+
+function buildModelSettings(provider: ProviderProfile) {
+  if (!supportsReasoningEffort(provider.model) || !provider.reasoningEffort) {
+    return {};
+  }
+
+  return {
+    reasoning: {
+      effort: provider.reasoningEffort,
+      summary: "auto" as const,
+    },
+  };
+}
+
+function supportsReasoningEffort(model: string): boolean {
+  const normalized = model.trim().toLowerCase();
+
+  if (!normalized) {
+    return false;
+  }
+
+  return normalized.startsWith("gpt-5") || /^o\d/.test(normalized);
+}
+
+function buildTurnInput(userMessage: string, attachments: TurnInputAttachment[]): AgentInputItem[] | string {
+  if (attachments.length === 0) {
+    return userMessage;
+  }
+
+  const content: Array<Record<string, unknown>> = [];
+
+  if (userMessage.trim()) {
+    content.push({
+      type: "input_text",
+      text: userMessage,
+    });
+  }
+
+  for (const attachment of attachments) {
+    if (attachment.kind === "image" && attachment.imageDataUrl) {
+      content.push({
+        type: "input_text",
+        text: `Attached image: ${attachment.name}${attachment.path ? ` (${attachment.path})` : ""}`,
+      });
+      content.push({
+        type: "input_image",
+        image: attachment.imageDataUrl,
+        detail: "auto",
+        providerData: {
+          filename: attachment.name,
+          path: attachment.path,
+          mediaType: attachment.mediaType,
+        },
+      });
+      continue;
+    }
+
+    if (attachment.kind === "text" && attachment.textContent) {
+      content.push({
+        type: "input_text",
+        text: [
+          `Attached file: ${attachment.name}`,
+          attachment.path ? `Path: ${attachment.path}` : undefined,
+          attachment.mediaType ? `Media type: ${attachment.mediaType}` : undefined,
+          attachment.truncated ? "Note: file content was truncated for inline upload." : undefined,
+          "",
+          attachment.textContent,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      });
+      continue;
+    }
+
+    content.push({
+      type: "input_text",
+      text: [
+        `Attached file: ${attachment.name}`,
+        attachment.path ? `Path: ${attachment.path}` : undefined,
+        attachment.mediaType ? `Media type: ${attachment.mediaType}` : undefined,
+        attachment.sizeBytes ? `Size: ${attachment.sizeBytes} bytes` : undefined,
+        attachment.textContent ?? "Binary attachment metadata only. Treat it as provided context without inline content.",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    });
+  }
+
+  return [
+    {
+      role: "user",
+      content,
+    },
+  ] as AgentInputItem[];
+}
+
+function renderUserInputSummary(userInput: string, attachments: TurnInputAttachment[]): string {
+  const sections: string[] = [];
+
+  if (userInput.trim()) {
+    sections.push(userInput.trim());
+  }
+
+  if (attachments.length > 0) {
+    sections.push(
+      [
+        "[Attachments]",
+        ...attachments.map((attachment) => {
+          const descriptors = [
+            attachment.kind,
+            attachment.mediaType,
+            attachment.truncated ? "truncated" : undefined,
+          ]
+            .filter(Boolean)
+            .join(", ");
+
+          return `- ${attachment.name}${descriptors ? ` (${descriptors})` : ""}`;
+        }),
+      ].join("\n"),
+    );
+  }
+
+  return sections.join("\n\n");
 }

@@ -23,6 +23,7 @@ export class PromptBuilder {
   build(input: BuildPromptInput): BuiltPrompt {
     const sections: string[] = [
       renderPermissions(input.workspace),
+      renderRunCompletionRules(),
       `# User Global Instructions\n${input.globalInstructions}`,
       renderProjectDocuments(input.cwd),
       renderSkillMetadata(input.discoveredSkills),
@@ -47,6 +48,18 @@ function renderPermissions(workspace: WorkspaceProfile): string {
     `Approval policy: ${workspace.approvalPolicy}`,
     `Workspace root: ${workspace.rootPath}`,
     "High-risk operations must respect approval rules and stay inside the selected workspace unless the policy explicitly allows otherwise.",
+  ].join("\n");
+}
+
+function renderRunCompletionRules(): string {
+  return [
+    "# Run Completion Rules",
+    "Work in short, convergent loops.",
+    "If you already have enough information to answer, stop and answer instead of calling another tool.",
+    "Do not repeat the same tool call with materially identical arguments unless something in the workspace changed.",
+    "If a tool fails or returns no new information, change strategy instead of retrying blindly.",
+    "When information is missing, explain the gap and propose the next best step instead of looping.",
+    "Prefer a partial but useful result over exhausting the run budget.",
   ].join("\n");
 }
 

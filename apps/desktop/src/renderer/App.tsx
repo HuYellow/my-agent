@@ -1,31 +1,39 @@
-import { useEffect, useMemo, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
 import {
   MessageSquarePlus,
   Zap,
   Grid3X3,
   GitBranch,
   Settings,
-  Send,
+  ArrowUp,
   Plus,
   Search,
   FolderOpen,
   AlertTriangle,
   CheckCircle,
+  Check,
   XCircle,
+  ChevronDown,
   ChevronRight,
   Minus,
   Square,
   X,
+  ImagePlus,
+  Cpu,
+  FileText,
 } from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
   type ApprovalPolicy,
   type ItemKind,
   type ItemRecord,
+  type ModelReasoningEffort,
   type PendingApproval,
   type ProjectRecord,
+  type ProviderModelRecord,
   type SandboxMode,
   type SkillDescriptor,
+  type TurnInputAttachment,
 } from "@my-agent/protocol";
 import { useAppStore } from "./store";
 
@@ -33,12 +41,22 @@ interface ProviderFormState {
   baseUrl: string;
   apiKey: string;
   model: string;
+  reasoningEffort: ModelReasoningEffort;
   rootPath: string;
   approvalPolicy: ApprovalPolicy;
   sandboxMode: SandboxMode;
 }
 
 type NavView = "threads" | "skills" | "plugins" | "automation" | "settings";
+type ComposerAttachment = TurnInputAttachment;
+
+const REASONING_OPTIONS: Array<{ value: ModelReasoningEffort; label: string; hint: string }> = [
+  { value: "minimal", label: "极低", hint: "更快，更省 token" },
+  { value: "low", label: "低", hint: "轻量分析" },
+  { value: "medium", label: "中", hint: "平衡速度和深度" },
+  { value: "high", label: "高", hint: "适合复杂任务" },
+  { value: "xhigh", label: "极高", hint: "最强推理，最慢" },
+];
 
 const EMPTY_PROMPTS = [
   {
@@ -107,20 +125,31 @@ export function App() {
     pendingApproval,
     config,
     providerTestMessage,
+    providerModels,
+    providerModelsLoading,
+    providerModelsError,
     bootstrap,
     createProject,
     createThread,
     updateProject,
     selectThread,
     sendTurn,
+    interruptTurn,
     respondApproval,
     toggleSkill,
     updateConfig,
     testProvider,
+    refreshProviderModels,
   } = useAppStore();
 
   const [activeView, setActiveView] = useState<NavView>("threads");
   const [input, setInput] = useState("");
+  const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
+  const [composerMenuOpen, setComposerMenuOpen] = useState(false);
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const [reasoningMenuOpen, setReasoningMenuOpen] = useState(false);
+  const [includeIdeContext, setIncludeIdeContext] = useState(true);
+  const [planMode, setPlanMode] = useState(false);
   const [skillDetail, setSkillDetail] = useState<SkillDescriptor | null>(null);
   const [threadSearch, setThreadSearch] = useState("");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -128,10 +157,14 @@ export function App() {
     baseUrl: "",
     apiKey: "",
     model: "",
+    reasoningEffort: "high",
     rootPath: "",
     approvalPolicy: "on-request",
     sandboxMode: "workspace-write",
   });
+  const composerMenuRef = useRef<HTMLDivElement | null>(null);
+  const modelMenuRef = useRef<HTMLDivElement | null>(null);
+  const reasoningMenuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     void bootstrap();
@@ -156,11 +189,33 @@ export function App() {
       baseUrl: config.provider.baseUrl,
       apiKey: config.provider.apiKey,
       model: config.provider.model,
+      reasoningEffort: config.provider.reasoningEffort ?? "high",
       rootPath: selectedProject?.rootPath ?? config.workspace.rootPath,
       approvalPolicy: selectedProject?.approvalPolicy ?? config.workspace.approvalPolicy,
       sandboxMode: selectedProject?.sandboxMode ?? config.workspace.sandboxMode,
     });
   }, [activeProjectId, config, projects]);
+
+  useEffect(() => {
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+
+      if (composerMenuRef.current && !composerMenuRef.current.contains(target)) {
+        setComposerMenuOpen(false);
+      }
+
+      if (modelMenuRef.current && !modelMenuRef.current.contains(target)) {
+        setModelMenuOpen(false);
+      }
+
+      if (reasoningMenuRef.current && !reasoningMenuRef.current.contains(target)) {
+        setReasoningMenuOpen(false);
+      }
+    };
+
+    window.addEventListener("pointerdown", handlePointerDown);
+    return () => window.removeEventListener("pointerdown", handlePointerDown);
+  }, []);
 
   const orderedThreads = useMemo(
     () => [...threads].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
@@ -186,7 +241,31 @@ export function App() {
     () => [...turns].sort((left, right) => left.updatedAt.localeCompare(right.updatedAt)).at(-1),
     [turns],
   );
+  const interruptibleTurnId = useMemo(() => {
+    const candidate = [...turns]
+      .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt))
+      .reverse()
+      .find((turn) => turn.status === "running");
+
+    return candidate?.id;
+  }, [turns]);
+  const canInterrupt = loading && Boolean(interruptibleTurnId);
   const enabledSkills = useMemo(() => skills.filter((skill) => skill.enabled), [skills]);
+  const availableModels = useMemo(() => {
+    const merged = new Map<string, ProviderModelRecord>();
+
+    for (const model of providerModels) {
+      merged.set(model.id, model);
+    }
+
+    const configuredModel = config?.provider.model?.trim();
+
+    if (configuredModel && !merged.has(configuredModel)) {
+      merged.set(configuredModel, { id: configuredModel });
+    }
+
+    return [...merged.values()];
+  }, [config?.provider.model, providerModels]);
 
   const handleCreateThread = async () => {
     await createThread(undefined, activeProjectId);
@@ -222,18 +301,84 @@ export function App() {
     });
   };
 
-  const submitTurn = async () => {
-    const message = input.trim();
+  const handlePickFiles = async () => {
+    const pickedFiles = await window.myAgent.pickFiles();
 
-    if (!message) {
+    if (pickedFiles.length === 0) {
       return;
     }
 
+    setAttachments((current) => {
+      const next = new Map(current.map((attachment) => [attachment.path, attachment]));
+
+      for (const attachment of pickedFiles) {
+        next.set(attachment.path, attachment);
+      }
+
+      return [...next.values()];
+    });
+    setComposerMenuOpen(false);
+  };
+
+  const handleModelSelect = async (modelId: string) => {
+    setModelMenuOpen(false);
+
+    if (!config || config.provider.model === modelId) {
+      return;
+    }
+
+    await updateConfig({
+      provider: {
+        ...config.provider,
+        model: modelId,
+      },
+    });
+  };
+
+  const handleReasoningSelect = async (effort: ModelReasoningEffort) => {
+    setReasoningMenuOpen(false);
+
+    if (!config || config.provider.reasoningEffort === effort) {
+      return;
+    }
+
+    await updateConfig({
+      provider: {
+        ...config.provider,
+        reasoningEffort: effort,
+      },
+    });
+  };
+
+  const submitTurn = async () => {
+    const message = input.trim();
+
+    if (!message && attachments.length === 0) {
+      return;
+    }
+
+    const composedMessage = buildComposerInput({
+      message,
+      attachments,
+      includeIdeContext,
+      planMode,
+      project: activeProject,
+      thread: activeThread,
+      enabledSkills,
+      config,
+    });
+
     setInput("");
-    await sendTurn(message, []);
+    setAttachments([]);
+    setComposerMenuOpen(false);
+    await sendTurn(composedMessage, [], attachments);
   };
 
   const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (loading) {
+      return;
+    }
+
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       void submitTurn();
@@ -397,8 +542,47 @@ export function App() {
               input={input}
               onChange={setInput}
               onSubmit={submitTurn}
+              onInterrupt={() => interruptibleTurnId && void interruptTurn(interruptibleTurnId)}
               onKeyDown={handleComposerKeyDown}
+              attachments={attachments}
+              onAddFiles={() => void handlePickFiles()}
+              onRemoveAttachment={(path) =>
+                setAttachments((current) => current.filter((attachment) => attachment.path !== path))
+              }
+              composerMenuOpen={composerMenuOpen}
+              onToggleComposerMenu={() => {
+                setComposerMenuOpen((current) => !current);
+                setModelMenuOpen(false);
+                setReasoningMenuOpen(false);
+              }}
+              composerMenuRef={composerMenuRef}
+              includeIdeContext={includeIdeContext}
+              onToggleIdeContext={() => setIncludeIdeContext((current) => !current)}
+              planMode={planMode}
+              onTogglePlanMode={() => setPlanMode((current) => !current)}
+              modelMenuOpen={modelMenuOpen}
+              onToggleModelMenu={() => {
+                setModelMenuOpen((current) => !current);
+                setComposerMenuOpen(false);
+                setReasoningMenuOpen(false);
+              }}
+              modelMenuRef={modelMenuRef}
+              availableModels={availableModels}
+              providerModelsLoading={providerModelsLoading}
+              providerModelsError={providerModelsError}
+              selectedModel={config?.provider.model ?? ""}
+              onSelectModel={(modelId) => void handleModelSelect(modelId)}
+              reasoningMenuOpen={reasoningMenuOpen}
+              onToggleReasoningMenu={() => {
+                setReasoningMenuOpen((current) => !current);
+                setComposerMenuOpen(false);
+                setModelMenuOpen(false);
+              }}
+              reasoningMenuRef={reasoningMenuRef}
+              selectedReasoningEffort={config?.provider.reasoningEffort ?? "high"}
+              onSelectReasoningEffort={(effort) => void handleReasoningSelect(effort)}
               loading={loading}
+              canInterrupt={canInterrupt}
             />
           </>
         ) : activeView === "skills" ? (
@@ -417,7 +601,10 @@ export function App() {
             providerForm={providerForm}
             setProviderForm={setProviderForm}
             providerTestMessage={providerTestMessage}
+            providerModels={availableModels}
+            providerModelsLoading={providerModelsLoading}
             onTestProvider={testProvider}
+            onRefreshProviderModels={refreshProviderModels}
             onSaveConfig={() =>
               void Promise.all([
                 updateConfig({
@@ -425,11 +612,12 @@ export function App() {
                     ...(config?.provider ?? {
                       id: "default-provider",
                       name: "Default Provider",
-                      apiFlavor: "chat_completions",
+                      apiFlavor: "responses",
                     }),
                     baseUrl: providerForm.baseUrl,
                     apiKey: providerForm.apiKey,
                     model: providerForm.model,
+                    reasoningEffort: providerForm.reasoningEffort,
                   },
                 }),
                 activeProject
@@ -712,7 +900,10 @@ function SettingsPanel({
   providerForm,
   setProviderForm,
   providerTestMessage,
+  providerModels,
+  providerModelsLoading,
   onTestProvider,
+  onRefreshProviderModels,
   onSaveConfig,
   onPickWorkspace,
 }: {
@@ -720,7 +911,10 @@ function SettingsPanel({
   providerForm: ProviderFormState;
   setProviderForm: React.Dispatch<React.SetStateAction<ProviderFormState>>;
   providerTestMessage?: string;
+  providerModels: ProviderModelRecord[];
+  providerModelsLoading: boolean;
   onTestProvider: () => Promise<void>;
+  onRefreshProviderModels: () => Promise<void>;
   onSaveConfig: () => void;
   onPickWorkspace: () => Promise<void>;
 }) {
@@ -743,11 +937,40 @@ function SettingsPanel({
           </label>
           <label className="settings-field">
             <span>Model</span>
-            <input
-              value={providerForm.model}
-              onChange={(e) => setProviderForm((s) => ({ ...s, model: e.target.value }))}
-              placeholder="gpt-4"
-            />
+            {providerModels.length > 0 ? (
+              <select
+                value={providerForm.model}
+                onChange={(e) => setProviderForm((s) => ({ ...s, model: e.target.value }))}
+              >
+                {!providerForm.model && <option value="">Select a model</option>}
+                {providerModels.map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {model.id}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                value={providerForm.model}
+                onChange={(e) => setProviderForm((s) => ({ ...s, model: e.target.value }))}
+                placeholder="gpt-5.4"
+              />
+            )}
+          </label>
+          <label className="settings-field">
+            <span>Reasoning Effort</span>
+            <select
+              value={providerForm.reasoningEffort}
+              onChange={(e) =>
+                setProviderForm((s) => ({ ...s, reasoningEffort: e.target.value as ModelReasoningEffort }))
+              }
+            >
+              {REASONING_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
           </label>
           <label className="settings-field">
             <span>API Key</span>
@@ -804,6 +1027,9 @@ function SettingsPanel({
         </div>
 
         <div className="settings-panel__actions">
+          <button className="button" onClick={() => void onRefreshProviderModels()}>
+            {providerModelsLoading ? "Loading Models..." : "Refresh Models"}
+          </button>
           <button className="button" onClick={() => void onTestProvider()}>
             Test Provider
           </button>
@@ -855,6 +1081,24 @@ function EmptyState({ onStartConversation }: { onStartConversation: () => void }
 
 function ConversationFeed({ entries }: { entries: ConversationEntry[] }) {
   const [expandedThoughts, setExpandedThoughts] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    setExpandedThoughts((current) => {
+      let changed = false;
+      const next = { ...current };
+
+      for (const entry of entries) {
+        if (entry.kind !== "thought" || entry.id in next) {
+          continue;
+        }
+
+        next[entry.id] = !entry.completed;
+        changed = true;
+      }
+
+      return changed ? next : current;
+    });
+  }, [entries]);
 
   return (
     <div className="conversation-feed">
@@ -974,33 +1218,249 @@ function ComposerBar({
   input,
   onChange,
   onSubmit,
+  onInterrupt,
   onKeyDown,
+  attachments,
+  onAddFiles,
+  onRemoveAttachment,
+  composerMenuOpen,
+  onToggleComposerMenu,
+  composerMenuRef,
+  includeIdeContext,
+  onToggleIdeContext,
+  planMode,
+  onTogglePlanMode,
+  modelMenuOpen,
+  onToggleModelMenu,
+  modelMenuRef,
+  availableModels,
+  providerModelsLoading,
+  providerModelsError,
+  selectedModel,
+  onSelectModel,
+  reasoningMenuOpen,
+  onToggleReasoningMenu,
+  reasoningMenuRef,
+  selectedReasoningEffort,
+  onSelectReasoningEffort,
   loading,
+  canInterrupt,
 }: {
   input: string;
   onChange: (value: string) => void;
   onSubmit: () => Promise<void>;
+  onInterrupt: () => void;
   onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
+  attachments: ComposerAttachment[];
+  onAddFiles: () => void;
+  onRemoveAttachment: (path: string) => void;
+  composerMenuOpen: boolean;
+  onToggleComposerMenu: () => void;
+  composerMenuRef: React.RefObject<HTMLDivElement | null>;
+  includeIdeContext: boolean;
+  onToggleIdeContext: () => void;
+  planMode: boolean;
+  onTogglePlanMode: () => void;
+  modelMenuOpen: boolean;
+  onToggleModelMenu: () => void;
+  modelMenuRef: React.RefObject<HTMLDivElement | null>;
+  availableModels: ProviderModelRecord[];
+  providerModelsLoading: boolean;
+  providerModelsError?: string;
+  selectedModel: string;
+  onSelectModel: (modelId: string) => void;
+  reasoningMenuOpen: boolean;
+  onToggleReasoningMenu: () => void;
+  reasoningMenuRef: React.RefObject<HTMLDivElement | null>;
+  selectedReasoningEffort: ModelReasoningEffort;
+  onSelectReasoningEffort: (effort: ModelReasoningEffort) => void;
   loading: boolean;
+  canInterrupt: boolean;
 }) {
+  const isSendDisabled = loading || (!input.trim() && attachments.length === 0);
+  const selectedReasoning = REASONING_OPTIONS.find((option) => option.value === selectedReasoningEffort) ?? REASONING_OPTIONS[3]!;
+
   return (
     <div className="composer-bar">
-      <div className="composer-bar__input-wrapper">
-        <textarea
-          className="composer-input"
-          placeholder="Type a message..."
-          value={input}
-          onChange={(e) => onChange(e.target.value)}
-          onKeyDown={onKeyDown}
-          rows={1}
-        />
-        <button
-          className="composer-bar__send"
-          onClick={() => void onSubmit()}
-          disabled={loading || !input.trim()}
-        >
-          <Send size={18} />
-        </button>
+      <div className="composer-shell">
+        {attachments.length > 0 && (
+          <div className="composer-attachments">
+            {attachments.map((attachment) => (
+              <div key={attachment.path} className="composer-attachment">
+                <span className="composer-attachment__icon" aria-hidden="true">
+                  {attachment.kind === "image" ? <ImagePlus size={14} /> : <FileText size={14} />}
+                </span>
+                <span className="composer-attachment__name" title={attachment.path}>
+                  {attachment.name}
+                </span>
+                <button
+                  className="composer-attachment__remove"
+                  onClick={() => onRemoveAttachment(attachment.path)}
+                  aria-label={`Remove ${attachment.name}`}
+                  title={`Remove ${attachment.name}`}
+                  disabled={loading}
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="composer-main">
+          <textarea
+            className="composer-input"
+            placeholder="给 my-agent 发消息"
+            value={input}
+            onChange={(e) => onChange(e.target.value)}
+            onKeyDown={onKeyDown}
+            rows={1}
+            disabled={canInterrupt}
+          />
+        </div>
+
+        <div className="composer-toolbar">
+          <div className="composer-toolbar__left">
+            <div className="composer-popover-anchor" ref={composerMenuRef}>
+              <button
+                className="composer-tool-button composer-tool-button--icon"
+                onClick={onToggleComposerMenu}
+                aria-label="打开附加功能"
+                title="打开附加功能"
+                disabled={loading}
+              >
+                <Plus size={16} />
+              </button>
+
+              {composerMenuOpen && (
+                <div className="composer-popover composer-popover--menu">
+                  <button className="composer-popover__action" onClick={onAddFiles}>
+                    <span className="composer-popover__icon">
+                      <ImagePlus size={16} />
+                    </span>
+                    <span className="composer-popover__copy">
+                      <strong>添加照片和文件</strong>
+                      <small>支持图片、文档和代码文件</small>
+                    </span>
+                  </button>
+
+                  <button className="composer-popover__toggle-row" onClick={onToggleIdeContext}>
+                    <span className="composer-popover__icon">
+                      <Cpu size={16} />
+                    </span>
+                    <span className="composer-popover__copy">
+                      <strong>包含 IDE 背景信息</strong>
+                      <small>附带项目、线程和技能上下文</small>
+                    </span>
+                    <span className={`composer-switch ${includeIdeContext ? "composer-switch--on" : ""}`}>
+                      <span className="composer-switch__thumb" />
+                    </span>
+                  </button>
+
+                  <button className="composer-popover__toggle-row" onClick={onTogglePlanMode}>
+                    <span className="composer-popover__icon">
+                      <CheckCircle size={16} />
+                    </span>
+                    <span className="composer-popover__copy">
+                      <strong>计划模式</strong>
+                      <small>先规划，再决定是否执行修改</small>
+                    </span>
+                    <span className={`composer-switch ${planMode ? "composer-switch--on" : ""}`}>
+                      <span className="composer-switch__thumb" />
+                    </span>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div className="composer-popover-anchor" ref={modelMenuRef}>
+              <button
+                className="composer-tool-button composer-tool-button--select"
+                onClick={onToggleModelMenu}
+                disabled={loading}
+              >
+                <span className="composer-tool-button__label">{selectedModel || "选择模型"}</span>
+                <ChevronDown size={14} />
+              </button>
+
+              {modelMenuOpen && (
+                <div className="composer-popover composer-popover--select">
+                  <div className="composer-popover__header">
+                    <span>模型</span>
+                    {providerModelsLoading && <small>加载中...</small>}
+                  </div>
+
+                  {availableModels.length > 0 ? (
+                    <div className="composer-option-list">
+                      {availableModels.map((model) => (
+                        <button
+                          key={model.id}
+                          className={`composer-option ${model.id === selectedModel ? "composer-option--active" : ""}`}
+                          onClick={() => onSelectModel(model.id)}
+                        >
+                          <span>{model.id}</span>
+                          {model.id === selectedModel && <Check size={14} />}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="composer-popover__empty">
+                      {providerModelsError ? providerModelsError : "当前 provider 还没有返回模型列表"}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="composer-popover-anchor" ref={reasoningMenuRef}>
+              <button
+                className="composer-tool-button composer-tool-button--select"
+                onClick={onToggleReasoningMenu}
+                disabled={loading}
+              >
+                <span className="composer-tool-button__label">推理 {selectedReasoning.label}</span>
+                <ChevronDown size={14} />
+              </button>
+
+              {reasoningMenuOpen && (
+                <div className="composer-popover composer-popover--select">
+                  <div className="composer-popover__header">
+                    <span>推理强度</span>
+                    <small>仅对支持的模型生效</small>
+                  </div>
+                  <div className="composer-option-list">
+                    {REASONING_OPTIONS.map((option) => (
+                      <button
+                        key={option.value}
+                        className={`composer-option ${option.value === selectedReasoningEffort ? "composer-option--active" : ""}`}
+                        onClick={() => onSelectReasoningEffort(option.value)}
+                      >
+                        <span className="composer-option__body">
+                          <strong>{option.label}</strong>
+                          <small>{option.hint}</small>
+                        </span>
+                        {option.value === selectedReasoningEffort && <Check size={14} />}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {includeIdeContext && <span className="composer-pill">IDE 背景</span>}
+            {planMode && <span className="composer-pill composer-pill--accent">计划模式</span>}
+          </div>
+
+          <button
+            className={`composer-bar__submit ${canInterrupt ? "composer-bar__submit--interrupt" : ""}`}
+            onClick={canInterrupt ? onInterrupt : () => void onSubmit()}
+            disabled={canInterrupt ? false : isSendDisabled}
+            aria-label={canInterrupt ? "Interrupt run" : "Send message"}
+            title={canInterrupt ? "Interrupt run" : "Send message"}
+          >
+            {canInterrupt ? <span className="composer-bar__stop-icon" aria-hidden="true" /> : <ArrowUp size={18} />}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -1135,4 +1595,65 @@ function formatRelativeTime(value: string) {
   }
 
   return `${Math.floor(deltaDays / 365)}y`;
+}
+
+function buildComposerInput(params: {
+  message: string;
+  attachments: ComposerAttachment[];
+  includeIdeContext: boolean;
+  planMode: boolean;
+  project?: ProjectRecord;
+  thread?: import("@my-agent/protocol").ThreadRecord;
+  enabledSkills: SkillDescriptor[];
+  config?: import("@my-agent/protocol").AppConfig;
+}) {
+  const sections: string[] = [];
+
+  if (params.planMode) {
+    sections.push(
+      [
+        "[Plan mode]",
+        "Plan mode is enabled for this turn.",
+        "Do not make changes yet unless I explicitly ask you to execute after the plan.",
+        "First provide a concise implementation plan, key risks, and the smallest safe next step.",
+      ].join("\n"),
+    );
+  }
+
+  if (params.message) {
+    sections.push(params.message);
+  }
+
+  if (params.attachments.length > 0) {
+    sections.push(
+      [
+        "[Attached files]",
+        ...params.attachments.map((attachment) => `- ${attachment.name} (${attachment.kind}): ${attachment.path}`),
+      ].join("\n"),
+    );
+  }
+
+  if (params.includeIdeContext) {
+    sections.push(
+      [
+        "[IDE context]",
+        `Project: ${params.project?.name ?? "Unknown"}`,
+        `Workspace root: ${params.project?.rootPath ?? params.config?.workspace.rootPath ?? "Unknown"}`,
+        `Thread: ${params.thread?.title ?? "New Thread"}`,
+        `Model: ${params.config?.provider.model ?? "Not selected"}`,
+        `Reasoning effort: ${params.config?.provider.reasoningEffort ?? "high"}`,
+        `Enabled skills: ${params.enabledSkills.length > 0 ? params.enabledSkills.map((skill) => skill.metadata.displayName ?? skill.name).join(", ") : "None"}`,
+      ].join("\n"),
+    );
+  }
+
+  return sections.join("\n\n");
+}
+
+function getFileName(path: string) {
+  return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
+}
+
+function isImagePath(path: string) {
+  return /\.(png|jpg|jpeg|gif|webp|bmp|svg)$/i.test(path);
 }

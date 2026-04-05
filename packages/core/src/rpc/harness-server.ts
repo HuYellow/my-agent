@@ -13,6 +13,7 @@ import {
   type ProjectRecord,
   type JsonRpcResponse,
   type ProviderTestResult,
+  type ProviderModelsResult,
   type ReadFileParams,
   type ResumeThreadParams,
   type ResumeThreadResult,
@@ -21,6 +22,7 @@ import {
   type StartTurnParams,
   type StartTurnResult,
   type ThreadRecord,
+  type TurnInputAttachment,
   type TurnRecord,
   type UpdateProjectParams,
   type WritePatchParams,
@@ -28,6 +30,7 @@ import {
 import { existsSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { OpenAiCompatibleRunner } from "../agents/openai-compatible-runner.js";
+import { syncExternalCodexProvider, watchExternalCodexConfig } from "../services/codex-config.js";
 import { PromptBuilder } from "../services/prompt-builder.js";
 import { ProviderService } from "../services/provider-service.js";
 import { SkillService } from "../services/skill-service.js";
@@ -39,6 +42,7 @@ export class HarnessServer {
   private readonly providerService = new ProviderService();
   private skills: ReturnType<SkillService["listSkills"]>;
   private readonly runner: OpenAiCompatibleRunner;
+  private readonly stopWatchingExternalConfig: () => void;
 
   constructor(
     private readonly database: HarnessDatabase,
@@ -51,6 +55,19 @@ export class HarnessServer {
     this.skills = this.skillService.listSkills(activeProject.rootPath, config.disabledSkillIds);
     this.runner = new OpenAiCompatibleRunner(this.database, this.promptBuilder, (event) => this.emit(event));
     this.skillService.startWatching(activeProject.rootPath, config.disabledSkillIds);
+    this.stopWatchingExternalConfig = watchExternalCodexConfig(() => {
+      this.emit({
+        type: "config/changed",
+        payload: {
+          config: this.database.getConfig(),
+        },
+      });
+    });
+  }
+
+  dispose(): void {
+    this.stopWatchingExternalConfig();
+    this.skillService.dispose();
   }
 
   async handle(message: JsonRpcRequest): Promise<JsonRpcResponse> {
@@ -109,6 +126,8 @@ export class HarnessServer {
         return this.writeSkillConfig((message.params ?? {}) as { disabledSkillIds: string[] });
       case "provider/test":
         return this.providerTest();
+      case "provider/models":
+        return this.providerModels();
       case "config/read":
         return { config: this.database.getConfig() };
       case "config/write":
@@ -316,6 +335,7 @@ export class HarnessServer {
       discoveredSkills,
       selectedSkills,
       userInput: params.input,
+      userAttachments: params.attachments ?? [],
       globalInstructions: config.globalInstructions,
     });
 
@@ -472,6 +492,12 @@ export class HarnessServer {
     return this.providerService.test(this.database.getConfig().provider);
   }
 
+  private async providerModels(): Promise<ProviderModelsResult> {
+    return {
+      models: await this.providerService.listModels(this.database.getConfig().provider),
+    };
+  }
+
   private writeConfig(params: ConfigWriteParams): { config: AppConfig } {
     const current = this.database.getConfig();
     const next: AppConfig = {
@@ -489,7 +515,18 @@ export class HarnessServer {
     };
 
     const stored = this.database.writeConfig(next);
+
+    if (params.config.provider) {
+      syncExternalCodexProvider(stored.provider);
+    }
+
     const synced = this.syncProjectSelection(stored);
+    this.emit({
+      type: "config/changed",
+      payload: {
+        config: synced,
+      },
+    });
     this.refreshSkills(synced.selectedProjectId);
     return { config: synced };
   }

@@ -37,6 +37,7 @@ export type JsonRpcMessage = JsonRpcRequest | JsonRpcResponse | JsonRpcNotificat
 export type SandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 export type ApprovalPolicy = "on-request" | "on-failure" | "never";
 export type ApiFlavor = "chat_completions" | "responses" | "ai_sdk";
+export type ModelReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
 export type SkillScope = "SYSTEM" | "USER" | "REPO" | "ADMIN";
 export type ItemKind =
   | "userMessage"
@@ -57,6 +58,13 @@ export interface ProviderProfile {
   apiKey: string;
   model: string;
   apiFlavor: ApiFlavor;
+  reasoningEffort?: ModelReasoningEffort;
+}
+
+export interface ProviderModelRecord {
+  id: string;
+  created?: number;
+  ownedBy?: string;
 }
 
 export interface WorkspaceProfile {
@@ -194,6 +202,7 @@ export interface ForkThreadResult {
 export interface StartTurnParams {
   threadId: string;
   input: string;
+  attachments?: TurnInputAttachment[];
   selectedSkillIds?: string[];
 }
 
@@ -227,6 +236,21 @@ export interface ProviderTestResult {
   ok: boolean;
   status: number;
   message: string;
+}
+
+export interface ProviderModelsResult {
+  models: ProviderModelRecord[];
+}
+
+export interface TurnInputAttachment {
+  path: string;
+  name: string;
+  kind: "image" | "text" | "binary";
+  mediaType?: string;
+  sizeBytes?: number;
+  imageDataUrl?: string;
+  textContent?: string;
+  truncated?: boolean;
 }
 
 export interface CreateProjectParams {
@@ -274,6 +298,7 @@ export type HarnessEvent =
   | EventEnvelope<"turn/completed", { turn: TurnRecord }>
   | EventEnvelope<"turn/cancelled", { turn: TurnRecord; message: string }>
   | EventEnvelope<"turn/failed", { turn: TurnRecord; message: string }>
+  | EventEnvelope<"config/changed", { config: AppConfig }>
   | EventEnvelope<"skills/changed", { skills: SkillDescriptor[] }>;
 
 export interface CommandExecParams {

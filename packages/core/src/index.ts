@@ -51,6 +51,10 @@ reader.on("line", async (line) => {
   }
 });
 
+process.on("exit", () => {
+  server.dispose();
+});
+
 function writeJson(message: JsonRpcMessage): void {
   process.stdout.write(`${JSON.stringify(message)}\n`);
 }

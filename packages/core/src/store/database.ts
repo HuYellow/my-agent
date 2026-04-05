@@ -11,6 +11,7 @@ import {
   type TurnRecord,
   type WorkspaceProfile,
 } from "@my-agent/protocol";
+import { mergeExternalCodexProvider } from "../services/codex-config.js";
 
 const DEFAULT_PROVIDER = {
   id: "default-provider",
@@ -18,7 +19,8 @@ const DEFAULT_PROVIDER = {
   baseUrl: "",
   apiKey: "",
   model: "",
-  apiFlavor: "chat_completions" as const,
+  apiFlavor: "responses" as const,
+  reasoningEffort: "high" as const,
 };
 
 const DEFAULT_WORKSPACE: WorkspaceProfile = {
@@ -130,11 +132,11 @@ export class HarnessDatabase {
     if (!row?.value) {
       const defaults = this.getDefaultConfig();
       this.writeConfig(defaults);
-      return defaults;
+      return mergeExternalCodexProvider(defaults);
     }
 
     const parsed = JSON.parse(row.value) as AppConfig;
-    return {
+    return mergeExternalCodexProvider({
       ...this.getDefaultConfig(),
       ...parsed,
       selectedProjectId: parsed.selectedProjectId ?? parsed.selectedWorkspaceId,
@@ -147,7 +149,7 @@ export class HarnessDatabase {
         ...parsed.workspace,
       },
       disabledSkillIds: parsed.disabledSkillIds ?? [],
-    };
+    });
   }
 
   writeConfig(config: AppConfig): AppConfig {

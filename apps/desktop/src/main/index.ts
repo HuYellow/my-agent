@@ -1,20 +1,23 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, type MenuItemConstructorOptions } from "electron";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, promises as fs } from "node:fs";
+import { basename, extname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
+import { PDFParse } from "pdf-parse";
 import {
   type ApprovalResponseParams,
   type ConfigWriteParams,
   type CreateProjectParams,
   type HarnessEvent,
+  type InterruptTurnParams,
   type JsonRpcMessage,
   type JsonRpcNotification,
   type JsonRpcRequest,
   type JsonRpcResponse,
   type StartThreadParams,
   type StartTurnParams,
+  type TurnInputAttachment,
   type UpdateProjectParams,
 } from "@my-agent/protocol";
 
@@ -190,12 +193,14 @@ function registerIpc(): void {
   ipcMain.handle("thread:start", (_event, params: StartThreadParams) => harness.request("thread/start", params));
   ipcMain.handle("thread:resume", (_event, params: { threadId: string }) => harness.request("thread/resume", params));
   ipcMain.handle("turn:start", (_event, params: StartTurnParams) => harness.request("turn/start", params));
+  ipcMain.handle("turn:interrupt", (_event, params: InterruptTurnParams) => harness.request("turn/interrupt", params));
   ipcMain.handle("approval:respond", (_event, params: ApprovalResponseParams) => harness.request("approval/respond", params));
   ipcMain.handle("skills:list", () => harness.request("skills/list"));
   ipcMain.handle("skills:config:write", (_event, params: { disabledSkillIds: string[] }) => harness.request("skills/config/write", params));
   ipcMain.handle("config:read", () => harness.request("config/read"));
   ipcMain.handle("config:write", (_event, params: ConfigWriteParams) => harness.request("config/write", params));
   ipcMain.handle("provider:test", () => harness.request("provider/test"));
+  ipcMain.handle("provider:models", () => harness.request("provider/models"));
   ipcMain.handle("window:set-titlebar-theme", (_event, theme: TitleBarTheme) => {
     // 不再动态设置标题栏覆盖层，因为使用 frameless 窗口
   });
@@ -242,6 +247,24 @@ function registerIpc(): void {
     });
 
     return result.filePaths[0] ?? null;
+  });
+  ipcMain.handle("files:pick", async () => {
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      properties: ["openFile", "multiSelections"],
+      filters: [
+        {
+          name: "Supported files",
+          extensions: ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "pdf", "txt", "md", "json", "csv", "ts", "tsx", "js", "jsx", "py", "java", "go", "rs", "css", "html"],
+        },
+        {
+          name: "All files",
+          extensions: ["*"],
+        },
+      ],
+    });
+
+    const prepared = await Promise.all(result.filePaths.map((filePath) => prepareAttachment(filePath)));
+    return prepared.filter((entry): entry is TurnInputAttachment => Boolean(entry));
   });
 }
 
@@ -376,4 +399,187 @@ function getAppMenuSections(): Array<{ id: AppMenuId; label: string; submenu: Me
       ],
     },
   ];
+}
+
+const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"]);
+const TEXT_EXTENSIONS = new Set([
+  ".txt",
+  ".md",
+  ".json",
+  ".jsonl",
+  ".csv",
+  ".ts",
+  ".tsx",
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".cjs",
+  ".py",
+  ".java",
+  ".go",
+  ".rs",
+  ".css",
+  ".scss",
+  ".html",
+  ".htm",
+  ".xml",
+  ".yml",
+  ".yaml",
+  ".toml",
+  ".ini",
+  ".sh",
+  ".ps1",
+  ".sql",
+  ".log",
+]);
+const MAX_TEXT_ATTACHMENT_BYTES = 160_000;
+const MAX_IMAGE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+const MAX_PDF_PAGES = 40;
+const MAX_PDF_TEXT_BYTES = 220_000;
+
+async function prepareAttachment(filePath: string): Promise<TurnInputAttachment | null> {
+  const stats = await fs.stat(filePath);
+  const extension = extname(filePath).toLowerCase();
+  const name = basename(filePath);
+  const mediaType = detectMediaType(extension);
+
+  if (IMAGE_EXTENSIONS.has(extension)) {
+    if (stats.size > MAX_IMAGE_ATTACHMENT_BYTES) {
+      return {
+        path: filePath,
+        name,
+        kind: "binary",
+        mediaType,
+        sizeBytes: stats.size,
+        textContent: `Image "${name}" was selected but exceeds the ${Math.round(MAX_IMAGE_ATTACHMENT_BYTES / (1024 * 1024))} MB inline limit.`,
+      };
+    }
+
+    const buffer = await fs.readFile(filePath);
+    return {
+      path: filePath,
+      name,
+      kind: "image",
+      mediaType,
+      sizeBytes: stats.size,
+      imageDataUrl: `data:${mediaType};base64,${buffer.toString("base64")}`,
+    };
+  }
+
+  if (TEXT_EXTENSIONS.has(extension)) {
+    const buffer = await fs.readFile(filePath);
+    const truncated = buffer.byteLength > MAX_TEXT_ATTACHMENT_BYTES;
+    const textContent = buffer.subarray(0, MAX_TEXT_ATTACHMENT_BYTES).toString("utf8");
+
+    return {
+      path: filePath,
+      name,
+      kind: "text",
+      mediaType,
+      sizeBytes: stats.size,
+      textContent,
+      truncated,
+    };
+  }
+
+  if (extension === ".pdf") {
+    return preparePdfAttachment(filePath, stats.size);
+  }
+
+  return {
+    path: filePath,
+    name,
+    kind: "binary",
+    mediaType,
+    sizeBytes: stats.size,
+    textContent: `Binary file "${name}" (${mediaType}, ${formatBytes(stats.size)}) is attached. Inline preview is unavailable.`,
+  };
+}
+
+function detectMediaType(extension: string): string {
+  switch (extension) {
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".gif":
+      return "image/gif";
+    case ".webp":
+      return "image/webp";
+    case ".bmp":
+      return "image/bmp";
+    case ".svg":
+      return "image/svg+xml";
+    case ".md":
+      return "text/markdown";
+    case ".html":
+    case ".htm":
+      return "text/html";
+    case ".css":
+      return "text/css";
+    case ".json":
+      return "application/json";
+    case ".csv":
+      return "text/csv";
+    case ".pdf":
+      return "application/pdf";
+    default:
+      return TEXT_EXTENSIONS.has(extension) ? "text/plain" : "application/octet-stream";
+  }
+}
+
+function formatBytes(sizeBytes: number): string {
+  if (sizeBytes < 1024) {
+    return `${sizeBytes} B`;
+  }
+
+  if (sizeBytes < 1024 * 1024) {
+    return `${(sizeBytes / 1024).toFixed(1)} KB`;
+  }
+
+  return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+async function preparePdfAttachment(filePath: string, sizeBytes: number): Promise<TurnInputAttachment> {
+  try {
+    const buffer = await fs.readFile(filePath);
+    const parser = new PDFParse({ data: new Uint8Array(buffer) });
+
+    try {
+      const result = await parser.getText({ first: MAX_PDF_PAGES });
+      const fullText = result.text.trim();
+      const truncatedByBytes = Buffer.byteLength(fullText, "utf8") > MAX_PDF_TEXT_BYTES;
+      const textContent = truncatedByBytes
+        ? Buffer.from(fullText, "utf8").subarray(0, MAX_PDF_TEXT_BYTES).toString("utf8")
+        : fullText;
+      const truncatedByPages = result.total > MAX_PDF_PAGES;
+
+      return {
+        path: filePath,
+        name: basename(filePath),
+        kind: "text",
+        mediaType: "application/pdf",
+        sizeBytes,
+        textContent: [
+          `[PDF extracted text]`,
+          `Pages parsed: ${Math.min(result.total, MAX_PDF_PAGES)}${truncatedByPages ? ` of ${result.total}` : ` of ${result.total}`}`,
+          "",
+          textContent || "No extractable text was found in this PDF.",
+        ].join("\n"),
+        truncated: truncatedByPages || truncatedByBytes,
+      };
+    } finally {
+      await parser.destroy();
+    }
+  } catch (error) {
+    return {
+      path: filePath,
+      name: basename(filePath),
+      kind: "binary",
+      mediaType: "application/pdf",
+      sizeBytes,
+      textContent: `PDF "${basename(filePath)}" was attached, but text extraction failed: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
 }
