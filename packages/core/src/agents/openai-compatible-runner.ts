@@ -16,6 +16,7 @@ import {
   type RunStreamEvent,
   type StreamedRunResult,
 } from "@openai/agents";
+import OpenAI from "openai";
 import {
   type ApprovalResponseParams,
   type HarnessEvent,
@@ -35,6 +36,7 @@ import {
   type RunGuardrailDecision,
   type RunGovernorSnapshot,
 } from "./run-governor.js";
+import { createLoggedFetch } from "../services/llm-request-logger.js";
 import { PromptBuilder } from "../services/prompt-builder.js";
 import { normalizeProviderBaseUrl } from "../services/provider-url.js";
 import { RuntimeManager } from "../services/runtime-manager.js";
@@ -366,9 +368,19 @@ export class OpenAiCompatibleRunner {
   }
 
   private createRunner(provider: ProviderProfile, threadId: string): Runner {
-    const modelProvider = new OpenAIProvider({
+    const normalizedBaseUrl = normalizeProviderBaseUrl(provider.baseUrl);
+    const openAIClient = new OpenAI({
       apiKey: provider.apiKey,
-      baseURL: normalizeProviderBaseUrl(provider.baseUrl),
+      baseURL: normalizedBaseUrl,
+      fetch: createLoggedFetch({
+        source: "agent-runner",
+        purpose: "agent_model_request",
+        provider,
+        threadId,
+      }),
+    });
+    const modelProvider = new OpenAIProvider({
+      openAIClient,
       useResponses: provider.apiFlavor === "responses",
     });
 

@@ -1,5 +1,6 @@
 import { type ProviderModelRecord, type ProviderProfile } from "@my-agent/protocol";
 import { buildLlmEndpointUrl, buildModelsUrl } from "./provider-url.js";
+import { appendLlmRequestLog, buildProviderMetadata, summarizeResponseBody } from "./llm-request-logger.js";
 
 export interface ChatCompletionTool {
   type: "function";
@@ -55,12 +56,40 @@ export class ProviderService {
       return { ok: false, status: 0, message: "Provider baseUrl is empty." };
     }
 
-    const response = await fetch(buildModelsUrl(provider.baseUrl), {
-      method: "GET",
-      headers: this.headers(provider),
-    });
+    const url = buildModelsUrl(provider.baseUrl);
+    const startedAt = Date.now();
+    let response: Response;
+
+    try {
+      response = await fetch(url, {
+        method: "GET",
+        headers: this.headers(provider),
+      });
+    } catch (error) {
+      appendLlmRequestLog({
+        ...buildProviderMetadata(provider),
+        source: "provider-service",
+        purpose: "provider_test",
+        method: "GET",
+        url,
+        durationMs: Date.now() - startedAt,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
 
     const contentType = response.headers.get("content-type") ?? "";
+    appendLlmRequestLog({
+      ...buildProviderMetadata(provider),
+      source: "provider-service",
+      purpose: "provider_test",
+      method: "GET",
+      url,
+      status: response.status,
+      ok: response.ok,
+      durationMs: Date.now() - startedAt,
+      contentType,
+    });
 
     if (response.ok && contentType.includes("text/html")) {
       return {
@@ -83,34 +112,75 @@ export class ProviderService {
     tools: ChatCompletionTool[];
     abortSignal?: AbortSignal;
   }): Promise<ChatMessage> {
-    const response = await fetch(buildLlmEndpointUrl(params.provider.baseUrl, params.provider.apiFlavor), {
-      method: "POST",
-      signal: params.abortSignal,
-      headers: {
-        ...this.headers(params.provider),
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: params.provider.model,
-        ...(params.provider.apiFlavor === "responses"
-          ? {
-              input: params.messages,
-              tools: params.tools,
-              temperature: 0.2,
-            }
-          : {
-              messages: params.messages,
-              tools: params.tools,
-              tool_choice: "auto",
-              temperature: 0.2,
-            }),
-      }),
-    });
+    const url = buildLlmEndpointUrl(params.provider.baseUrl, params.provider.apiFlavor);
+    const startedAt = Date.now();
+    let response: Response;
+
+    try {
+      response = await fetch(url, {
+        method: "POST",
+        signal: params.abortSignal,
+        headers: {
+          ...this.headers(params.provider),
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: params.provider.model,
+          ...(params.provider.apiFlavor === "responses"
+            ? {
+                input: params.messages,
+                tools: params.tools,
+                temperature: 0.2,
+              }
+            : {
+                messages: params.messages,
+                tools: params.tools,
+                tool_choice: "auto",
+                temperature: 0.2,
+              }),
+        }),
+      });
+    } catch (error) {
+      appendLlmRequestLog({
+        ...buildProviderMetadata(params.provider),
+        source: "provider-service",
+        purpose: "provider_complete",
+        method: "POST",
+        url,
+        durationMs: Date.now() - startedAt,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
 
     if (!response.ok) {
       const body = await response.text();
+      appendLlmRequestLog({
+        ...buildProviderMetadata(params.provider),
+        source: "provider-service",
+        purpose: "provider_complete",
+        method: "POST",
+        url,
+        status: response.status,
+        ok: false,
+        durationMs: Date.now() - startedAt,
+        contentType: response.headers.get("content-type"),
+        responsePreview: summarizeResponseBody(body),
+      });
       throw new Error(formatProviderError(response.status, response.headers.get("content-type"), body, "request"));
     }
+
+    appendLlmRequestLog({
+      ...buildProviderMetadata(params.provider),
+      source: "provider-service",
+      purpose: "provider_complete",
+      method: "POST",
+      url,
+      status: response.status,
+      ok: true,
+      durationMs: Date.now() - startedAt,
+      contentType: response.headers.get("content-type"),
+    });
 
     const payload = (await response.json()) as ChatCompletionResponse;
 
@@ -150,17 +220,57 @@ export class ProviderService {
       return [];
     }
 
-    const response = await fetch(buildModelsUrl(provider.baseUrl), {
-      method: "GET",
-      headers: this.headers(provider),
-    });
+    const url = buildModelsUrl(provider.baseUrl);
+    const startedAt = Date.now();
+    let response: Response;
+
+    try {
+      response = await fetch(url, {
+        method: "GET",
+        headers: this.headers(provider),
+      });
+    } catch (error) {
+      appendLlmRequestLog({
+        ...buildProviderMetadata(provider),
+        source: "provider-service",
+        purpose: "provider_models",
+        method: "GET",
+        url,
+        durationMs: Date.now() - startedAt,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
 
     if (!response.ok) {
       const body = await response.text();
+      appendLlmRequestLog({
+        ...buildProviderMetadata(provider),
+        source: "provider-service",
+        purpose: "provider_models",
+        method: "GET",
+        url,
+        status: response.status,
+        ok: false,
+        durationMs: Date.now() - startedAt,
+        contentType: response.headers.get("content-type"),
+        responsePreview: summarizeResponseBody(body),
+      });
       throw new Error(formatProviderError(response.status, response.headers.get("content-type"), body, "model list"));
     }
 
     const contentType = response.headers.get("content-type") ?? "";
+    appendLlmRequestLog({
+      ...buildProviderMetadata(provider),
+      source: "provider-service",
+      purpose: "provider_models",
+      method: "GET",
+      url,
+      status: response.status,
+      ok: true,
+      durationMs: Date.now() - startedAt,
+      contentType,
+    });
 
     if (contentType.includes("text/html")) {
       throw new Error("Provider returned HTML instead of JSON for the model list.");
