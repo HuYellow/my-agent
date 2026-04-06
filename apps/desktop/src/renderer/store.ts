@@ -40,6 +40,7 @@ interface AppState {
   bootstrap: () => Promise<void>;
   createProject: (params: CreateProjectParams) => Promise<void>;
   updateProject: (projectId: string, patch: Partial<Pick<ProjectRecord, "name" | "rootPath" | "shell" | "sandboxMode" | "approvalPolicy">>) => Promise<void>;
+  updateThread: (threadId: string, patch: Partial<Pick<ThreadRecord, "title" | "sandboxMode" | "archivedAt">>) => Promise<void>;
   selectProject: (projectId: string) => Promise<void>;
   createThread: (title?: string, projectId?: string) => Promise<void>;
   selectThread: (threadId: string) => Promise<void>;
@@ -125,6 +126,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     const result = (await window.myAgent.updateProject({ projectId, patch })) as { project: ProjectRecord };
     set((state) => ({
       projects: state.projects.map((project) => (project.id === result.project.id ? result.project : project)),
+    }));
+  },
+  updateThread: async (threadId, patch) => {
+    const result = (await window.myAgent.updateThread({ threadId, patch })) as { thread: ThreadRecord };
+    set((state) => ({
+      threads: state.threads.map((thread) => (thread.id === result.thread.id ? result.thread : thread)),
     }));
   },
   selectProject: async (projectId) => {

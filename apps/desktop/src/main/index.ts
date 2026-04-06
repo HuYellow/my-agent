@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, type MenuItemConstructorOptions } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell, type MenuItemConstructorOptions } from "electron";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, promises as fs } from "node:fs";
 import { basename, extname, join, resolve } from "node:path";
@@ -19,6 +19,7 @@ import {
   type StartThreadParams,
   type StartTurnParams,
   type TurnInputAttachment,
+  type UpdateThreadParams,
   type UpdateProjectParams,
 } from "@my-agent/protocol";
 
@@ -191,14 +192,33 @@ function registerIpc(): void {
   ipcMain.handle("harness:initialize", () => harness.request("initialize"));
   ipcMain.handle("project:create", (_event, params: CreateProjectParams) => harness.request("project/create", params));
   ipcMain.handle("project:update", (_event, params: UpdateProjectParams) => harness.request("project/update", params));
+  ipcMain.handle("project:path:reveal", async (_event, params: { projectPath: string }) => {
+    const error = await shell.openPath(params.projectPath);
+    return { ok: error.length === 0, error: error || undefined };
+  });
   ipcMain.handle("thread:start", (_event, params: StartThreadParams) => harness.request("thread/start", params));
   ipcMain.handle("thread:resume", (_event, params: { threadId: string }) => harness.request("thread/resume", params));
+  ipcMain.handle("thread:update", (_event, params: UpdateThreadParams) => harness.request("thread/update", params));
   ipcMain.handle("turn:start", (_event, params: StartTurnParams) => harness.request("turn/start", params));
   ipcMain.handle("turn:interrupt", (_event, params: InterruptTurnParams) => harness.request("turn/interrupt", params));
   ipcMain.handle("command:exec", (_event, params: CommandExecParams) => harness.request("command/exec", params));
   ipcMain.handle("approval:respond", (_event, params: ApprovalResponseParams) => harness.request("approval/respond", params));
   ipcMain.handle("skills:list", () => harness.request("skills/list"));
   ipcMain.handle("skills:config:write", (_event, params: { disabledSkillIds: string[] }) => harness.request("skills/config/write", params));
+  ipcMain.handle("skills:document:read", async (_event, params: { skillPath: string }) => ({
+    content: await fs.readFile(join(params.skillPath, "SKILL.md"), "utf8"),
+  }));
+  ipcMain.handle("skills:path:reveal", async (_event, params: { skillPath: string }) => {
+    const skillFile = join(params.skillPath, "SKILL.md");
+
+    if (existsSync(skillFile)) {
+      shell.showItemInFolder(skillFile);
+      return { ok: true };
+    }
+
+    const error = await shell.openPath(params.skillPath);
+    return { ok: error.length === 0, error: error || undefined };
+  });
   ipcMain.handle("config:read", () => harness.request("config/read"));
   ipcMain.handle("config:write", (_event, params: ConfigWriteParams) => harness.request("config/write", params));
   ipcMain.handle("provider:test", () => harness.request("provider/test"));

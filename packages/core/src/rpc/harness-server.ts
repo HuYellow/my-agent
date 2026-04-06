@@ -26,6 +26,7 @@ import {
   type TurnRecord,
   type UpdateProjectParams,
   type WritePatchParams,
+  type UpdateThreadParams,
 } from "@my-agent/protocol";
 import { existsSync } from "node:fs";
 import { basename, resolve } from "node:path";
@@ -103,6 +104,8 @@ export class HarnessServer {
         return this.startThread((message.params ?? {}) as StartThreadParams);
       case "thread/resume":
         return this.resumeThread(message.params as ResumeThreadParams);
+      case "thread/update":
+        return this.updateThread(message.params as UpdateThreadParams);
       case "thread/list":
         return { threads: this.database.listThreads() };
       case "thread/archive":
@@ -214,6 +217,7 @@ export class HarnessServer {
       id: createId("thread"),
       title: params.title?.trim() || "New Thread",
       projectId: project.id,
+      sandboxMode: params.sandboxMode ?? project.sandboxMode,
       createdAt: now,
       updatedAt: now,
       archivedAt: null,
@@ -225,6 +229,23 @@ export class HarnessServer {
     this.database.createThread(thread);
     this.emit({ type: "thread/started", payload: { thread } });
     return { thread };
+  }
+
+  private updateThread(params: UpdateThreadParams): { thread: ThreadRecord } {
+    const thread = this.database.getThread(params.threadId);
+
+    if (!thread) {
+      throw new Error(`Thread not found: ${params.threadId}`);
+    }
+
+    const updated = this.database.updateThread({
+      ...thread,
+      ...params.patch,
+      sandboxMode: params.patch.sandboxMode ?? thread.sandboxMode,
+      updatedAt: new Date().toISOString(),
+    });
+
+    return { thread: updated };
   }
 
   private resumeThread(params: ResumeThreadParams): ResumeThreadResult {
@@ -280,6 +301,7 @@ export class HarnessServer {
       id: createId("thread"),
       title: params.title?.trim() || `${source.title} (fork)`,
       projectId: source.projectId,
+      sandboxMode: source.sandboxMode,
       createdAt: now,
       updatedAt: now,
       archivedAt: null,
@@ -327,10 +349,11 @@ export class HarnessServer {
       }),
     );
     const discoveredSkills = this.refreshSkills(project.id);
+    const workspace = this.resolveThreadWorkspace(project, thread);
     const selectedSkills = this.skillService.resolveSelectedSkills(params.input, params.selectedSkillIds, discoveredSkills);
     const finalTurn = await this.runner.runTurn({
       provider: config.provider,
-      workspace: project,
+      workspace,
       thread,
       turn,
       discoveredSkills,
@@ -556,11 +579,18 @@ export class HarnessServer {
       const thread = this.database.getThread(threadId);
 
       if (thread) {
-        return this.requireProject(thread.projectId);
+        return this.resolveThreadWorkspace(this.requireProject(thread.projectId), thread);
       }
     }
 
     return this.requireProject(this.database.getConfig().selectedProjectId);
+  }
+
+  private resolveThreadWorkspace(project: ProjectRecord, thread: ThreadRecord): ProjectRecord {
+    return {
+      ...project,
+      sandboxMode: thread.sandboxMode,
+    };
   }
 
   private resolveWorkspaceByProjectId(projectId?: string): ProjectRecord {

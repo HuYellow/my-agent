@@ -91,6 +91,7 @@ export interface ThreadRecord {
   id: string;
   title: string;
   projectId: string;
+  sandboxMode: SandboxMode;
   createdAt: string;
   updatedAt: string;
   archivedAt?: string | null;
@@ -169,6 +170,7 @@ export interface StartThreadParams {
   title?: string;
   workspace?: Partial<WorkspaceProfile>;
   projectId?: string;
+  sandboxMode?: SandboxMode;
 }
 
 export interface StartThreadResult {
@@ -272,6 +274,15 @@ export interface UpdateProjectParams {
 
 export interface UpdateProjectResult {
   project: ProjectRecord;
+}
+
+export interface UpdateThreadParams {
+  threadId: string;
+  patch: Partial<Pick<ThreadRecord, "title" | "sandboxMode" | "archivedAt">>;
+}
+
+export interface UpdateThreadResult {
+  thread: ThreadRecord;
 }
 
 export interface ConfigReadResult {

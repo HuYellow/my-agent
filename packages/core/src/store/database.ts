@@ -59,6 +59,7 @@ export class HarnessDatabase {
         id TEXT PRIMARY KEY,
         title TEXT NOT NULL,
         workspace_id TEXT NOT NULL,
+        sandbox_mode TEXT NOT NULL DEFAULT 'workspace-write',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         archived_at TEXT
@@ -202,30 +203,35 @@ export class HarnessDatabase {
   }
 
   createThread(thread: ThreadRecord): ThreadRecord {
-    if (this.columnExists("threads", "project_id")) {
-      this.db
-        .prepare("INSERT INTO threads(id, title, workspace_id, project_id, created_at, updated_at, archived_at) VALUES(?, ?, ?, ?, ?, ?, ?)")
-        .run(thread.id, thread.title, thread.projectId, thread.projectId, thread.createdAt, thread.updatedAt, thread.archivedAt ?? null);
-      return thread;
-    }
-
     this.db
-      .prepare("INSERT INTO threads(id, title, workspace_id, created_at, updated_at, archived_at) VALUES(?, ?, ?, ?, ?, ?)")
-      .run(thread.id, thread.title, thread.projectId, thread.createdAt, thread.updatedAt, thread.archivedAt ?? null);
+      .prepare(
+        "INSERT INTO threads(id, title, workspace_id, project_id, sandbox_mode, created_at, updated_at, archived_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        thread.id,
+        thread.title,
+        thread.projectId,
+        thread.projectId,
+        thread.sandboxMode,
+        thread.createdAt,
+        thread.updatedAt,
+        thread.archivedAt ?? null,
+      );
     return thread;
   }
 
   updateThread(thread: ThreadRecord): ThreadRecord {
-    if (this.columnExists("threads", "project_id")) {
-      this.db
-        .prepare("UPDATE threads SET title = ?, workspace_id = ?, project_id = ?, updated_at = ?, archived_at = ? WHERE id = ?")
-        .run(thread.title, thread.projectId, thread.projectId, thread.updatedAt, thread.archivedAt ?? null, thread.id);
-      return thread;
-    }
-
     this.db
-      .prepare("UPDATE threads SET title = ?, workspace_id = ?, updated_at = ?, archived_at = ? WHERE id = ?")
-      .run(thread.title, thread.projectId, thread.updatedAt, thread.archivedAt ?? null, thread.id);
+      .prepare("UPDATE threads SET title = ?, workspace_id = ?, project_id = ?, sandbox_mode = ?, updated_at = ?, archived_at = ? WHERE id = ?")
+      .run(
+        thread.title,
+        thread.projectId,
+        thread.projectId,
+        thread.sandboxMode,
+        thread.updatedAt,
+        thread.archivedAt ?? null,
+        thread.id,
+      );
     return thread;
   }
 
@@ -381,6 +387,7 @@ export class HarnessDatabase {
       id: String(row.id),
       title: String(row.title),
       projectId: String(row.project_id ?? row.workspace_id),
+      sandboxMode: (row.sandbox_mode as ThreadRecord["sandboxMode"]) ?? "workspace-write",
       createdAt: String(row.created_at),
       updatedAt: String(row.updated_at),
       archivedAt: row.archived_at ? String(row.archived_at) : null,
@@ -444,6 +451,10 @@ export class HarnessDatabase {
       this.db.exec("ALTER TABLE threads ADD COLUMN project_id TEXT");
     }
 
+    if (!this.columnExists("threads", "sandbox_mode")) {
+      this.db.exec("ALTER TABLE threads ADD COLUMN sandbox_mode TEXT");
+    }
+
     const config = this.getConfig();
     let projects = this.listProjects();
 
@@ -466,6 +477,20 @@ export class HarnessDatabase {
     this.db
       .prepare("UPDATE threads SET project_id = COALESCE(project_id, workspace_id, ?) WHERE project_id IS NULL OR project_id = ''")
       .run(fallbackProject.id);
+
+    this.db
+      .prepare(
+        `
+          UPDATE threads
+          SET sandbox_mode = COALESCE(
+            sandbox_mode,
+            (SELECT sandbox_mode FROM projects WHERE projects.id = threads.project_id),
+            ?
+          )
+          WHERE sandbox_mode IS NULL OR sandbox_mode = ''
+        `,
+      )
+      .run(config.workspace.sandboxMode);
 
     const selectedProjectId =
       config.selectedProjectId && this.getProject(config.selectedProjectId) ? config.selectedProjectId : fallbackProject.id;
