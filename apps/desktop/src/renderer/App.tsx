@@ -37,6 +37,10 @@ import {
   Moon,
   Rabbit,
   MoreHorizontal,
+  Key,
+  FolderGit2,
+  Shield,
+  Server,
 } from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
@@ -1793,6 +1797,30 @@ function RuntimeAutomationPanel({
   );
 }
 
+function SettingsNavItem({
+  icon,
+  label,
+  category,
+  activeCategory,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  category: string;
+  activeCategory: string;
+  onClick: (category: any) => void;
+}) {
+  return (
+    <button
+      className={`settings-nav-item ${category === activeCategory ? 'settings-nav-item--active' : ''}`}
+      onClick={() => onClick(category)}
+    >
+      {icon}
+      <span>{label}</span>
+    </button>
+  );
+}
+
 function SettingsPanel({
   project,
   providerForm,
@@ -1820,16 +1848,140 @@ function SettingsPanel({
   onSaveConfig: () => void;
   onPickWorkspace: () => Promise<void>;
 }) {
-  return (
-    <div className="sidebar-secondary__content settings-panel">
-      <div className="sidebar-secondary__header">
-        <h2>Settings</h2>
-      </div>
+  type SettingsCategory = "api" | "project" | "policy" | "runtime";
+  const [activeCategory, setActiveCategory] = useState<SettingsCategory>("api");
 
-      <div className="settings-panel__content">
-        <div className="settings-panel__section">
-          <h3>Provider</h3>
-          <label className="settings-field">
+  const categoryTitles: Record<SettingsCategory, string> = {
+    api: "API Configuration",
+    project: "Project Settings",
+    policy: "Approval Policy",
+    runtime: "System Diagnostics",
+  };
+
+  const categoryDescriptions: Record<SettingsCategory, string> = {
+    api: "Configure your AI provider connection and model preferences",
+    project: "Manage project workspace and root path settings",
+    policy: "Set approval policies for automated actions",
+    runtime: "Monitor runtime environment and system diagnostics",
+  };
+
+  return (
+    <div className="settings-layout">
+      {/* 左侧分类导航 */}
+      <aside className="settings-sidebar">
+        <div className="settings-sidebar__header">
+          <h2>Settings</h2>
+        </div>
+        <nav className="settings-nav">
+          <SettingsNavItem
+            icon={<Key size={18} />}
+            label="API Configuration"
+            category="api"
+            activeCategory={activeCategory}
+            onClick={setActiveCategory}
+          />
+          <SettingsNavItem
+            icon={<FolderGit2 size={18} />}
+            label="Project Settings"
+            category="project"
+            activeCategory={activeCategory}
+            onClick={setActiveCategory}
+          />
+          <SettingsNavItem
+            icon={<Shield size={18} />}
+            label="Approval Policy"
+            category="policy"
+            activeCategory={activeCategory}
+            onClick={setActiveCategory}
+          />
+          <SettingsNavItem
+            icon={<Server size={18} />}
+            label="System Diagnostics"
+            category="runtime"
+            activeCategory={activeCategory}
+            onClick={setActiveCategory}
+          />
+        </nav>
+      </aside>
+
+      {/* 右侧内容区 */}
+      <div className="settings-content">
+        <div className="settings-content__header">
+          <h3>{categoryTitles[activeCategory]}</h3>
+          <p>{categoryDescriptions[activeCategory]}</p>
+        </div>
+        <div className="settings-content__body" key={activeCategory}>
+          {activeCategory === "api" && (
+            <ApiConfigCard
+              providerForm={providerForm}
+              setProviderForm={setProviderForm}
+              providerModels={providerModels}
+              providerModelsLoading={providerModelsLoading}
+              onRefreshModels={onRefreshProviderModels}
+              onTestProvider={onTestProvider}
+              providerTestMessage={providerTestMessage}
+            />
+          )}
+          {activeCategory === "project" && (
+            <ProjectConfigCard
+              project={project}
+              providerForm={providerForm}
+              setProviderForm={setProviderForm}
+              onPickWorkspace={onPickWorkspace}
+            />
+          )}
+          {activeCategory === "policy" && (
+            <PolicyConfigCard
+              project={project}
+              providerForm={providerForm}
+              setProviderForm={setProviderForm}
+            />
+          )}
+          {activeCategory === "runtime" && (
+            <RuntimeDiagnosticsCard
+              worktrees={worktrees}
+              environments={environments}
+            />
+          )}
+
+          {/* 保存按钮 - 始终显示 */}
+          <div className="settings-actions">
+            <button className="button button--primary" onClick={onSaveConfig}>
+              Save Settings
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ApiConfigCard({
+  providerForm,
+  setProviderForm,
+  providerModels,
+  providerModelsLoading,
+  onRefreshModels,
+  onTestProvider,
+  providerTestMessage,
+}: {
+  providerForm: ProviderFormState;
+  setProviderForm: React.Dispatch<React.SetStateAction<ProviderFormState>>;
+  providerModels: ProviderModelRecord[];
+  providerModelsLoading: boolean;
+  onRefreshModels: () => Promise<void>;
+  onTestProvider: () => Promise<void>;
+  providerTestMessage?: string;
+}) {
+  return (
+    <div className="settings-card">
+      <div className="settings-card__header">
+        <Key size={20} />
+        <h4>Provider Configuration</h4>
+      </div>
+      <div className="settings-card__body">
+        <div className="settings-field">
+          <label>
             <span>Base URL</span>
             <input
               value={providerForm.baseUrl}
@@ -1837,7 +1989,9 @@ function SettingsPanel({
               placeholder="https://api.example.com"
             />
           </label>
-          <label className="settings-field">
+        </div>
+        <div className="settings-field">
+          <label>
             <span>Model</span>
             {providerModels.length > 0 ? (
               <select
@@ -1859,7 +2013,9 @@ function SettingsPanel({
               />
             )}
           </label>
-          <label className="settings-field">
+        </div>
+        <div className="settings-field">
+          <label>
             <span>Reasoning Effort</span>
             <select
               value={providerForm.reasoningEffort}
@@ -1874,7 +2030,9 @@ function SettingsPanel({
               ))}
             </select>
           </label>
-          <label className="settings-field">
+        </div>
+        <div className="settings-field">
+          <label>
             <span>API Key</span>
             <input
               value={providerForm.apiKey}
@@ -1884,10 +2042,42 @@ function SettingsPanel({
             />
           </label>
         </div>
+        <div className="settings-actions">
+          <button className="button" onClick={() => void onRefreshModels()}>
+            {providerModelsLoading ? "Loading Models..." : "Refresh Models"}
+          </button>
+          <button className="button" onClick={() => void onTestProvider()}>
+            Test Provider
+          </button>
+        </div>
+        {providerTestMessage && (
+          <div className="settings-panel__message">{providerTestMessage}</div>
+        )}
+      </div>
+    </div>
+  );
+}
 
-        <div className="settings-panel__section">
-          <h3>{project ? `Project: ${project.name}` : "Project"}</h3>
-          <label className="settings-field">
+function ProjectConfigCard({
+  project,
+  providerForm,
+  setProviderForm,
+  onPickWorkspace,
+}: {
+  project?: ProjectRecord;
+  providerForm: ProviderFormState;
+  setProviderForm: React.Dispatch<React.SetStateAction<ProviderFormState>>;
+  onPickWorkspace: () => Promise<void>;
+}) {
+  return (
+    <div className="settings-card">
+      <div className="settings-card__header">
+        <FolderGit2 size={20} />
+        <h4>{project ? `Project: ${project.name}` : "Project Workspace"}</h4>
+      </div>
+      <div className="settings-card__body">
+        <div className="settings-field">
+          <label>
             <span>Root Path</span>
             <div className="settings-field__row">
               <input
@@ -1901,11 +2091,30 @@ function SettingsPanel({
             </div>
           </label>
         </div>
+      </div>
+    </div>
+  );
+}
 
-        <div className="settings-panel__section">
-          <h3>Policy</h3>
-          <label className="settings-field">
-            <span>Approval Policy</span>
+function PolicyConfigCard({
+  project,
+  providerForm,
+  setProviderForm,
+}: {
+  project?: ProjectRecord;
+  providerForm: ProviderFormState;
+  setProviderForm: React.Dispatch<React.SetStateAction<ProviderFormState>>;
+}) {
+  return (
+    <div className="settings-card">
+      <div className="settings-card__header">
+        <Shield size={20} />
+        <h4>Approval Policy</h4>
+      </div>
+      <div className="settings-card__body">
+        <div className="settings-field">
+          <label>
+            <span>Policy Mode</span>
             <select
               value={providerForm.approvalPolicy}
               onChange={(e) => setProviderForm((s) => ({ ...s, approvalPolicy: e.target.value as typeof s.approvalPolicy }))}
@@ -1916,27 +2125,36 @@ function SettingsPanel({
             </select>
           </label>
         </div>
+      </div>
+    </div>
+  );
+}
 
-        <div className="settings-panel__actions">
-          <button className="button" onClick={() => void onRefreshProviderModels()}>
-            {providerModelsLoading ? "Loading Models..." : "Refresh Models"}
-          </button>
-          <button className="button" onClick={() => void onTestProvider()}>
-            Test Provider
-          </button>
-          <button className="button button--primary" onClick={onSaveConfig}>
-            Save Settings
-          </button>
-        </div>
-
-        {providerTestMessage && (
-          <div className="settings-panel__message">{providerTestMessage}</div>
-        )}
-
-        <div className="settings-panel__section">
-          <h3>Runtime Diagnostics</h3>
-          <div className="settings-panel__message">Worktrees: {worktrees.length}</div>
-          <div className="settings-panel__message">Environments: {environments.length}</div>
+function RuntimeDiagnosticsCard({
+  worktrees,
+  environments,
+}: {
+  worktrees: WorktreeRecord[];
+  environments: EnvironmentRecord[];
+}) {
+  return (
+    <div className="settings-card">
+      <div className="settings-card__header">
+        <Server size={20} />
+        <h4>Runtime Environment</h4>
+      </div>
+      <div className="settings-card__body">
+        <div className="runtime-stats">
+          <div className="runtime-stat">
+            <div className="runtime-stat__indicator" />
+            <div className="runtime-stat__value">{worktrees.length}</div>
+            <div className="runtime-stat__label">Worktrees</div>
+          </div>
+          <div className="runtime-stat">
+            <div className="runtime-stat__indicator" />
+            <div className="runtime-stat__value">{environments.length}</div>
+            <div className="runtime-stat__label">Environments</div>
+          </div>
         </div>
       </div>
     </div>

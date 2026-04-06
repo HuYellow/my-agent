@@ -5134,3 +5134,356 @@ html[data-theme="dark"] .app-toolbar__control:hover {
   background: rgba(255, 255, 255, 0.04);
 }
 
+/* ========================================
+   Settings Page - Modern Layout
+   ======================================== */
+
+/* 主布局 */
+.settings-layout {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* 左侧导航栏 */
+.settings-sidebar {
+  background: var(--secondary-bg);
+  border-right: 1px solid var(--secondary-border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.settings-sidebar__header {
+  padding: 20px 18px 16px;
+  border-bottom: 1px solid var(--secondary-border);
+}
+
+.settings-sidebar__header h2 {
+  margin: 0;
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.settings-nav {
+  flex: 1;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+}
+
+.settings-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-soft);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 160ms ease;
+  position: relative;
+  overflow: hidden;
+  text-align: left;
+  width: 100%;
+}
+
+.settings-nav-item:hover {
+  background: var(--sidebar-hover);
+  color: var(--text);
+}
+
+.settings-nav-item--active {
+  background: var(--sidebar-active);
+  color: var(--text);
+}
+
+.settings-nav-item--active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 60%;
+  background: linear-gradient(180deg, var(--accent), var(--accent-alt));
+  border-radius: 2px;
+}
+
+.settings-nav-item svg {
+  flex-shrink: 0;
+  transition: transform 160ms ease;
+}
+
+.settings-nav-item:hover svg {
+  transform: scale(1.05);
+}
+
+/* 右侧内容区 */
+.settings-content {
+  overflow-y: auto;
+  padding: 32px;
+  background: 
+    radial-gradient(circle at top right, var(--page-glow-a), transparent 40%),
+    radial-gradient(circle at bottom left, var(--page-glow-b), transparent 40%),
+    var(--page-bg);
+}
+
+.settings-content__header {
+  margin-bottom: 28px;
+}
+
+.settings-content__header h3 {
+  font-family: var(--font-display);
+  font-size: 28px;
+  font-weight: 600;
+  margin: 0 0 6px;
+  color: var(--text);
+  letter-spacing: -0.02em;
+}
+
+.settings-content__header p {
+  font-size: 14px;
+  color: var(--muted);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.settings-content__body {
+  animation: fadeIn 200ms ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 毛玻璃卡片 */
+.settings-card {
+  background: linear-gradient(180deg, var(--surface-frost-top), var(--surface-frost-bottom));
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  margin-bottom: 20px;
+  box-shadow: var(--shadow-edge), var(--shadow-soft);
+  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+}
+
+.settings-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-edge), var(--shadow-lift);
+  border-color: var(--line-strong);
+}
+
+.settings-card__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 20px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.settings-card__header svg {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.settings-card__header h4 {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+
+.settings-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* 设置项样式优化 */
+.settings-field {
+  display: block;
+}
+
+.settings-field label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-field > span,
+.settings-field label > span {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.settings-field input,
+.settings-field select {
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  outline: none;
+  background: var(--surface-input);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  font-family: var(--font-body);
+  transition:
+    transform 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.settings-field input:focus,
+.settings-field select:focus {
+  transform: translateY(-1px);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.settings-field input::placeholder {
+  color: var(--muted-strong);
+}
+
+.settings-field__row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+
+/* 数据诊断卡片 */
+.runtime-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.runtime-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 20px 16px;
+  border-radius: var(--radius-md);
+  background: var(--surface-section);
+  border: 1px solid var(--line);
+  transition: transform 160ms ease, box-shadow 160ms ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.runtime-stat::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-alt));
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+.runtime-stat:hover {
+  transform: scale(1.02);
+  box-shadow: var(--shadow-soft);
+}
+
+.runtime-stat:hover::before {
+  opacity: 1;
+}
+
+.runtime-stat__indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  margin-bottom: 10px;
+  box-shadow: 0 0 8px var(--accent-soft);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(1.1);
+  }
+}
+
+.runtime-stat__value {
+  font-size: 32px;
+  font-weight: 800;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  line-height: 1;
+  margin-bottom: 6px;
+}
+
+.runtime-stat__label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* 按钮组优化 */
+.settings-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.settings-actions .button {
+  transition: transform 160ms ease, box-shadow 160ms ease;
+}
+
+.settings-actions .button:active {
+  transform: scale(0.98);
+}
+
+/* 暗黑模式适配 */
+html[data-theme="dark"] .settings-card {
+  backdrop-filter: blur(16px);
+}
+
+html[data-theme="dark"] .settings-nav-item--active::before {
+  background: linear-gradient(180deg, var(--accent), var(--accent-alt));
+}
+
+html[data-theme="dark"] .runtime-stat__indicator {
+  box-shadow: 0 0 12px var(--accent-soft);
+}
