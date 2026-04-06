@@ -7,12 +7,19 @@ import {
   type InitializeResult,
   type InterruptTurnParams,
   type ItemRecord,
+  type McpMountRecord,
+  type McpSessionRecord,
   type ProviderModelRecord,
   type PendingApproval,
+  type PluginRecord,
   type ProjectRecord,
   type SkillDescriptor,
   type StartThreadParams,
   type StartTurnParams,
+  type WorktreeRecord,
+  type EnvironmentRecord,
+  type WorkflowRecord,
+  type WorkflowRunRecord,
   type TurnInputAttachment,
   type ThreadRecord,
   type TurnRecord,
@@ -34,15 +41,30 @@ declare global {
       respondApproval: (params: ApprovalResponseParams) => Promise<{ turn: TurnRecord }>;
       listSkills: () => Promise<{ skills: SkillDescriptor[] }>;
       writeSkillConfig: (disabledSkillIds: string[]) => Promise<{ skills: SkillDescriptor[] }>;
+      readSkillDocument: (skillPath: string) => Promise<{ content: string }>;
       readConfig: () => Promise<{ config: AppConfig }>;
       writeConfig: (params: ConfigWriteParams) => Promise<{ config: AppConfig }>;
       testProvider: () => Promise<{ ok: boolean; status: number; message: string }>;
       listProviderModels: () => Promise<{ models: ProviderModelRecord[] }>;
+      listWorktrees: (projectId?: string) => Promise<{ worktrees: WorktreeRecord[] }>;
+      createWorktree: (params: { projectId: string; threadId?: string; branch?: string; baseRef?: string }) => Promise<{ worktree: WorktreeRecord }>;
+      removeWorktree: (worktreeId: string) => Promise<{ worktree: WorktreeRecord }>;
+      listEnvironments: (projectId?: string) => Promise<{ environments: EnvironmentRecord[] }>;
+      detectEnvironment: (params: { projectId: string; threadId?: string; worktreeId?: string; cwd?: string }) => Promise<{ environment: EnvironmentRecord }>;
+      listWorkflows: (projectId?: string) => Promise<{ workflows: WorkflowRecord[] }>;
+      runWorkflow: (params: { workflowId: string; projectId: string; threadId?: string; nonInteractive?: boolean }) => Promise<unknown>;
+      listWorkflowRuns: (workflowId?: string) => Promise<{ runs: WorkflowRunRecord[] }>;
+      resumeWorkflow: (runId: string) => Promise<unknown>;
+      listPlugins: () => Promise<{ plugins: PluginRecord[] }>;
+      listMcpMounts: () => Promise<{ mounts: McpMountRecord[] }>;
+      listMcpSessions: () => Promise<{ sessions: McpSessionRecord[] }>;
+      refreshMcpMount: (mountId: string) => Promise<unknown>;
       setTitleBarTheme: (theme: "light" | "dark") => Promise<void>;
       showAppMenu: (params: { menuId: "file" | "edit" | "view" | "window" | "help"; x: number; y: number }) => Promise<void>;
       pickWorkspace: () => Promise<string | null>;
       pickFiles: () => Promise<TurnInputAttachment[]>;
       execCommand: (params: { command: string; cwd?: string; threadId?: string }) => Promise<{ code: number; stdout: string; stderr: string }>;
+      revealSkillPath: (skillPath: string) => Promise<{ ok: boolean; error?: string }>;
       revealProjectPath: (projectPath: string) => Promise<{ ok: boolean; error?: string }>;
       windowMinimize: () => Promise<void>;
       windowToggleFullscreen: () => Promise<void>;

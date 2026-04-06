@@ -7,10 +7,10 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build --workspace @my-agent/protocol && npm run build --workspace @my-agent/core && npm run build --workspace @my-agent/desktop",
+    "build": "npm run build --workspace @my-agent/protocol && npm run build --workspace @my-agent/core && npm run build --workspace @my-agent/app-server && npm run build --workspace @my-agent/mcp-server && npm run build --workspace @my-agent/github-action && npm run build --workspace @my-agent/desktop",
     "dev": "npm run dev --workspace @my-agent/desktop",
-    "test": "npm run test --workspace @my-agent/core && npm run test --workspace @my-agent/desktop",
-    "typecheck": "npm run typecheck --workspace @my-agent/protocol && npm run typecheck --workspace @my-agent/core && npm run typecheck --workspace @my-agent/desktop"
+    "test": "npm run test --workspace @my-agent/core && npm run test --workspace @my-agent/app-server && npm run test --workspace @my-agent/mcp-server && npm run test --workspace @my-agent/github-action && npm run test --workspace @my-agent/desktop",
+    "typecheck": "npm run typecheck --workspace @my-agent/protocol && npm run typecheck --workspace @my-agent/core && npm run typecheck --workspace @my-agent/app-server && npm run typecheck --workspace @my-agent/mcp-server && npm run typecheck --workspace @my-agent/github-action && npm run typecheck --workspace @my-agent/desktop"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.3",

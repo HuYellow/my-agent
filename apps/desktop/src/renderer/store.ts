@@ -17,21 +17,23 @@ import {
 let bootstrapPromise: Promise<void> | null = null;
 let detachEventListener: (() => void) | null = null;
 
-function upsertThread(threads: ThreadRecord[], thread: ThreadRecord): ThreadRecord[] {
-  return [thread, ...threads.filter((entry) => entry.id !== thread.id)];
+export interface ThreadSessionState {
+  turns: TurnRecord[];
+  items: ItemRecord[];
+  pendingApproval?: PendingApproval | null;
+  submitting: boolean;
 }
 
 interface AppState {
   bootstrapped: boolean;
   loading: boolean;
+  bootError?: string;
   projects: ProjectRecord[];
   threads: ThreadRecord[];
-  turns: TurnRecord[];
-  items: ItemRecord[];
+  threadSessions: Record<string, ThreadSessionState>;
   skills: SkillDescriptor[];
   activeProjectId?: string;
   activeThreadId?: string;
-  pendingApproval?: PendingApproval | null;
   config?: AppConfig;
   providerTestMessage?: string;
   providerModels: ProviderModelRecord[];
@@ -44,7 +46,7 @@ interface AppState {
   selectProject: (projectId: string) => Promise<void>;
   createThread: (title?: string, projectId?: string) => Promise<void>;
   selectThread: (threadId: string) => Promise<void>;
-  sendTurn: (input: string, selectedSkillIds?: string[], attachments?: TurnInputAttachment[]) => Promise<void>;
+  sendTurn: (input: string, selectedSkillIds?: string[], attachments?: TurnInputAttachment[], includeIdeContext?: boolean) => Promise<void>;
   interruptTurn: (turnId: string) => Promise<void>;
   respondApproval: (approvalId: string, decision: "approve" | "reject", scope?: "once" | "session") => Promise<void>;
   toggleSkill: (skillId: string) => Promise<void>;
@@ -57,12 +59,11 @@ interface AppState {
 export const useAppStore = create<AppState>((set, get) => ({
   bootstrapped: false,
   loading: false,
+  bootError: undefined,
   projects: [],
   threads: [],
-  turns: [],
-  items: [],
+  threadSessions: {},
   skills: [],
-  pendingApproval: null,
   providerModels: [],
   providerModelsLoading: false,
   bootstrap: async () => {
@@ -76,33 +77,40 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
 
     bootstrapPromise = (async () => {
-      set({ loading: true });
-      const initial = (await window.myAgent.initialize()) as InitializeResult;
-      const activeProjectId =
-        initial.config.selectedProjectId ??
-        initial.projects[0]?.id;
-      const activeThreadId =
-        initial.threads.find((thread) => thread.projectId === activeProjectId)?.id ??
-        initial.threads[0]?.id;
-      set({
-        bootstrapped: true,
-        loading: false,
-        projects: initial.projects,
-        threads: initial.threads,
-        skills: initial.skills,
-        config: initial.config,
-        activeProjectId,
-        activeThreadId,
-      });
+      set({ loading: true, bootError: undefined });
 
-      if (activeThreadId) {
-        await get().selectThread(activeThreadId);
-      }
+      try {
+        const initial = (await withTimeout(window.myAgent.initialize(), 10_000, "Harness initialization timed out.")) as InitializeResult;
+        const activeProjectId = initial.config.selectedProjectId ?? initial.projects[0]?.id;
+        const activeThreadId = initial.threads.find((thread) => thread.projectId === activeProjectId)?.id ?? initial.threads[0]?.id;
 
-      await get().refreshProviderModels();
+        set({
+          bootstrapped: true,
+          loading: false,
+          bootError: undefined,
+          projects: initial.projects,
+          threads: initial.threads,
+          threadSessions: Object.fromEntries(initial.threads.map((thread) => [thread.id, createEmptyThreadSession()])),
+          skills: initial.skills,
+          config: initial.config,
+          activeProjectId,
+          activeThreadId,
+        });
 
-      if (!detachEventListener) {
-        detachEventListener = window.myAgent.onEvent((event) => get().handleEvent(event));
+        if (activeThreadId) {
+          await get().selectThread(activeThreadId);
+        }
+
+        await get().refreshProviderModels();
+
+        if (!detachEventListener) {
+          detachEventListener = window.myAgent.onEvent((event) => get().handleEvent(event));
+        }
+      } catch (error) {
+        set({
+          loading: false,
+          bootError: error instanceof Error ? error.message : String(error),
+        });
       }
     })().finally(() => {
       bootstrapPromise = null;
@@ -117,9 +125,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       activeProjectId: result.project.id,
       config: state.config ? { ...state.config, selectedProjectId: result.project.id } : state.config,
       activeThreadId: undefined,
-      turns: [],
-      items: [],
-      pendingApproval: null,
     }));
   },
   updateProject: async (projectId, patch) => {
@@ -154,9 +159,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({
       activeProjectId: projectId,
       activeThreadId: undefined,
-      turns: [],
-      items: [],
-      pendingApproval: null,
     });
   },
   createThread: async (title, projectId) => {
@@ -165,58 +167,98 @@ export const useAppStore = create<AppState>((set, get) => ({
     const currentConfig = get().config;
     set((state) => ({
       threads: upsertThread(state.threads, result.thread),
+      threadSessions: ensureThreadSessionState(state.threadSessions, result.thread.id),
       activeProjectId: result.thread.projectId,
       activeThreadId: result.thread.id,
       config: currentConfig ? { ...currentConfig, selectedProjectId: result.thread.projectId } : currentConfig,
-      turns: [],
-      items: [],
-      pendingApproval: null,
     }));
   },
   selectThread: async (threadId) => {
+    const existingThread = get().threads.find((thread) => thread.id === threadId);
+
+    if (existingThread) {
+      set((state) => ({
+        activeProjectId: existingThread.projectId,
+        activeThreadId: threadId,
+        threadSessions: ensureThreadSessionState(state.threadSessions, threadId),
+        config: state.config ? { ...state.config, selectedProjectId: existingThread.projectId } : state.config,
+      }));
+    }
+
     const result = (await window.myAgent.resumeThread(threadId)) as {
       thread: ThreadRecord;
       turns: TurnRecord[];
       items: ItemRecord[];
       pendingApproval?: PendingApproval | null;
     };
-    set({
+    set((state) => ({
       activeProjectId: result.thread.projectId,
       activeThreadId: threadId,
-      turns: result.turns,
-      items: result.items,
-      pendingApproval: result.pendingApproval ?? null,
-      config: get().config ? { ...get().config!, selectedProjectId: result.thread.projectId } : get().config,
-    });
+      threadSessions: updateThreadSession(state.threadSessions, threadId, (session) => ({
+        ...session,
+        turns: result.turns,
+        items: result.items,
+        pendingApproval: result.pendingApproval ?? null,
+        submitting: false,
+      })),
+      config: state.config ? { ...state.config, selectedProjectId: result.thread.projectId } : state.config,
+    }));
   },
-  sendTurn: async (input, selectedSkillIds, attachments) => {
-    const threadId = get().activeThreadId;
+  sendTurn: async (input, selectedSkillIds, attachments, includeIdeContext) => {
+    let threadId = get().activeThreadId;
 
     if (!threadId) {
       await get().createThread();
+      threadId = get().activeThreadId;
     }
 
-    const ensuredThreadId = get().activeThreadId!;
-    set({ loading: true });
-    const result = (await window.myAgent.startTurn({
-      threadId: ensuredThreadId,
-      input,
-      attachments,
-      selectedSkillIds,
-    })) as { turn: TurnRecord };
+    if (!threadId) {
+      throw new Error("Unable to create or resolve an active thread.");
+    }
 
     set((state) => ({
-      loading: false,
-      turns: [...state.turns.filter((turn) => turn.id !== result.turn.id), result.turn],
+      threadSessions: updateThreadSession(state.threadSessions, threadId!, (session) => ({
+        ...session,
+        submitting: true,
+      })),
     }));
+
+    try {
+      const result = (await window.myAgent.startTurn({
+        threadId,
+        input,
+        attachments,
+        selectedSkillIds,
+        includeIdeContext,
+      })) as { turn: TurnRecord };
+
+      set((state) => ({
+        threadSessions: updateThreadSession(state.threadSessions, threadId!, (session) => ({
+          ...session,
+          submitting: false,
+          turns: upsertTurn(session.turns, result.turn),
+        })),
+      }));
+    } catch (error) {
+      set((state) => ({
+        threadSessions: updateThreadSession(state.threadSessions, threadId!, (session) => ({
+          ...session,
+          submitting: false,
+        })),
+      }));
+      throw error;
+    }
   },
   interruptTurn: async (turnId) => {
     const result = (await window.myAgent.interruptTurn({ turnId })) as { turn: TurnRecord };
 
     set((state) => ({
-      loading: false,
-      turns: state.turns.map((turn) => (turn.id === result.turn.id ? result.turn : turn)),
-      pendingApproval: state.pendingApproval?.turnId === result.turn.id ? null : state.pendingApproval,
+      threadSessions: updateThreadSession(state.threadSessions, result.turn.threadId, (session) => ({
+        ...session,
+        submitting: false,
+        turns: session.turns.map((turn) => (turn.id === result.turn.id ? result.turn : turn)),
+        pendingApproval: session.pendingApproval?.turnId === result.turn.id ? null : session.pendingApproval,
+      })),
     }));
   },
   respondApproval: async (approvalId, decision, scope) => {
@@ -227,8 +269,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     })) as { turn: TurnRecord };
 
     set((state) => ({
-      turns: state.turns.map((turn) => (turn.id === result.turn.id ? result.turn : turn)),
-      pendingApproval: decision === "approve" || decision === "reject" ? null : state.pendingApproval,
+      threadSessions: updateThreadSession(state.threadSessions, result.turn.threadId, (session) => ({
+        ...session,
+        turns: session.turns.map((turn) => (turn.id === result.turn.id ? result.turn : turn)),
+        pendingApproval: session.pendingApproval?.id === approvalId ? null : session.pendingApproval,
+      })),
     }));
   },
   toggleSkill: async (skillId) => {
@@ -301,51 +346,73 @@ export const useAppStore = create<AppState>((set, get) => ({
   handleEvent: (event) => {
     switch (event.type) {
       case "thread/started":
-        set((state) => ({ threads: upsertThread(state.threads, event.payload.thread) }));
+        set((state) => ({
+          threads: upsertThread(state.threads, event.payload.thread),
+          threadSessions: ensureThreadSessionState(state.threadSessions, event.payload.thread.id),
+        }));
         break;
       case "turn/started":
-        set((state) => ({ turns: [...state.turns.filter((turn) => turn.id !== event.payload.turn.id), event.payload.turn] }));
+        set((state) => ({
+          threadSessions: updateThreadSession(state.threadSessions, event.payload.turn.threadId, (session) => ({
+            ...session,
+            submitting: false,
+            turns: upsertTurn(session.turns, event.payload.turn),
+          })),
+        }));
         break;
       case "item/started":
       case "item/completed":
         set((state) => ({
-          items: [...state.items.filter((item) => item.id !== event.payload.item.id), event.payload.item].sort((left, right) =>
-            left.createdAt.localeCompare(right.createdAt),
-          ),
+          threadSessions: updateThreadSession(state.threadSessions, event.payload.item.threadId, (session) => ({
+            ...session,
+            items: upsertItem(session.items, event.payload.item),
+          })),
         }));
         break;
       case "item/delta":
         set((state) => ({
-          items: state.items.map((item) => (item.id === event.payload.itemId ? { ...item, body: `${item.body}${event.payload.delta}` } : item)),
+          threadSessions: Object.fromEntries(
+            Object.entries(state.threadSessions).map(([threadId, session]) => [
+              threadId,
+              {
+                ...session,
+                items: session.items.map((item) => (item.id === event.payload.itemId ? { ...item, body: `${item.body}${event.payload.delta}` } : item)),
+              },
+            ]),
+          ),
         }));
         break;
       case "approval/requested":
         set((state) => ({
-          pendingApproval: event.payload.approval,
-          items: [...state.items.filter((item) => item.id !== event.payload.item.id), event.payload.item],
+          threadSessions: updateThreadSession(state.threadSessions, event.payload.approval.threadId, (session) => ({
+            ...session,
+            pendingApproval: event.payload.approval,
+            items: upsertItem(session.items, event.payload.item),
+          })),
         }));
         break;
       case "serverRequest/resolved":
         set((state) => ({
-          pendingApproval: state.pendingApproval?.id === event.payload.approvalId ? null : state.pendingApproval,
+          threadSessions: Object.fromEntries(
+            Object.entries(state.threadSessions).map(([threadId, session]) => [
+              threadId,
+              {
+                ...session,
+                pendingApproval: session.pendingApproval?.id === event.payload.approvalId ? null : session.pendingApproval,
+              },
+            ]),
+          ),
         }));
         break;
       case "turn/completed":
-        set((state) => ({
-          loading: false,
-          turns: state.turns.map((turn) => (turn.id === event.payload.turn.id ? event.payload.turn : turn)),
-        }));
-        break;
       case "turn/cancelled":
-        set((state) => ({
-          loading: false,
-          turns: state.turns.map((turn) => (turn.id === event.payload.turn.id ? event.payload.turn : turn)),
-        }));
-        break;
       case "turn/failed":
         set((state) => ({
-          loading: false,
-          turns: state.turns.map((turn) => (turn.id === event.payload.turn.id ? event.payload.turn : turn)),
+          threadSessions: updateThreadSession(state.threadSessions, event.payload.turn.threadId, (session) => ({
+            ...session,
+            submitting: false,
+            turns: session.turns.map((turn) => (turn.id === event.payload.turn.id ? event.payload.turn : turn)),
+          })),
         }));
         break;
       case "config/changed":
@@ -363,3 +430,66 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 }));
+
+function upsertThread(threads: ThreadRecord[], thread: ThreadRecord): ThreadRecord[] {
+  return [thread, ...threads.filter((entry) => entry.id !== thread.id)];
+}
+
+function upsertTurn(turns: TurnRecord[], turn: TurnRecord): TurnRecord[] {
+  return [...turns.filter((entry) => entry.id !== turn.id), turn].sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+}
+
+function upsertItem(items: ItemRecord[], item: ItemRecord): ItemRecord[] {
+  return [...items.filter((entry) => entry.id !== item.id), item].sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+}
+
+function createEmptyThreadSession(): ThreadSessionState {
+  return {
+    turns: [],
+    items: [],
+    pendingApproval: null,
+    submitting: false,
+  };
+}
+
+function ensureThreadSessionState(sessions: Record<string, ThreadSessionState>, threadId: string) {
+  if (sessions[threadId]) {
+    return sessions;
+  }
+
+  return {
+    ...sessions,
+    [threadId]: createEmptyThreadSession(),
+  };
+}
+
+function updateThreadSession(
+  sessions: Record<string, ThreadSessionState>,
+  threadId: string,
+  updater: (session: ThreadSessionState) => ThreadSessionState,
+): Record<string, ThreadSessionState> {
+  const current = sessions[threadId] ?? createEmptyThreadSession();
+
+  return {
+    ...sessions,
+    [threadId]: updater(current),
+  };
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    timer.unref?.();
+
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}

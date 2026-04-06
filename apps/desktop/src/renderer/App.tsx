@@ -1,4 +1,4 @@
-import {
+﻿import {
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -44,12 +44,20 @@ import {
   type ItemKind,
   type ItemRecord,
   type ModelReasoningEffort,
+  type McpMountRecord,
+  type McpSessionRecord,
   type PendingApproval,
+  type PluginRecord,
   type ProjectRecord,
   type ProviderModelRecord,
   type SandboxMode,
   type SkillDescriptor,
   type TurnInputAttachment,
+  type TurnRecord,
+  type WorktreeRecord,
+  type EnvironmentRecord,
+  type WorkflowRecord,
+  type WorkflowRunRecord,
 } from "@my-agent/protocol";
 import { useAppStore } from "./store";
 
@@ -81,9 +89,9 @@ const REASONING_OPTIONS: Array<{ value: ModelReasoningEffort; label: string; hin
 ];
 
 const SANDBOX_MODE_OPTIONS: Array<{ value: SandboxMode; label: string; hint: string }> = [
-  { value: "read-only", label: "只读", hint: "仅允许读取项目内容" },
-  { value: "workspace-write", label: "工作区写入", hint: "允许在项目内修改文件" },
-  { value: "danger-full-access", label: "完全访问权限", hint: "允许不受限访问与网络操作" },
+  { value: "read-only", label: "Read only", hint: "Only allow reading files inside the workspace." },
+  { value: "workspace-write", label: "Workspace write", hint: "Allow editing files inside the workspace." },
+  { value: "danger-full-access", label: "Full access", hint: "Allow unrestricted filesystem and network access." },
 ];
 
 interface BranchSummary {
@@ -101,24 +109,6 @@ interface ContextSummary {
   usedRatio: number;
 }
 
-const EMPTY_PROMPTS = [
-  {
-    label: "Read the structure",
-    prompt:
-      "Read this repository carefully and tell me what problem it is truly trying to solve, plus the most disciplined part of the architecture.",
-  },
-  {
-    label: "Break the habit",
-    prompt:
-      "Point out one habit this project needs to break next, from both the product and engineering perspectives, and give me a concrete next step.",
-  },
-  {
-    label: "Name the next act",
-    prompt:
-      "Based on the current code, sketch an ambitious but still shippable next milestone for this project.",
-  },
-];
-
 const ITEM_LABELS: Record<ItemKind, string> = {
   userMessage: "Question",
   agentMessage: "Response",
@@ -129,6 +119,8 @@ const ITEM_LABELS: Record<ItemKind, string> = {
   fileChange: "File change",
   approvalRequest: "Approval",
   approvalResult: "Approval result",
+  terminalSession: "Terminal",
+  agentTask: "Agent task",
   error: "Error",
 };
 
@@ -142,7 +134,7 @@ const APP_MENU_ITEMS = [
 
 type ConversationEntry =
   | { id: string; kind: "user"; item: ItemRecord }
-  | { id: string; kind: "thought"; items: ItemRecord[]; completed: boolean; durationMs: number }
+  | { id: string; kind: "thought"; items: ItemRecord[]; completed: boolean; durationMs: number; startedAtMs: number }
   | { id: string; kind: "answer"; item: ItemRecord }
   | { id: string; kind: "changes"; items: ItemRecord[] }
   | { id: string; kind: "system"; item: ItemRecord };
@@ -163,18 +155,33 @@ interface ChangedFileReview {
   error?: string;
 }
 
+interface ComposerDraftState {
+  input: string;
+  attachments: ComposerAttachment[];
+  includeIdeContext: boolean;
+  planMode: boolean;
+}
+
+interface UserAttachmentSummary {
+  name: string;
+  path?: string;
+  kind: "image" | "text" | "binary";
+  mediaType?: string;
+  truncated?: boolean;
+  previewSrc?: string;
+}
+
 export function App() {
   const {
     bootstrapped,
+    bootError,
     loading,
     projects,
     threads,
-    turns,
-    items,
+    threadSessions,
     skills,
     activeProjectId,
     activeThreadId,
-    pendingApproval,
     config,
     providerTestMessage,
     providerModels,
@@ -196,18 +203,22 @@ export function App() {
   } = useAppStore();
 
   const [activeView, setActiveView] = useState<NavView>("threads");
-  const [input, setInput] = useState("");
-  const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
+  const [composerDrafts, setComposerDrafts] = useState<Record<string, ComposerDraftState>>({});
   const [composerMenuOpen, setComposerMenuOpen] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [reasoningMenuOpen, setReasoningMenuOpen] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>("light");
-  const [includeIdeContext, setIncludeIdeContext] = useState(true);
-  const [planMode, setPlanMode] = useState(false);
   const [skillDetailId, setSkillDetailId] = useState<string | null>(null);
   const [skillDocument, setSkillDocument] = useState("");
   const [skillDocumentLoading, setSkillDocumentLoading] = useState(false);
   const [skillDocumentError, setSkillDocumentError] = useState<string | null>(null);
+  const [runtimeWorktrees, setRuntimeWorktrees] = useState<WorktreeRecord[]>([]);
+  const [runtimeEnvironments, setRuntimeEnvironments] = useState<EnvironmentRecord[]>([]);
+  const [runtimeWorkflows, setRuntimeWorkflows] = useState<WorkflowRecord[]>([]);
+  const [runtimeWorkflowRuns, setRuntimeWorkflowRuns] = useState<WorkflowRunRecord[]>([]);
+  const [runtimePlugins, setRuntimePlugins] = useState<PluginRecord[]>([]);
+  const [runtimeMcpMounts, setRuntimeMcpMounts] = useState<McpMountRecord[]>([]);
+  const [runtimeMcpSessions, setRuntimeMcpSessions] = useState<McpSessionRecord[]>([]);
   const [threadSearch, setThreadSearch] = useState("");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarWidthRatio, setSidebarWidthRatio] = useState(() => {
@@ -239,7 +250,9 @@ export function App() {
   const sandboxMenuRef = useRef<HTMLDivElement | null>(null);
   const branchMenuRef = useRef<HTMLDivElement | null>(null);
   const appContainerRef = useRef<HTMLDivElement | null>(null);
+  const messageAreaRef = useRef<HTMLDivElement | null>(null);
   const sidebarResizeStateRef = useRef<{ pointerId: number; startX: number; startRatio: number } | null>(null);
+  const pendingThreadScrollRef = useRef<string | null>(null);
 
   useEffect(() => {
     void bootstrap();
@@ -255,7 +268,7 @@ export function App() {
 
     const prefersDark = window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
     setThemeMode(prefersDark ? "dark" : "light");
-    // hiddenInset 闂傚倸鍊风粈渚€骞栭銈囩煋闁圭虎鍠栨惔濠囨煠绾板崬澧い顐ｆ礋閺屽秹鍩℃担鍛婃濡炪倖娲濇ご鎼佸箞閵娿儙鐔煎传閸曨剚鐦ｆ繝鐢靛仜閻楀懘宕￠幎钘夎摕婵炴垯鍨瑰Λ姗€鎮归崶銊ョ祷妞ゎ偄娲娲焻閻愯尪瀚板褜鍣ｉ弻娑欑節閸屾稑浠撮悗瑙勬磸閸ㄨ姤淇婇懜闈涚窞閻庯綆鍋呴悵顐︽⒑鐠囪尙绠抽柛瀣枛瀹曟垿骞樼紒妯绘闂侀潧顦弲婊堝煕閹烘鐓曢柕澶樺灣閸掓澘霉濠婂牏鐣烘慨濠囩細閵囨劙骞掗幘鎾暘婵＄偑鍊栭崹鐢稿箠韫囨稑绠為柕濞炬櫅閻撴盯鏌涢幇銊︽珔妞ゅ孩鐩娲川婵犲啫鐦烽梺鍛婁緱閸犳岸鍩€椤掑寮慨濠冩そ瀹曨偊宕熼澶堝灪缁绘稑顔忛鐓庣睄闂侀潧妫楅崐鍦矉閹烘柡鍋撻敐搴濈盎闁哥偑鍔戝Λ鍛搭敃閵忊剝鎮欐俊銈囧У閹倿骞嗘担鍓茬叆闁割偆鍠撻崣?    // void window.myAgent.setTitleBarTheme("dark");
+    // hiddenInset 闂傚倸鍊搁崐椋庣矆娓氣偓楠炴牠顢曢妶鍥╃厠闂佸湱铏庨崰鏍ㄦ償婵犲洦鐓犵痪鏉垮船婢ь垱銇勯锝嗙闁哄苯绉归崺鈩冩媴閸涘﹥顔勬俊鐐€栧ú婵囥仈閹间礁绠為柕濞垮剻閻旂厧浼犻柛鏇ㄥ墯閻︼絾绻濋悽闈涗粶闁绘鎳樺畷锟犲箮閽樺鎽曞┑鐐村灟閸ㄧ懓螞濮椻偓閹綊宕堕妸銉хシ濡炪値鍋勫ú顓烆潖濞差亝鐒婚柣鎰蔼鐎氭澘顭胯閸ｏ綁寮诲☉娆戠瘈闁稿本绋戞禒鎾倵鐟欏嫭纾搁柛銊ㄥГ娣囧﹪鎳滈棃娑氱獮闁诲函缍嗛崑鍛存偟椤愶附鈷戦悹鍥皺缁犳娊鏌涚€ｎ剙鏋涚€规洘鍨块獮妯肩磼濡粯顏熼梻渚€娼чˇ顐﹀疾濠婂牆鐓曢柟鐑橆殕閻撴洟鏌曟径妯虹仯闁告帗婢橀湁婵犲﹤鐗忛悾鐑樻叏婵犲洨绱伴柕鍥ㄥ姍楠炴帡骞橀幘顔芥殬濠碉紕鍋戦崐鏍垂閻㈢绠犻煫鍥ㄧ☉缁犵偤鏌曟繛鐐珔闁绘挻鐩弻娑㈠箛閵婏附鐝斿銈呭閻╊垰顫忓ú顏勫窛濠电姴鍟惁鐑芥⒑閸涘﹣绶遍柛鐘冲哺閸┾偓妞ゆ帒顦顔芥叏婵犲啯銇濈€规洦鍋婂畷鐔碱敇婢跺牆鐏紒缁樼☉椤斿繘顢欓悡搴ｇ潉闂備線娼уΛ妤呭磹閸︻厾鐭夐柟鐑樻煛閸嬫捇鏁愭惔婵堢泿闂佸摜鍋戦崝鎴澪涢崨鎼晝闁靛繆鍓濋幃娆愪繆閵堝洤校闁诡喖鍊块獮鍡樻媴閸撹尙鍙嗛梺鍓插亞閸犳捇宕?    // void window.myAgent.setTitleBarTheme("dark");
   }, []);
 
   useEffect(() => {
@@ -318,6 +331,15 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    if (!activeThreadId) {
+      pendingThreadScrollRef.current = null;
+      return;
+    }
+
+    pendingThreadScrollRef.current = activeThreadId;
+  }, [activeThreadId]);
+
+  useEffect(() => {
     const handlePointerMove = (event: PointerEvent) => {
       const resizeState = sidebarResizeStateRef.current;
       const container = appContainerRef.current;
@@ -363,9 +385,13 @@ export function App() {
     () => [...threads].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
     [threads],
   );
+  const activeSession = useMemo(
+    () => (activeThreadId ? threadSessions[activeThreadId] ?? createEmptyThreadSessionView() : null),
+    [activeThreadId, threadSessions],
+  );
   const orderedItems = useMemo(
-    () => [...items].sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
-    [items],
+    () => [...(activeSession?.items ?? [])].sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
+    [activeSession?.items],
   );
   const conversationEntries = useMemo(
     () => buildConversationEntries(orderedItems),
@@ -380,18 +406,28 @@ export function App() {
     [activeProjectId, projects],
   );
   const activeTurn = useMemo(
-    () => [...turns].sort((left, right) => left.updatedAt.localeCompare(right.updatedAt)).at(-1),
-    [turns],
+    () => [...(activeSession?.turns ?? [])].sort((left, right) => left.updatedAt.localeCompare(right.updatedAt)).at(-1),
+    [activeSession?.turns],
   );
   const interruptibleTurnId = useMemo(() => {
-    const candidate = [...turns]
+    const candidate = [...(activeSession?.turns ?? [])]
       .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt))
       .reverse()
       .find((turn) => turn.status === "running");
 
     return candidate?.id;
-  }, [turns]);
-  const canInterrupt = loading && Boolean(interruptibleTurnId);
+  }, [activeSession?.turns]);
+  const workingThreadIds = useMemo(
+    () =>
+      new Set(
+        Object.entries(threadSessions)
+          .filter(([, session]) => session.submitting || session.turns.some((turn) => turn.status === "running" || turn.status === "awaiting_approval"))
+          .map(([threadId]) => threadId),
+      ),
+    [threadSessions],
+  );
+  const currentThreadBusy = Boolean(activeThreadId && workingThreadIds.has(activeThreadId));
+  const canInterrupt = currentThreadBusy && Boolean(interruptibleTurnId);
   const enabledSkills = useMemo(() => skills.filter((skill) => skill.enabled), [skills]);
   const currentSkillDetail = useMemo(
     () => skills.find((skill) => skill.id === skillDetailId) ?? null,
@@ -422,17 +458,66 @@ export function App() {
 
     return branchSummary.branches.filter((branch) => branch.toLowerCase().includes(query));
   }, [branchSearch, branchSummary.branches]);
+  const activeDraft = useMemo(
+    () => getComposerDraft(composerDrafts, activeThreadId),
+    [activeThreadId, composerDrafts],
+  );
+  const input = activeDraft.input;
+  const attachments = activeDraft.attachments;
+  const includeIdeContext = activeDraft.includeIdeContext;
+  const planMode = activeDraft.planMode;
+  const pendingApproval = activeSession?.pendingApproval ?? null;
+  useEffect(() => {
+    const targetThreadId = pendingThreadScrollRef.current;
+
+    if (!activeThreadId || !targetThreadId || targetThreadId !== activeThreadId) {
+      return;
+    }
+
+    const delays = [0, 80, 220];
+    const timers = delays.map((delay, index) =>
+      window.setTimeout(() => {
+        const container = messageAreaRef.current;
+
+        if (!container || pendingThreadScrollRef.current !== targetThreadId) {
+          return;
+        }
+
+        container.scrollTop = container.scrollHeight;
+
+        if (index === delays.length - 1) {
+          pendingThreadScrollRef.current = null;
+        }
+      }, delay),
+    );
+
+    return () => {
+      for (const timer of timers) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, [activeThreadId, orderedItems.length, pendingApproval?.id]);
   const contextSummary = useMemo(
     () =>
       estimateContextUsage({
         modelId: config?.provider.model,
         items: orderedItems,
-        turns,
+        turns: activeSession?.turns ?? [],
         input,
         attachments,
       }),
-    [attachments, config?.provider.model, input, orderedItems, turns],
+    [activeSession?.turns, attachments, config?.provider.model, input, orderedItems],
   );
+  const setActiveDraft = (updater: (draft: ComposerDraftState) => ComposerDraftState) => {
+    setComposerDrafts((current) => {
+      const key = activeThreadId ?? "__draft__";
+      const draft = getComposerDraft(current, activeThreadId);
+      return {
+        ...current,
+        [key]: updater(draft),
+      };
+    });
+  };
 
   useEffect(() => {
     if (!currentSkillDetail) {
@@ -482,6 +567,30 @@ export function App() {
       cancelled = true;
     };
   }, [currentSkillDetail]);
+
+  useEffect(() => {
+    if (!activeProjectId) {
+      setRuntimeWorktrees([]);
+      setRuntimeEnvironments([]);
+      setRuntimeWorkflows([]);
+      return;
+    }
+
+    void Promise.all([
+      window.myAgent.listWorktrees(activeProjectId).then((result) => setRuntimeWorktrees(result.worktrees)),
+      window.myAgent.listEnvironments(activeProjectId).then((result) => setRuntimeEnvironments(result.environments)),
+      window.myAgent.listWorkflows(activeProjectId).then((result) => setRuntimeWorkflows(result.workflows)),
+      window.myAgent.listWorkflowRuns().then((result) => setRuntimeWorkflowRuns(result.runs)),
+    ]).catch(() => undefined);
+  }, [activeProjectId]);
+
+  useEffect(() => {
+    void Promise.all([
+      window.myAgent.listPlugins().then((result) => setRuntimePlugins(result.plugins)),
+      window.myAgent.listMcpMounts().then((result) => setRuntimeMcpMounts(result.mounts)),
+      window.myAgent.listMcpSessions().then((result) => setRuntimeMcpSessions(result.sessions)),
+    ]).catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     setBranchMenuOpen(false);
@@ -640,7 +749,10 @@ export function App() {
       return;
     }
 
-    setAttachments((current) => mergeComposerAttachments(current, pickedFiles));
+    setActiveDraft((draft) => ({
+      ...draft,
+      attachments: mergeComposerAttachments(draft.attachments, pickedFiles),
+    }));
     setComposerMenuOpen(false);
   };
 
@@ -673,7 +785,7 @@ export function App() {
       return;
     }
 
-    const branchName = window.prompt("新建分支名称", "");
+    const branchName = window.prompt("New branch name", "");
 
     if (!branchName) {
       return;
@@ -749,23 +861,20 @@ export function App() {
 
     const composedMessage = buildComposerInput({
       message,
-      attachments,
-      includeIdeContext,
       planMode,
-      project: activeProject,
-      thread: activeThread,
-      enabledSkills,
-      config,
     });
 
-    setInput("");
-    setAttachments([]);
+    setActiveDraft((draft) => ({
+      ...draft,
+      input: "",
+      attachments: [],
+    }));
     setComposerMenuOpen(false);
-    await sendTurn(composedMessage, [], attachments);
+    await sendTurn(composedMessage, [], attachments, includeIdeContext);
   };
 
   const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (loading) {
+    if (currentThreadBusy) {
       return;
     }
 
@@ -791,8 +900,15 @@ export function App() {
       imageFiles.map((file, index) => createPastedImageAttachment(file, index)),
     );
 
-    setAttachments((current) => mergeComposerAttachments(current, pastedAttachments));
+    setActiveDraft((draft) => ({
+      ...draft,
+      attachments: mergeComposerAttachments(draft.attachments, pastedAttachments),
+    }));
   };
+
+  if (bootError) {
+    return <StartupErrorShell message={bootError} onRetry={() => void bootstrap()} />;
+  }
 
   if (!bootstrapped) {
     return <LoadingShell />;
@@ -865,9 +981,9 @@ export function App() {
         </div>
       </header>
       <div className="app-container" ref={appContainerRef}>
-      {/* 闂備浇顕ф鍝ョ礊婵犲偆鐒介柤濮愬€楃壕鑺ユ叏濡寧纭鹃柣銈夌畺閺屻倗绮欑捄銊ょ驳缂傚倸绉村ú顓㈠箖瀹勬壋鏋庨煫鍥ㄦ惄娴尖偓闂備胶纭堕弲娑⑺囬悽绋胯摕闁靛鍎Σ鍫熺箾閸℃ê鐏╅柛娆愮箘缁辨挻鎷呴獮澶告勃闂佺厧鐤囬崺鏍矉閹烘鏅濋柛灞炬皑閿涙粌鈹戦悩璇у伐闁瑰啿绻掓禍绋库攽鐎ｎ偀鎷?*/}
+      {/* 闂傚倷娴囬褎顨ラ崫銉х濠电姴鍋嗛悞浠嬫煠婵劕鈧澹曢懞銉﹀弿婵☆垱瀵х涵楣冩煟閵堝鐣洪柡灞诲€楃划娆戞崉閵娿倗椹崇紓鍌氬€哥粔鏉懨洪銏犵畺鐎瑰嫭澹嬮弸搴ㄧ叓閸ャ劍鎯勫ù灏栧亾闂傚倷鑳剁涵鍫曞疾濞戔懞鍥偨缁嬭儻鎽曢梺闈涱焾閸庮喖危閸喓绠鹃柛鈩兠悘鈺呮煕濞嗘劗绠樼紒杈ㄦ尰閹峰懘鐛径鍛婂媰闂備胶鍘ч悿鍥春閺嶎偆鐭夐柟鐑橆殕閺呮繈鏌涚仦鐐殤闁挎稒绮岄埞鎴︽偐鐠囇冧紣闂佺懓鍟跨换鎺撶缁嬪簱鏀介悗锝庡亐閹?*/}
       <aside className="sidebar">
-        {/* 缂傚倸鍊搁崐鐑芥倿閿曞倶鈧啳绠涘☉妯碱槯濠电偞鍨跺銊╁础濮樿埖鍊甸柣銏犳啞濞呮粍绻涘畝濠侀偗闁哄本绋戦悾婵堚偓锝庝憾濞差厾绱撴担鐟板妞ゃ劌锕璇测槈閵忕姷鐫勯梺绋挎湰绾板秹鎮橀崱娑欌拺缂佸娉曠粻鏌ユ煏閸垽鍏榖 */}
+        {/* 缂傚倸鍊搁崐鎼佸磹閻戣姤鍊块柨鏇炲€堕埀顒€鍟崇粻娑樷槈濡⒈妲繝鐢靛仦閸ㄨ泛顫濋妸鈺佺婵鍩栭崐鐢告煟閵忕姵鍟炴繛鍛矋缁绘稑鐣濇繝渚€鍋楅梺鍝勬湰缁嬫垿鎮惧┑鍫氬亾閿濆簼鎲炬繛宸幘缁辨挻鎷呴悷鏉款潔濡炪們鍔岄敃顏勵嚕鐠囨祴妲堥柕蹇曞Х閻嫰姊虹粙鎸庢拱缁炬澘绉归幃姗€宕卞☉娆屾嫼缂備礁顑堝▔鏇犵不閺屻儲鐓忛柛顐犲灲閸忔 */}
         <div className="sidebar__section sidebar__section--tabs">
           <nav className="sidebar__nav">
             <NavButton
@@ -897,24 +1013,26 @@ export function App() {
           </nav>
         </div>
 
-        {/* 缂傚倸鍊搁崐鐑芥倿閿曞倶鈧啳绠涘☉妯碱槯濠电偞鍨舵穱鐑樻叏閹惰姤鐓冮柛婵嗗閺嗘洘绻涘畝濠侀偗闁哄本绋戦悾婵堚偓锝庝憾濞差厾绱撴担鐟板闁靛棗绐巓ject闂備浇顕у锕傦綖婢舵劕绠栭柛顐ｆ礀绾惧潡鏌熷▓鍨灓缂佲偓婵犲洦鐓涢柛鎰╁妿婢ф盯鏌?*/}
+        {/* 缂傚倸鍊搁崐鎼佸磹閻戣姤鍊块柨鏇炲€堕埀顒€鍟崇粻娑樷槈濡⒈妲繝鐢靛仦閸ㄨ埖绌遍悜妯诲弿闁规儼濮ら悡鍐煕濠靛棗顏╅柡鍡樻礃缁绘稑鐣濇繝渚€鍋楅梺鍝勬湰缁嬫垿鎮惧┑鍫氬亾閿濆簼鎲炬繛宸幘缁辨挻鎷呴悷鏉款潔闂侀潧妫楃粣宸搄ect闂傚倷娴囬褍顫濋敃鍌︾稏濠㈣埖鍔曠粻鏍煕椤愶絾绀€缁炬儳娼￠弻鐔封枔閸喗鐏撶紓浣插亾濠电姴娲﹂悡娑㈡煕閹扳晛濡垮褎鐩弻?*/}
         <div className="sidebar__section sidebar__section--projects">
           <ThreadsPanel
             projects={projects}
             activeProjectId={activeProjectId}
             threads={orderedThreads}
             activeThreadId={activeThreadId}
-            workingThreadId={canInterrupt ? activeThreadId : undefined}
+            workingThreadIds={workingThreadIds}
             search={threadSearch}
             onSearchChange={setThreadSearch}
             onSelectThread={handleSelectThread}
             onCreateThread={handleCreateThread}
             onCreateProject={handleCreateProject}
-            onRevealProject={(projectPath) => window.myAgent.revealProjectPath(projectPath).catch(() => null)}
+            onRevealProject={async (projectPath) => {
+              await window.myAgent.revealProjectPath(projectPath).catch(() => null);
+            }}
           />
         </div>
 
-        {/* 缂傚倸鍊搁崐鐑芥倿閿曞倶鈧啳绠涘☉妯碱槯濠电偞鍨跺銊х不閺傛５褰掓晲閸喆鈧啯绻涘畝濠侀偗闁哄本绋戦悾婵堚偓锝庝憾濞差厾绱撴担鐟板妞ゃ劌锕獮鍐喆閸曨剙顎撶紓浣割儏缁ㄩ亶骞愰崘顔解拺?*/}
+        {/* 缂傚倸鍊搁崐鎼佸磹閻戣姤鍊块柨鏇炲€堕埀顒€鍟崇粻娑樷槈濡⒈妲繝鐢靛仦閸ㄨ泛顫濋妸褏涓嶉柡鍌涳紩瑜版帗鏅查柛顐ゅ枂閳ь剙鍟换娑樼暆婵犱線鍋楅梺鍝勬湰缁嬫垿鎮惧┑鍫氬亾閿濆簼鎲炬繛宸幘缁辨挻鎷呴悷鏉款潔濡炪們鍔岄敃顏堢嵁閸愵亝鍠嗛柛鏇ㄥ墮椤庢挾绱撴担鍓插剰缂併劑浜堕獮鎰板礃椤旇В鎷?*/}
         <div className="sidebar__section sidebar__section--footer">
           <NavButton
             icon={<Settings size={18} />}
@@ -932,31 +1050,27 @@ export function App() {
         aria-label="Resize sidebar"
       />
 
-      {/* 濠电姷鏁搁崑鐐哄垂閸洖绠插〒姘ｅ亾妞ゃ垺淇洪ˇ鍦偓瑙勬处閸撴盯鍩€椤掑倹鏆╃痪顓炵埣瀹曟垿骞樼拠鍙夊祶濡炪倖鎸鹃崰搴♀枔瀹€鍕厽?*/}
+      {/* 婵犵數濮烽弫鎼佸磻閻愬搫鍨傞柛顐ｆ礀缁犳彃銆掑锝呬壕濡炪們鍨烘穱娲囬崷顓涘亾鐟欏嫭澶勯柛鎾寸洴閸┾偓妞ゆ帒鍊归弳鈺冪棯椤撶偟鍩ｇ€规洘鍨块獮妯兼嫚閸欏绁舵俊鐐€栭幐楣冨窗鎼粹檧鏋旂€光偓閸曨剛鍘?*/}
       <main className="main-content">
         {activeView === "threads" ? (
           <>
-            {/* 濠电姷顣槐鏇㈠磻閹达箑纾归柡鍥ュ灪閸嬪鈹戦崒婊庣劸缁炬儳娼￠弻鐔虹磼閵忕姵鐏堥梺鍛婂姀閸嬫捇姊绘担瑙勫仩闁稿孩妞藉畷婊堟晝閸屾碍杈堝銈嗙墱閸嬬偤鎮?*/}
+            {/* 婵犵數濮烽。顔炬閺囥垹纾婚柟杈剧畱绾惧綊鏌￠崶銉ョ仾闁稿顦埞鎴﹀磼濠婂海鍔哥紒鐐劤濞硷繝寮婚悢铏圭＜闁靛繒濮甸悘鍫ユ⒑閸涘﹤濮€闁稿鎹囧缁樻媴鐟欏嫬浠╅梺绋垮濡炶棄鐣峰鍫熸櫇闁稿本纰嶆潏鍫濐渻閵堝棛澧遍柛瀣仱閹?*/}
             <header className="main-header">
               <div className="main-header__title">
                 <h1>{activeThread?.title ?? "New Thread"}</h1>
                 <span className="main-header__project">{activeProject?.name ?? "Current Project"}</span>
-                <span className="main-header__meta-dot" aria-hidden="true">•••</span>
               </div>
             </header>
 
-            {/* 婵犵數濮烽弫鎼佸磻閻愬搫鍨傞柣銏犳啞閸嬪鈹戦悩鎻掓殭妞ゆ洟浜堕弻娑樷槈濞嗘劗绋囩紓浣插亾闁糕剝眉缁诲棝鏌曢崼婵囧櫣妞ゅ繈鍎甸弻?*/}
-            <div className="message-area">
+            {/* 濠电姷鏁告慨鐑藉极閹间礁纾婚柣鎰惈閸ㄥ倿鏌ｉ姀鐘冲暈闁稿顑呴埞鎴︽偐閹绘帗娈銈嗘礋娴滃爼寮诲☉妯锋婵炲棙鍔楃粙鍥╃磽娴ｆ彃浜鹃梺绯曞墲鐪夌紒璇叉閺屾洟宕煎┑鍥ф濡炪倕绻堥崕鐢稿蓟?*/}
+            <div className="message-area" ref={messageAreaRef}>
               {orderedItems.length === 0 ? (
-                <EmptyState onStartConversation={() => {
-                  const el = document.querySelector<HTMLTextAreaElement>(".composer-input");
-                  el?.focus();
-                }} />
+                <EmptyState />
               ) : (
                 <ConversationFeed entries={conversationEntries} threadId={activeThreadId} />
               )}
 
-              {/* 闂傚倷娴囬褎顨ラ幖浣稿偍婵犲﹤鐗嗙粈鍫熺節闂堟稒宸濋柣婵嗙埣閺岀喖鎮滃Ο鐑╂嫻闁诲孩纰嶅畝绋款潖濞差亜鍨傛い鏇炴噹閸撳啿鈹戦悩顐壕?*/}
+              {/* 闂傚倸鍊峰ù鍥敋瑜庨〃銉╁箹娴ｇ鍋嶅┑鐘诧工閻楀棛绮堥崼鐔虹瘈闂傚牊绋掑婵嬫煟濠靛棛鍩ｉ柡宀€鍠栭幃婊兾熼悜鈺傚闂佽瀛╃喊宥呯暆缁嬫娼栨繛宸簻閸ㄥ倹銇勯弴鐐村櫣闁告挸鍟块埞鎴︽偐椤愵澀澹?*/}
               {pendingApproval && (
                 <ApprovalRequest
                   approval={pendingApproval}
@@ -966,10 +1080,15 @@ export function App() {
               )}
             </div>
 
-            {/* 闂傚倷绀佸﹢閬嶅储瑜旈幃娲Ω閵夊啯妞介幃銏ゆ偂鎼达綇绱甸梺璇插缁嬫帟鎽紓鍌氱Т濞差參寮婚悢鐓庣畾鐟滃秹寮虫潏鈹惧亾濞堝灝鏋熷┑鐐诧躬瀵?*/}
+            {/* 闂傚倸鍊风粈浣革耿闁秴鍌ㄧ憸鏃堝箖濞差亜惟闁靛鍟浠嬪箖閵忋倖鍋傞幖杈剧秶缁辩敻姊虹拠鎻掝劉缂佸甯熼幗顐ょ磽閸屾氨孝婵炲樊鍙冨濠氭偄閻撳海鐣鹃悷婊冪Ч瀵櫕娼忛埞鎯т壕婵炲牆鐏濋弸鐔封攽閻愯韬€?*/}
             <ComposerBar
               input={input}
-              onChange={setInput}
+              onChange={(value) =>
+                setActiveDraft((draft) => ({
+                  ...draft,
+                  input: value,
+                }))
+              }
               onSubmit={submitTurn}
               onInterrupt={() => interruptibleTurnId && void interruptTurn(interruptibleTurnId)}
               onKeyDown={handleComposerKeyDown}
@@ -978,7 +1097,10 @@ export function App() {
               skills={enabledSkills}
               onAddFiles={() => void handlePickFiles()}
               onRemoveAttachment={(path) =>
-                setAttachments((current) => current.filter((attachment) => attachment.path !== path))
+                setActiveDraft((draft) => ({
+                  ...draft,
+                  attachments: draft.attachments.filter((attachment) => attachment.path !== path),
+                }))
               }
               composerMenuOpen={composerMenuOpen}
               onToggleComposerMenu={() => {
@@ -988,9 +1110,19 @@ export function App() {
               }}
               composerMenuRef={composerMenuRef}
               includeIdeContext={includeIdeContext}
-              onToggleIdeContext={() => setIncludeIdeContext((current) => !current)}
+              onToggleIdeContext={() =>
+                setActiveDraft((draft) => ({
+                  ...draft,
+                  includeIdeContext: !draft.includeIdeContext,
+                }))
+              }
               planMode={planMode}
-              onTogglePlanMode={() => setPlanMode((current) => !current)}
+              onTogglePlanMode={() =>
+                setActiveDraft((draft) => ({
+                  ...draft,
+                  planMode: !draft.planMode,
+                }))
+              }
               modelMenuOpen={modelMenuOpen}
               onToggleModelMenu={() => {
                 setModelMenuOpen((current) => !current);
@@ -1033,7 +1165,7 @@ export function App() {
               onSelectBranch={(branch) => void handleSwitchBranch(branch)}
               onCreateBranch={() => void handleCreateBranch()}
               contextSummary={contextSummary}
-              loading={loading}
+              loading={currentThreadBusy}
               canInterrupt={canInterrupt}
             />
           </>
@@ -1045,9 +1177,34 @@ export function App() {
             onSelectSkill={setSkillDetailId}
           />
         ) : activeView === "plugins" ? (
-          <PlaceholderPanel title="Plugins" description="Plugin management coming soon." />
+          <RuntimePluginsPanel
+            plugins={runtimePlugins}
+            mcpMounts={runtimeMcpMounts}
+            mcpSessions={runtimeMcpSessions}
+            onRefreshMount={(mountId) =>
+              window.myAgent.refreshMcpMount(mountId).then(() =>
+                window.myAgent.listMcpSessions().then((result) => setRuntimeMcpSessions(result.sessions)),
+              )
+            }
+          />
         ) : activeView === "automation" ? (
-          <PlaceholderPanel title="Automation" description="Automation workflows coming soon." />
+          <RuntimeAutomationPanel
+            projectId={activeProjectId}
+            workflows={runtimeWorkflows}
+            runs={runtimeWorkflowRuns}
+            onRunWorkflow={(workflowId) =>
+              activeProjectId
+                ? window.myAgent.runWorkflow({ workflowId, projectId: activeProjectId }).then(() =>
+                    window.myAgent.listWorkflowRuns().then((result) => setRuntimeWorkflowRuns(result.runs)),
+                  )
+                : Promise.resolve(null)
+            }
+            onResumeWorkflow={(runId) =>
+              window.myAgent.resumeWorkflow(runId).then(() =>
+                window.myAgent.listWorkflowRuns().then((result) => setRuntimeWorkflowRuns(result.runs)),
+              )
+            }
+          />
         ) : (
           <SettingsPanel
             project={activeProject}
@@ -1058,6 +1215,8 @@ export function App() {
             providerModelsLoading={providerModelsLoading}
             onTestProvider={testProvider}
             onRefreshProviderModels={refreshProviderModels}
+            worktrees={runtimeWorktrees}
+            environments={runtimeEnvironments}
             onSaveConfig={() =>
               void Promise.all([
                 updateConfig({
@@ -1093,7 +1252,7 @@ export function App() {
         </main>
       </div>
 
-      {/* 闂傚倸鍊烽懗鍫曞箠閹剧粯鍊堕柛顐犲劚绾惧鏌熼崜褏甯涢柣鎾跺█閺屾盯骞囬鐘仦闂佺顑嗛幑鍥箖閵堝棙濯撮柛娑橈功閺夊綊姊婚崒娆愮グ妞ゆ洘鐗犲畷瑙勫閺夋垹鐤囬柟鍏兼儗閻撳牓寮€ｎ偁浜滈柡鍐ㄥ€告禍楣冩倵濮橆厾顣茬紒缁樼箞濡啫鈽夊▎鎴欏亹闂備浇銆€閸?*/}
+      {/* 闂傚倸鍊搁崐鐑芥嚄閸洖绠犻柟鍓х帛閸婂爼鏌涢鐘插姎缁炬儳顭烽弻鐔煎礈瑜忕敮娑㈡煟閹捐泛鈻堥柡灞剧洴楠炲洭顢橀悩顔间沪闂備胶顭堥鍡涘箲閸ヮ剙绠栭柕鍫濇婵挳鏌涘☉姗堝姛闁哄缍婂濠氬磼濞嗘劗銈板銈嗘礃閻楃姴鐣风憴鍕嚤闁哄鍨归悿鍥煙閸忓吋鍎楅柣鎾崇墦瀵偆鈧綆鍋佹禍婊堟煛閸愩劌鈧憡绂嶆ィ鍐╁€垫慨姗嗗幘椤ｈ尙绱掔紒妯肩疄婵☆偄鍟埥澶娾枎閹存瑥浜归梻鍌欐祰閵嗏偓闁?*/}
       <Dialog.Root open={Boolean(currentSkillDetail)} onOpenChange={(open) => !open && setSkillDetailId(null)}>
         <Dialog.Portal>
           <Dialog.Overlay className="dialog-overlay" />
@@ -1135,7 +1294,7 @@ export function App() {
                       onClick={() =>
                         currentSkillDetail
                           ? window.myAgent.revealSkillPath(currentSkillDetail.path).catch(() => null)
-                          : Promise.resolve(null)
+                          : Promise.resolve(undefined)
                       }
                     >
                       <FolderOpen size={18} />
@@ -1191,7 +1350,7 @@ function ThreadsPanel({
   activeProjectId,
   threads,
   activeThreadId,
-  workingThreadId,
+  workingThreadIds,
   search,
   onSearchChange,
   onSelectThread,
@@ -1203,7 +1362,7 @@ function ThreadsPanel({
   activeProjectId?: string;
   threads: import("@my-agent/protocol").ThreadRecord[];
   activeThreadId?: string;
-  workingThreadId?: string;
+  workingThreadIds: Set<string>;
   search: string;
   onSearchChange: (value: string) => void;
   onSelectThread: (threadId: string) => Promise<void>;
@@ -1217,6 +1376,7 @@ function ThreadsPanel({
   const [searchExpanded, setSearchExpanded] = useState(Boolean(search.trim()));
   const [openProjectMenuId, setOpenProjectMenuId] = useState<string | null>(null);
   const projectMenuRef = useRef<HTMLDivElement | null>(null);
+  const searchContainerRef = useRef<HTMLDivElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -1237,12 +1397,6 @@ function ThreadsPanel({
   }, [projects]);
 
   useEffect(() => {
-    if (search.trim()) {
-      setSearchExpanded(true);
-    }
-  }, [search]);
-
-  useEffect(() => {
     if (!searchExpanded) {
       return;
     }
@@ -1252,6 +1406,24 @@ function ThreadsPanel({
       searchInputRef.current?.select();
     });
   }, [searchExpanded]);
+
+  useEffect(() => {
+    if (!searchExpanded) {
+      return;
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+
+      if (searchContainerRef.current && !searchContainerRef.current.contains(target)) {
+        onSearchChange("");
+        setSearchExpanded(false);
+      }
+    };
+
+    window.addEventListener("pointerdown", handlePointerDown);
+    return () => window.removeEventListener("pointerdown", handlePointerDown);
+  }, [searchExpanded, onSearchChange]);
 
   useEffect(() => {
     if (!openProjectMenuId) {
@@ -1292,8 +1464,13 @@ function ThreadsPanel({
     );
   };
 
+  const closeSearch = () => {
+    onSearchChange("");
+    setSearchExpanded(false);
+  };
+
   return (
-    <div className="sidebar-secondary__content thread-sidebar">
+    <div className="sidebar-secondary__content thread-sidebar" ref={searchContainerRef}>
       <div className="thread-sidebar__header">
         <div className="thread-sidebar__title-row">
           <span className="thread-sidebar__title">Projects</span>
@@ -1301,8 +1478,8 @@ function ThreadsPanel({
             <button
               className={`thread-sidebar__action ${searchExpanded ? "thread-sidebar__action--active" : ""}`}
               onClick={() => {
-                if (searchExpanded && !search.trim()) {
-                  setSearchExpanded(false);
+                if (searchExpanded) {
+                  closeSearch();
                   return;
                 }
 
@@ -1332,9 +1509,10 @@ function ThreadsPanel({
               placeholder="Search threads"
               value={search}
               onChange={(e) => onSearchChange(e.target.value)}
-              onBlur={() => {
-                if (!search.trim()) {
-                  setSearchExpanded(false);
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  closeSearch();
                 }
               }}
             />
@@ -1430,7 +1608,7 @@ function ThreadsPanel({
                           >
                             <div className="thread-item__content thread-item__content--compact">
                               <div className="thread-item__title">
-                                {thread.id === workingThreadId && <span className="thread-item__spinner" aria-hidden="true" />}
+                                {workingThreadIds.has(thread.id) && <span className="thread-item__spinner" aria-hidden="true" />}
                                 <span>{thread.title}</span>
                               </div>
                               <div className="thread-item__age">{formatRelativeTime(thread.updatedAt)}</div>
@@ -1505,6 +1683,116 @@ function SkillsPanel({
   );
 }
 
+function RuntimePluginsPanel({
+  plugins,
+  mcpMounts,
+  mcpSessions,
+  onRefreshMount,
+}: {
+  plugins: PluginRecord[];
+  mcpMounts: McpMountRecord[];
+  mcpSessions: McpSessionRecord[];
+  onRefreshMount: (mountId: string) => Promise<unknown>;
+}) {
+  return (
+    <div className="skills-page">
+      <div className="skills-page__header">
+        <h2 className="skills-page__title">Runtime Surfaces</h2>
+        <span className="skills-page__count">{plugins.length} plugins · {mcpMounts.length} MCP mounts</span>
+      </div>
+      <div className="skills-grid">
+        {plugins.map((plugin) => (
+          <div key={plugin.id} className="skill-card">
+            <div className="skill-card__header">
+              <div>
+                <h3>{plugin.name}</h3>
+                <span>{plugin.version}</span>
+              </div>
+              <span className={`skill-card__status ${plugin.enabled ? "skill-card__status--enabled" : ""}`}>{plugin.enabled ? "Enabled" : "Disabled"}</span>
+            </div>
+            <p>{plugin.path}</p>
+            <pre>{plugin.capabilities.join(", ") || "No declared capabilities"}</pre>
+          </div>
+        ))}
+        {mcpMounts.map((mount) => (
+          <div key={mount.id} className="skill-card">
+            <div className="skill-card__header">
+              <div>
+                <h3>{mount.name}</h3>
+                <span>{mount.transport.toUpperCase()}</span>
+              </div>
+              <span className={`skill-card__status ${mount.enabled ? "skill-card__status--enabled" : ""}`}>{mount.enabled ? "Enabled" : "Disabled"}</span>
+            </div>
+            <p>{mount.url ?? mount.command ?? "No target configured"}</p>
+            <pre>
+              Session: {mcpSessions.find((session) => session.mountId === mount.id)?.status ?? "not connected"}
+            </pre>
+            <button className="button" onClick={() => void onRefreshMount(mount.id)}>
+              Refresh Mount
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RuntimeAutomationPanel({
+  projectId,
+  workflows,
+  runs,
+  onRunWorkflow,
+  onResumeWorkflow,
+}: {
+  projectId?: string;
+  workflows: WorkflowRecord[];
+  runs: WorkflowRunRecord[];
+  onRunWorkflow: (workflowId: string) => Promise<unknown>;
+  onResumeWorkflow: (runId: string) => Promise<unknown>;
+}) {
+  return (
+    <div className="skills-page">
+      <div className="skills-page__header">
+        <h2 className="skills-page__title">Workflows</h2>
+        <span className="skills-page__count">{workflows.length} available</span>
+      </div>
+      <div className="skills-grid">
+        {workflows.map((workflow) => (
+          <div key={workflow.id} className="skill-card">
+            <div className="skill-card__header">
+              <div>
+                <h3>{workflow.name}</h3>
+                <span>{workflow.source}</span>
+              </div>
+            </div>
+            <p>{workflow.description}</p>
+            <pre>{workflow.steps.map((step) => `${step.id}: ${step.type}`).join("\n")}</pre>
+            <button className="button" disabled={!projectId} onClick={() => void onRunWorkflow(workflow.id)}>
+              Run Workflow
+            </button>
+            <div className="settings-panel__message">
+              Recent runs: {runs.filter((run) => run.workflowId === workflow.id).length}
+            </div>
+            {runs
+              .filter((run) => run.workflowId === workflow.id)
+              .slice(0, 2)
+              .map((run) => (
+                <div key={run.id} className="settings-panel__message">
+                  {run.status} · {run.id}
+                  {run.status === "running" || run.status === "failed" ? (
+                    <button className="button button--small" onClick={() => void onResumeWorkflow(run.id)}>
+                      Resume
+                    </button>
+                  ) : null}
+                </div>
+              ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function SettingsPanel({
   project,
   providerForm,
@@ -1512,6 +1800,8 @@ function SettingsPanel({
   providerTestMessage,
   providerModels,
   providerModelsLoading,
+  worktrees,
+  environments,
   onTestProvider,
   onRefreshProviderModels,
   onSaveConfig,
@@ -1523,6 +1813,8 @@ function SettingsPanel({
   providerTestMessage?: string;
   providerModels: ProviderModelRecord[];
   providerModelsLoading: boolean;
+  worktrees: WorktreeRecord[];
+  environments: EnvironmentRecord[];
   onTestProvider: () => Promise<void>;
   onRefreshProviderModels: () => Promise<void>;
   onSaveConfig: () => void;
@@ -1640,6 +1932,12 @@ function SettingsPanel({
         {providerTestMessage && (
           <div className="settings-panel__message">{providerTestMessage}</div>
         )}
+
+        <div className="settings-panel__section">
+          <h3>Runtime Diagnostics</h3>
+          <div className="settings-panel__message">Worktrees: {worktrees.length}</div>
+          <div className="settings-panel__message">Environments: {environments.length}</div>
+        </div>
       </div>
     </div>
   );
@@ -1658,7 +1956,7 @@ function PlaceholderPanel({ title, description }: { title: string; description: 
   );
 }
 
-function EmptyState({ onStartConversation }: { onStartConversation: () => void }) {
+function EmptyState() {
   return (
     <div className="empty-state">
       <div className="empty-state__icon">
@@ -1666,20 +1964,28 @@ function EmptyState({ onStartConversation }: { onStartConversation: () => void }
       </div>
       <h2>Start a conversation</h2>
       <p>Ask anything to begin exploring your workspace</p>
-      <div className="empty-state__prompts">
-        {EMPTY_PROMPTS.map((entry) => (
-          <button key={entry.label} className="prompt-card" onClick={onStartConversation}>
-            <span>{entry.label}</span>
-            <small>{entry.prompt}</small>
-          </button>
-        ))}
-      </div>
     </div>
   );
 }
 
 function ConversationFeed({ entries, threadId }: { entries: ConversationEntry[]; threadId?: string }) {
   const [expandedThoughts, setExpandedThoughts] = useState<Record<string, boolean>>({});
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const [attachmentPreview, setAttachmentPreview] = useState<UserAttachmentSummary | null>(null);
+
+  useEffect(() => {
+    const hasIncompleteThought = entries.some((entry) => entry.kind === "thought" && !entry.completed);
+
+    if (!hasIncompleteThought) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, [entries]);
 
   useEffect(() => {
     setExpandedThoughts((current) => {
@@ -1700,13 +2006,72 @@ function ConversationFeed({ entries, threadId }: { entries: ConversationEntry[];
   }, [entries]);
 
   return (
-    <div className="conversation-feed">
-      {entries.map((entry) => {
+    <>
+      <div className="conversation-feed">
+        {entries.map((entry) => {
         if (entry.kind === "user") {
+          const userText = getUserDisplayText(entry.item);
+          const attachments = getUserAttachmentSummaries(entry.item);
+
           return (
             <div key={entry.id} className="conversation-entry conversation-entry--user">
-              <div className="user-bubble">
-                <pre className="user-bubble__text">{getUserDisplayText(entry.item)}</pre>
+              <div className={`user-bubble ${!userText && attachments.length > 0 ? "user-bubble--attachments-only" : ""}`}>
+                {userText ? <pre className="user-bubble__text">{userText}</pre> : null}
+                {attachments.length > 0 ? (
+                  <div className="user-bubble__attachments">
+                    {attachments.map((attachment) => {
+                      const canPreviewImage = attachment.kind === "image" && Boolean(attachment.previewSrc);
+
+                      if (canPreviewImage) {
+                        return (
+                          <button
+                            key={`${entry.id}-${attachment.path ?? attachment.name}`}
+                            type="button"
+                            className="user-attachment-card user-attachment-card--interactive"
+                            onClick={() => setAttachmentPreview(attachment)}
+                            aria-label={`Preview ${attachment.name}`}
+                            title={attachment.path ?? attachment.name}
+                          >
+                            <img
+                              className="user-attachment-card__thumb"
+                              src={attachment.previewSrc}
+                              alt={attachment.name}
+                              loading="lazy"
+                            />
+                            <span className="user-attachment-card__body">
+                              <span className="user-attachment-card__name">{attachment.name}</span>
+                              <span className="user-attachment-card__meta">
+                                {formatAttachmentKindLabel(attachment.kind)}
+                                {attachment.mediaType ? ` · ${attachment.mediaType}` : ""}
+                                {attachment.truncated ? " · Truncated" : ""}
+                              </span>
+                            </span>
+                          </button>
+                        );
+                      }
+
+                      return (
+                        <div
+                          key={`${entry.id}-${attachment.path ?? attachment.name}`}
+                          className="user-attachment-card"
+                          title={attachment.path ?? attachment.name}
+                        >
+                          <span className="user-attachment-card__icon" aria-hidden="true">
+                            {attachment.kind === "image" ? <ImagePlus size={14} /> : attachment.kind === "text" ? <FileText size={14} /> : <Box size={14} />}
+                          </span>
+                          <span className="user-attachment-card__body">
+                            <span className="user-attachment-card__name">{attachment.name}</span>
+                            <span className="user-attachment-card__meta">
+                              {formatAttachmentKindLabel(attachment.kind)}
+                              {attachment.mediaType ? ` · ${attachment.mediaType}` : ""}
+                              {attachment.truncated ? " · Truncated" : ""}
+                            </span>
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
               </div>
             </div>
           );
@@ -1714,6 +2079,7 @@ function ConversationFeed({ entries, threadId }: { entries: ConversationEntry[];
 
         if (entry.kind === "thought") {
           const expanded = expandedThoughts[entry.id] ?? !entry.completed;
+          const elapsedMs = entry.completed ? entry.durationMs : Math.max(0, nowMs - entry.startedAtMs);
 
           return (
             <section key={entry.id} className={`thought-group ${expanded ? "thought-group--expanded" : ""}`}>
@@ -1728,9 +2094,7 @@ function ConversationFeed({ entries, threadId }: { entries: ConversationEntry[];
                 aria-expanded={expanded}
               >
                 <span className="thought-group__rule" />
-                <span className="thought-group__summary">
-                  {entry.completed ? `Processed ${formatElapsedTime(entry.durationMs)}` : "Thinking"}
-                </span>
+                <span className="thought-group__summary">{`Processed ${formatElapsedTime(elapsedMs)}`}</span>
                 <ChevronRight className={`thought-group__chevron ${expanded ? "thought-group__chevron--open" : ""}`} size={16} />
                 <span className="thought-group__rule" />
               </button>
@@ -1775,8 +2139,40 @@ function ConversationFeed({ entries, threadId }: { entries: ConversationEntry[];
             <pre className="system-note__text">{getItemDisplayText(entry.item)}</pre>
           </section>
         );
-      })}
-    </div>
+        })}
+      </div>
+      <Dialog.Root open={Boolean(attachmentPreview)} onOpenChange={(open) => !open && setAttachmentPreview(null)}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="dialog-overlay" />
+          <Dialog.Content className="dialog-content image-preview-dialog">
+            <div className="image-preview-dialog__header">
+              <div className="image-preview-dialog__meta">
+                <Dialog.Title className="dialog-title image-preview-dialog__title">
+                  {attachmentPreview?.name ?? "Image preview"}
+                </Dialog.Title>
+                {attachmentPreview?.mediaType ? (
+                  <Dialog.Description className="dialog-description image-preview-dialog__description">
+                    {attachmentPreview.mediaType}
+                  </Dialog.Description>
+                ) : null}
+              </div>
+              <Dialog.Close className="image-preview-dialog__close" aria-label="Close image preview">
+                <X size={18} />
+              </Dialog.Close>
+            </div>
+            <div className="image-preview-dialog__viewport">
+              {attachmentPreview?.previewSrc ? (
+                <img
+                  className="image-preview-dialog__image"
+                  src={attachmentPreview.previewSrc}
+                  alt={attachmentPreview.name}
+                />
+              ) : null}
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+    </>
   );
 }
 
@@ -2475,7 +2871,7 @@ function ComposerBar({
                 <div className="composer-popover composer-popover--status">
                   <div className="composer-popover__header">
                     <span>Sandbox Mode</span>
-                    <small>按当前 thread 生效</small>
+                    <small>Applies to the current thread</small>
                   </div>
                   <div className="composer-option-list">
                     {SANDBOX_MODE_OPTIONS.map((option) => (
@@ -2504,7 +2900,7 @@ function ComposerBar({
                 disabled={branchSummary.loading || loading}
               >
                 <GitBranch size={13} />
-                <span>{branchSummary.currentBranch ?? "新建分支"}</span>
+                <span>{branchSummary.currentBranch ?? "New branch"}</span>
                 <ChevronDown size={12} />
               </button>
 
@@ -2516,13 +2912,13 @@ function ComposerBar({
                       type="text"
                       value={branchSearch}
                       onChange={(event) => onBranchSearchChange(event.target.value)}
-                      placeholder="搜索分支"
+                      placeholder="Search branches"
                     />
                   </div>
 
                   <div className="composer-popover__header">
-                    <span>分支</span>
-                    <small>{branchSummary.loading ? "读取中..." : `${branchSummary.branches.length} 个本地分支`}</small>
+                    <span>Branches</span>
+                    <small>{branchSummary.loading ? "Loading..." : `${branchSummary.branches.length} local branches`}</small>
                   </div>
 
                   {branchSummary.error ? (
@@ -2537,7 +2933,7 @@ function ComposerBar({
                         >
                           <span className="composer-option__body composer-option__body--branch">
                             <strong>{branch}</strong>
-                            {branch === branchSummary.currentBranch && <small>当前分支</small>}
+                            {branch === branchSummary.currentBranch && <small>Current branch</small>}
                           </span>
                           {branch === branchSummary.currentBranch && <Check size={14} />}
                         </button>
@@ -2545,13 +2941,13 @@ function ComposerBar({
                     </div>
                   ) : (
                     <div className="composer-popover__empty">
-                      {branchSummary.isGitRepo ? "没有匹配的本地分支。" : "当前项目还不是一个 Git 仓库。"}
+                      {branchSummary.isGitRepo ? "No matching local branches." : "The current project is not a Git repository yet."}
                     </div>
                   )}
 
                   <button className="composer-branch-create" onClick={onCreateBranch}>
                     <Plus size={14} />
-                    <span>创建并检出新分支...</span>
+                    <span>Create and switch to a new branch...</span>
                   </button>
                 </div>
               )}
@@ -2567,14 +2963,16 @@ function ComposerBar({
                   "--context-angle": `${Math.max(8, Math.round(contextSummary.usedRatio * 360))}deg`,
                 } as CSSProperties
               }
-              aria-label="显示上下文使用详情"
-              title="显示上下文使用详情"
+              aria-label="Show context usage details"
+              title="Show context usage details"
             />
             <div className="composer-context-card__tooltip" role="status">
-              <strong>背景信息窗口</strong>
-              <span>{Math.round(contextSummary.usedRatio * 100)}% 已用（剩余 {Math.round((1 - contextSummary.usedRatio) * 100)}%）</span>
+              <strong>Context window</strong>
               <span>
-                已用 {formatCompactTokens(contextSummary.usedTokens)} 标记，共 {formatCompactTokens(contextSummary.totalTokens)}
+                {Math.round(contextSummary.usedRatio * 100)}% used ({Math.round((1 - contextSummary.usedRatio) * 100)}% remaining)
+              </span>
+              <span>
+                {formatCompactTokens(contextSummary.usedTokens)} used out of {formatCompactTokens(contextSummary.totalTokens)} total
               </span>
             </div>
           </div>
@@ -2591,6 +2989,25 @@ function LoadingShell() {
       <div className="app-container app-container--loading">
         <aside className="sidebar sidebar--loading" />
         <main className="main-content main-content--loading" />
+      </div>
+      <div className="startup-state">
+        <div className="startup-state__title">Starting my-agent</div>
+        <div className="startup-state__body">Loading the desktop shell and connecting to the local harness...</div>
+      </div>
+    </div>
+  );
+}
+
+function StartupErrorShell({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div className="app-shell app-shell--loading">
+      <header className="app-toolbar" />
+      <div className="startup-state startup-state--error">
+        <div className="startup-state__title">Unable to start my-agent</div>
+        <div className="startup-state__body">{message}</div>
+        <button type="button" className="button" onClick={onRetry}>
+          Retry
+        </button>
       </div>
     </div>
   );
@@ -2618,6 +3035,7 @@ function buildConversationEntries(items: ItemRecord[]): ConversationEntry[] {
         items: thoughtItems,
         completed,
         durationMs: Math.max(0, new Date(last.updatedAt).getTime() - new Date(first.createdAt).getTime()),
+        startedAtMs: new Date(first.createdAt).getTime(),
       });
     }
 
@@ -2695,6 +3113,90 @@ function getUserDisplayText(item: ItemRecord) {
   return item.body?.trim() || item.title?.trim() || "";
 }
 
+function getUserAttachmentSummaries(item: ItemRecord): UserAttachmentSummary[] {
+  const rawAttachments = item.metadata?.attachments;
+
+  if (!Array.isArray(rawAttachments)) {
+    return [];
+  }
+
+  return rawAttachments.flatMap((attachment) => {
+    if (!attachment || typeof attachment !== "object") {
+      return [];
+    }
+
+    const record = attachment as Record<string, unknown>;
+    const name = typeof record.name === "string" ? record.name : null;
+    const kind = record.kind;
+
+    if (!name || (kind !== "image" && kind !== "text" && kind !== "binary")) {
+      return [];
+    }
+
+    return [
+      {
+        name,
+        kind,
+        path: typeof record.path === "string" ? record.path : undefined,
+        mediaType: typeof record.mediaType === "string" ? record.mediaType : undefined,
+        truncated: record.truncated === true,
+        previewSrc: resolveAttachmentPreviewSrc(
+          kind,
+          typeof record.path === "string" ? record.path : undefined,
+          typeof record.imageDataUrl === "string" ? record.imageDataUrl : undefined,
+        ),
+      },
+    ];
+  });
+}
+
+function resolveAttachmentPreviewSrc(
+  kind: "image" | "text" | "binary",
+  path?: string,
+  imageDataUrl?: string,
+) {
+  if (kind !== "image") {
+    return undefined;
+  }
+
+  if (imageDataUrl) {
+    return imageDataUrl;
+  }
+
+  if (!path || path.startsWith("clipboard://")) {
+    return undefined;
+  }
+
+  return toFileUrl(path);
+}
+
+function toFileUrl(path: string) {
+  const normalized = path.replace(/\\/g, "/");
+
+  if (/^[a-zA-Z]:\//.test(normalized)) {
+    return encodeURI(`file:///${normalized}`);
+  }
+
+  if (normalized.startsWith("//")) {
+    return encodeURI(`file:${normalized}`);
+  }
+
+  return encodeURI(`file://${normalized}`);
+}
+
+function formatAttachmentKindLabel(kind: "image" | "text" | "binary") {
+  switch (kind) {
+    case "image":
+      return "Image";
+    case "text":
+      return "Text file";
+    case "binary":
+      return "File";
+    default:
+      return "Attachment";
+  }
+}
+
 function formatThoughtItemText(item: ItemRecord) {
   const content = getItemDisplayText(item);
 
@@ -2706,15 +3208,15 @@ function formatThoughtItemText(item: ItemRecord) {
 }
 
 function formatElapsedTime(durationMs: number) {
-  const totalSeconds = Math.max(1, Math.round(durationMs / 1000));
+  const totalSeconds = Math.max(1, Math.floor(durationMs / 1000));
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
 
   if (minutes === 0) {
-    return `${seconds}s`;
+    return `${totalSeconds}s`;
   }
 
-  return `${minutes}m ${seconds}s`;
+  return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
 }
 
 function detectSkillMention(input: string, caretPosition: number) {
@@ -2741,13 +3243,13 @@ function detectSkillMention(input: string, caretPosition: number) {
 function formatSkillScopeLabel(scope: SkillDescriptor["scope"]) {
   switch (scope) {
     case "SYSTEM":
-      return "系统";
+      return "绯荤粺";
     case "USER":
-      return "用户";
+      return "鐢ㄦ埛";
     case "REPO":
-      return "仓库";
+      return "浠撳簱";
     case "ADMIN":
-      return "管理";
+      return "绠＄悊";
     default:
       return scope;
   }
@@ -2791,6 +3293,28 @@ function formatRelativeTime(value: string) {
   }
 
   return `${Math.floor(deltaDays / 365)}y`;
+}
+
+function getComposerDraft(drafts: Record<string, ComposerDraftState>, threadId?: string | null): ComposerDraftState {
+  return drafts[threadId ?? "__draft__"] ?? createDefaultComposerDraft();
+}
+
+function createDefaultComposerDraft(): ComposerDraftState {
+  return {
+    input: "",
+    attachments: [],
+    includeIdeContext: true,
+    planMode: false,
+  };
+}
+
+function createEmptyThreadSessionView() {
+  return {
+    turns: [] as TurnRecord[],
+    items: [] as ItemRecord[],
+    pendingApproval: null as PendingApproval | null,
+    submitting: false,
+  };
 }
 
 function estimateContextUsage(params: {
@@ -2866,13 +3390,7 @@ function formatCompactTokens(value: number) {
 
 function buildComposerInput(params: {
   message: string;
-  attachments: ComposerAttachment[];
-  includeIdeContext: boolean;
   planMode: boolean;
-  project?: ProjectRecord;
-  thread?: import("@my-agent/protocol").ThreadRecord;
-  enabledSkills: SkillDescriptor[];
-  config?: import("@my-agent/protocol").AppConfig;
 }) {
   const sections: string[] = [];
 
@@ -2889,29 +3407,6 @@ function buildComposerInput(params: {
 
   if (params.message) {
     sections.push(params.message);
-  }
-
-  if (params.attachments.length > 0) {
-    sections.push(
-      [
-        "[Attached files]",
-        ...params.attachments.map((attachment) => `- ${attachment.name} (${attachment.kind}): ${attachment.path}`),
-      ].join("\n"),
-    );
-  }
-
-  if (params.includeIdeContext) {
-    sections.push(
-      [
-        "[IDE context]",
-        `Project: ${params.project?.name ?? "Unknown"}`,
-        `Workspace root: ${params.project?.rootPath ?? params.config?.workspace.rootPath ?? "Unknown"}`,
-        `Thread: ${params.thread?.title ?? "New Thread"}`,
-        `Model: ${params.config?.provider.model ?? "Not selected"}`,
-        `Reasoning effort: ${params.config?.provider.reasoningEffort ?? "high"}`,
-        `Enabled skills: ${params.enabledSkills.length > 0 ? params.enabledSkills.map((skill) => skill.metadata.displayName ?? skill.name).join(", ") : "None"}`,
-      ].join("\n"),
-    );
   }
 
   return sections.join("\n\n");

@@ -37,6 +37,7 @@ describe("PromptBuilder", () => {
       },
       globalInstructions: "Always explain tradeoffs.",
       userInput: "$repo-qa explain the app",
+      attachments: [],
       selectedSkills: discoveredSkills,
       discoveredSkills,
     });

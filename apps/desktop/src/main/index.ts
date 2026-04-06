@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell, type MenuItemConstructorOptions } from "electron";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, promises as fs } from "node:fs";
 import { basename, extname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
@@ -10,6 +10,7 @@ import {
   type CommandExecParams,
   type ConfigWriteParams,
   type CreateProjectParams,
+  type EnvironmentDetectParams,
   type HarnessEvent,
   type InterruptTurnParams,
   type JsonRpcMessage,
@@ -19,6 +20,10 @@ import {
   type StartThreadParams,
   type StartTurnParams,
   type TurnInputAttachment,
+  type WorkflowRunParams,
+  type WorktreeCreateParams,
+  type WorktreeListParams,
+  type WorktreeRemoveParams,
   type UpdateThreadParams,
   type UpdateProjectParams,
 } from "@my-agent/protocol";
@@ -28,11 +33,27 @@ type AppMenuId = "file" | "edit" | "view" | "window" | "help";
 
 class HarnessClient {
   private child: ChildProcessWithoutNullStreams | null = null;
+  private serverChild: ChildProcess | null = null;
   private nextId = 1;
   private readonly pending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
   private readonly listeners = new Set<(event: HarnessEvent) => void>();
+  private activeServerUrl: string | null = process.env.MY_AGENT_SERVER_URL?.replace(/\/$/, "") ?? null;
+  private activeServerToken: string | null = process.env.MY_AGENT_SERVER_TOKEN ?? null;
+  private serverAbortController: AbortController | null = null;
 
-  start(coreEntry: string): void {
+  start(coreEntry: string, appServerEntry: string): void {
+    const backendMode = process.env.MY_AGENT_BACKEND_MODE ?? "server";
+
+    if (this.activeServerUrl) {
+      this.startRemoteEventStream();
+      return;
+    }
+
+    if (backendMode !== "stdio") {
+      this.startLocalServer(appServerEntry);
+      return;
+    }
+
     if (this.child) {
       return;
     }
@@ -72,7 +93,7 @@ class HarnessClient {
     });
 
     this.child.stderr.on("data", (chunk) => {
-      console.error(`[my-agent-core] ${chunk.toString()}`);
+      safeConsoleError(`[my-agent-core] ${chunk.toString()}`);
     });
 
     this.child.on("exit", () => {
@@ -81,6 +102,10 @@ class HarnessClient {
   }
 
   stop(): void {
+    this.serverAbortController?.abort();
+    this.serverAbortController = null;
+    this.serverChild?.kill();
+    this.serverChild = null;
     this.child?.kill();
     this.child = null;
   }
@@ -91,6 +116,10 @@ class HarnessClient {
   }
 
   async request<TResult>(method: string, params?: unknown): Promise<TResult> {
+    if (this.activeServerUrl) {
+      return this.requestRemote<TResult>(method, params);
+    }
+
     if (!this.child) {
       throw new Error("Harness process is not running.");
     }
@@ -110,7 +139,12 @@ class HarnessClient {
       });
     });
 
-    this.child.stdin.write(`${JSON.stringify(message)}\n`);
+    try {
+      this.child.stdin.write(`${JSON.stringify(message)}\n`);
+    } catch (error) {
+      this.pending.delete(id);
+      throw wrapPipeError(error, "Failed to write to my-agent-core. The harness process may have exited.");
+    }
     return promise;
   }
 
@@ -129,6 +163,145 @@ class HarnessClient {
     }
 
     handler.resolve(message.result);
+  }
+
+  private startLocalServer(appServerEntry: string): void {
+    if (this.serverChild || this.activeServerUrl) {
+      return;
+    }
+
+    const port = process.env.MY_AGENT_APP_SERVER_PORT ?? "4318";
+    const token = process.env.MY_AGENT_SERVER_TOKEN ?? `desktop-${Date.now()}`;
+    const child = spawn(resolveNodeBinary(), [appServerEntry], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        MY_AGENT_APP_SERVER_PORT: port,
+        MY_AGENT_SERVER_TOKEN: token,
+      },
+    });
+    this.serverChild = child;
+    const output = createInterface({
+      input: child.stdout!,
+      terminal: false,
+    });
+    output.on("line", (line) => {
+      try {
+        const payload = JSON.parse(line) as { port?: number; authToken?: string };
+        if (payload.port) {
+          this.activeServerUrl = `http://127.0.0.1:${payload.port}`;
+          this.activeServerToken = payload.authToken ?? token;
+          this.startRemoteEventStream();
+        }
+      } catch {
+        safeConsoleLog(line);
+      }
+    });
+    child.stderr?.on("data", (chunk) => {
+      safeConsoleError(`[my-agent-app-server] ${chunk.toString()}`);
+    });
+    child.on("exit", () => {
+      this.serverChild = null;
+      this.activeServerUrl = null;
+    });
+  }
+
+  private async requestRemote<TResult>(method: string, params?: unknown): Promise<TResult> {
+    if (!this.activeServerUrl) {
+      throw new Error("Remote runtime server is not configured.");
+    }
+
+    if (method === "initialize") {
+      const response = await fetch(`${this.activeServerUrl}/api/initialize`, {
+        headers: this.buildRemoteHeaders(),
+      });
+      if (!response.ok) {
+        throw new Error(`Remote initialize failed (${response.status}).`);
+      }
+      const payload = (await response.json()) as JsonRpcResponse;
+      if ("error" in payload) {
+        throw new Error(payload.error.message);
+      }
+      return payload.result as TResult;
+    }
+
+    const rpcRequest: JsonRpcRequest = {
+      jsonrpc: "2.0",
+      id: String(this.nextId++),
+      method,
+      params,
+    };
+    const response = await fetch(`${this.activeServerUrl}/api/rpc`, {
+      method: "POST",
+      headers: {
+        ...this.buildRemoteHeaders(),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(rpcRequest),
+    });
+    if (!response.ok) {
+      throw new Error(`Remote runtime request failed (${response.status}).`);
+    }
+    const payload = (await response.json()) as JsonRpcResponse;
+    if ("error" in payload) {
+      throw new Error(payload.error.message);
+    }
+    return payload.result as TResult;
+  }
+
+  private startRemoteEventStream(): void {
+    if (!this.activeServerUrl || this.serverAbortController) {
+      return;
+    }
+
+    const controller = new AbortController();
+    this.serverAbortController = controller;
+    void (async () => {
+      try {
+        const response = await fetch(`${this.activeServerUrl}/events`, {
+          headers: this.buildRemoteHeaders(),
+          signal: controller.signal,
+        });
+        if (!response.ok || !response.body) {
+          return;
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            break;
+          }
+
+          buffer += decoder.decode(value, { stream: true });
+          const chunks = buffer.split("\n\n");
+          buffer = chunks.pop() ?? "";
+
+          for (const chunk of chunks) {
+            const event = parseSseEvent(chunk);
+            if (!event) {
+              continue;
+            }
+            for (const listener of this.listeners) {
+              listener(event);
+            }
+          }
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          safeConsoleError(`[my-agent-app-server] ${error instanceof Error ? error.message : String(error)}`);
+        }
+      } finally {
+        this.serverAbortController = null;
+      }
+    })();
+  }
+
+  private buildRemoteHeaders(): Record<string, string> {
+    return this.activeServerToken ? { Authorization: `Bearer ${this.activeServerToken}` } : {};
   }
 }
 
@@ -159,11 +332,11 @@ async function createWindow(): Promise<void> {
   const rendererHtml = resolve(app.getAppPath(), "dist", "index.html");
 
   mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
-    console.error(`[renderer] failed to load ${validatedURL}: ${errorCode} ${errorDescription}`);
+    safeConsoleError(`[renderer] failed to load ${validatedURL}: ${errorCode} ${errorDescription}`);
   });
 
   mainWindow.webContents.on("console-message", (_event, level, message, line, sourceId) => {
-    console.log(`[renderer:${level}] ${sourceId}:${line} ${message}`);
+    safeConsoleLog(`[renderer:${level}] ${sourceId}:${line} ${message}`);
   });
 
   if (process.platform === "win32") {
@@ -223,6 +396,19 @@ function registerIpc(): void {
   ipcMain.handle("config:write", (_event, params: ConfigWriteParams) => harness.request("config/write", params));
   ipcMain.handle("provider:test", () => harness.request("provider/test"));
   ipcMain.handle("provider:models", () => harness.request("provider/models"));
+  ipcMain.handle("worktree:list", (_event, params: WorktreeListParams) => harness.request("worktree/list", params));
+  ipcMain.handle("worktree:create", (_event, params: WorktreeCreateParams) => harness.request("worktree/create", params));
+  ipcMain.handle("worktree:remove", (_event, params: WorktreeRemoveParams) => harness.request("worktree/remove", params));
+  ipcMain.handle("environment:list", (_event, params: { projectId?: string }) => harness.request("environment/list", params));
+  ipcMain.handle("environment:detect", (_event, params: EnvironmentDetectParams) => harness.request("environment/detect", params));
+  ipcMain.handle("workflow:list", (_event, params: { projectId?: string }) => harness.request("workflow/list", params));
+  ipcMain.handle("workflow:run", (_event, params: WorkflowRunParams) => harness.request("workflow/run", params));
+  ipcMain.handle("workflow:runs", (_event, params: { workflowId?: string }) => harness.request("workflow/runs", params));
+  ipcMain.handle("workflow:resume", (_event, params: { runId: string }) => harness.request("workflow/resume", params));
+  ipcMain.handle("plugin:list", () => harness.request("plugin/list"));
+  ipcMain.handle("mcp:list", () => harness.request("mcp/list"));
+  ipcMain.handle("mcp:sessions", () => harness.request("mcp/sessions"));
+  ipcMain.handle("mcp:refresh", (_event, params: { mountId: string }) => harness.request("mcp:refresh", params));
   ipcMain.handle("window:set-titlebar-theme", (_event, theme: TitleBarTheme) => {
     // 不再动态设置标题栏覆盖层，因为使用 frameless 窗口
   });
@@ -292,7 +478,8 @@ function registerIpc(): void {
 
 app.whenReady().then(async () => {
   const coreEntry = resolve(app.getAppPath(), "../../packages/core/dist/index.js");
-  harness.start(coreEntry);
+  const appServerEntry = resolve(app.getAppPath(), "../../packages/app-server/dist/index.js");
+  harness.start(coreEntry, appServerEntry);
   Menu.setApplicationMenu(buildApplicationMenu());
   registerIpc();
   await createWindow();
@@ -314,6 +501,9 @@ app.on("before-quit", () => {
   harness.stop();
 });
 
+process.stdout.on("error", swallowBrokenPipeError);
+process.stderr.on("error", swallowBrokenPipeError);
+
 function resolveNodeBinary(): string {
   const candidates = [process.env.MY_AGENT_NODE_BINARY, process.env.npm_node_execpath, "node"];
 
@@ -332,6 +522,68 @@ function resolveNodeBinary(): string {
   }
 
   return "node";
+}
+
+function safeConsoleLog(message: string): void {
+  safeWrite(process.stdout, `${message}\n`);
+}
+
+function safeConsoleError(message: string): void {
+  safeWrite(process.stderr, `${message}\n`);
+}
+
+function safeWrite(stream: NodeJS.WriteStream, value: string): void {
+  try {
+    if (stream.destroyed || !stream.writable) {
+      return;
+    }
+
+    stream.write(value);
+  } catch (error) {
+    if (!isBrokenPipeError(error)) {
+      throw error;
+    }
+  }
+}
+
+function swallowBrokenPipeError(error: Error): void {
+  if (!isBrokenPipeError(error)) {
+    throw error;
+  }
+}
+
+function isBrokenPipeError(error: unknown): boolean {
+  return Boolean(
+    error &&
+      typeof error === "object" &&
+      "code" in error &&
+      ((error as { code?: string }).code === "EPIPE" || (error as { code?: string }).code === "ERR_STREAM_DESTROYED"),
+  );
+}
+
+function wrapPipeError(error: unknown, fallbackMessage: string): Error {
+  if (isBrokenPipeError(error)) {
+    return new Error(fallbackMessage);
+  }
+
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+function parseSseEvent(chunk: string): HarnessEvent | null {
+  const eventLine = chunk
+    .split(/\r?\n/)
+    .find((line) => line.startsWith("data: "));
+
+  if (!eventLine) {
+    return null;
+  }
+
+  try {
+    const payload = JSON.parse(eventLine.slice("data: ".length)) as HarnessEvent | { ok: boolean };
+    return "type" in payload ? (payload as HarnessEvent) : null;
+  } catch {
+    return null;
+  }
 }
 
 function buildApplicationMenu() {

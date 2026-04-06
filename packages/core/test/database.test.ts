@@ -25,6 +25,7 @@ describe("HarnessDatabase projects", () => {
     expect(database.getThread(thread.id)).toMatchObject({
       id: "thread-1",
       projectId: projects[0]!.id,
+      sandboxMode: projects[0]!.sandboxMode,
     });
   });
 });

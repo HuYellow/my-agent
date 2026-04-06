@@ -301,9 +301,11 @@ function toApiFlavor(wireApi: string): ApiFlavor {
   switch (wireApi) {
     case "responses":
       return "responses";
-    case "ai_sdk":
-      return "ai_sdk";
     default:
+      if (wireApi === "ai_sdk") {
+        console.warn('[my-agent-config] "ai_sdk" is no longer supported. Falling back to "responses".');
+        return "responses";
+      }
       return "chat_completions";
   }
 }
@@ -312,8 +314,6 @@ function fromApiFlavor(apiFlavor: ApiFlavor): string {
   switch (apiFlavor) {
     case "responses":
       return "responses";
-    case "ai_sdk":
-      return "ai_sdk";
     default:
       return "chat_completions";
   }

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { HarnessDatabase } from "../src/store/database.js";
 import { ToolService } from "../src/tools/tool-service.js";
-import { ApprovalRequiredError, ToolExecutionAbortedError } from "../src/tools/types.js";
+import { ApprovalRequiredError, DeferredApprovalRequiredError, ToolExecutionAbortedError } from "../src/tools/types.js";
 
 const timers: Array<ReturnType<typeof setTimeout>> = [];
 
@@ -72,6 +72,70 @@ describe("ToolService", () => {
     expect(secondPlan.permission.allowed).toBe(true);
     expect(secondPlan.permission.requiresApproval).toBe(false);
     expect(secondPlan.permission.sessionApproved).toBe(true);
+  });
+
+  it("defers approval for risky writes when approval policy is on-failure", async () => {
+    const { database, workspace } = createWorkspace({
+      sandboxMode: "workspace-write",
+      approvalPolicy: "on-failure",
+    });
+    const service = new ToolService(workspace, { database, threadId: "thread-1" });
+    const plan = service.planExecution("write_patch", {
+      path: "notes/todo.txt",
+      content: "hello",
+    });
+
+    expect(plan.permission.allowed).toBe(true);
+    expect(plan.permission.requiresApproval).toBe(false);
+    expect(plan.permission.approvalMode).toBe("deferred");
+
+    await expect(
+      service.executeTool(
+        "write_patch",
+        { path: "notes/todo.txt", content: "hello" },
+        {
+          workspace,
+          emitCommandDelta: () => undefined,
+        },
+      ),
+    ).rejects.toBeInstanceOf(DeferredApprovalRequiredError);
+  });
+
+  it("applies structured patches through apply_patch", async () => {
+    const { database, workspace, root } = createWorkspace({
+      sandboxMode: "danger-full-access",
+      approvalPolicy: "never",
+    });
+    const service = new ToolService(workspace, { database, threadId: "thread-1" });
+
+    await service.executeTool(
+      "write_patch",
+      { path: "notes/todo.txt", content: "before\n" },
+      {
+        workspace,
+        emitCommandDelta: () => undefined,
+      },
+    );
+
+    await service.executeTool(
+      "apply_patch",
+      {
+        patch: [
+          "*** Begin Patch",
+          "*** Update File: notes/todo.txt",
+          "@@",
+          "-before",
+          "+after",
+          "*** End Patch",
+        ].join("\n"),
+      },
+      {
+        workspace,
+        emitCommandDelta: () => undefined,
+      },
+    );
+
+    expect(readFileSync(join(root, "notes", "todo.txt"), "utf8")).toContain("after");
   });
 
   it("aborts long-running shell commands when the signal is cancelled", async () => {

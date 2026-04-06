@@ -1,4 +1,9 @@
 import {
+  type AgentCloseParams,
+  type AgentSendInputParams,
+  type AgentSpawnParams,
+  type AgentWaitParams,
+  type ApplyPatchParams,
   type ApprovalResponseParams,
   type ArchiveThreadParams,
   type AppConfig,
@@ -8,6 +13,11 @@ import {
   type ForkThreadParams,
   type HarnessEvent,
   type InitializeResult,
+  type McpRefreshParams,
+  type McpListResult,
+  type McpSessionsResult,
+  type McpToolsResult,
+  type PluginListResult,
   type JsonRpcNotification,
   type JsonRpcRequest,
   type ProjectRecord,
@@ -17,6 +27,11 @@ import {
   type ReadFileParams,
   type ResumeThreadParams,
   type ResumeThreadResult,
+  type TerminalCloseParams,
+  type TerminalCreateParams,
+  type TerminalReadParams,
+  type TerminalResizeParams,
+  type TerminalWriteParams,
   type StartThreadParams,
   type StartThreadResult,
   type StartTurnParams,
@@ -24,6 +39,14 @@ import {
   type ThreadRecord,
   type TurnInputAttachment,
   type TurnRecord,
+  type WorktreeCreateParams,
+  type WorktreeListParams,
+  type WorktreeRemoveParams,
+  type WorkflowRunParams,
+  type WorkflowResumeParams,
+  type WorkflowRunsResult,
+  type WorkflowRunResult,
+  type EnvironmentDetectParams,
   type UpdateProjectParams,
   type WritePatchParams,
   type UpdateThreadParams,
@@ -31,10 +54,18 @@ import {
 import { existsSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { OpenAiCompatibleRunner } from "../agents/openai-compatible-runner.js";
+import { AgentTaskManager } from "../services/agent-task-manager.js";
+import { detectProviderCapabilities } from "../services/provider-capabilities.js";
+import { EnvironmentManager } from "../services/environment-manager.js";
+import { McpManager } from "../services/mcp-manager.js";
 import { ensureStoredProviderConfig, syncStoredProviderConfig, watchStoredConfig } from "../services/my-agent-config.js";
+import { PluginManager } from "../services/plugin-manager.js";
 import { PromptBuilder } from "../services/prompt-builder.js";
 import { ProviderService } from "../services/provider-service.js";
 import { SkillService } from "../services/skill-service.js";
+import { TerminalManager } from "../services/terminal-manager.js";
+import { WorkflowManager } from "../services/workflow-manager.js";
+import { WorktreeManager } from "../services/worktree-manager.js";
 import { HarnessDatabase } from "../store/database.js";
 import { ToolService } from "../tools/tool-service.js";
 import { createId } from "../utils/ids.js";
@@ -44,6 +75,13 @@ export class HarnessServer {
   private skills: ReturnType<SkillService["listSkills"]>;
   private readonly runner: OpenAiCompatibleRunner;
   private readonly stopWatchingExternalConfig: () => void;
+  private readonly terminalManager: TerminalManager;
+  private readonly agentTaskManager: AgentTaskManager;
+  private readonly worktreeManager: WorktreeManager;
+  private readonly environmentManager: EnvironmentManager;
+  private readonly workflowManager: WorkflowManager;
+  private readonly pluginManager: PluginManager;
+  private readonly mcpManager: McpManager;
 
   constructor(
     private readonly database: HarnessDatabase,
@@ -55,6 +93,70 @@ export class HarnessServer {
     const activeProject = this.resolveWorkspaceByProjectId(config.selectedProjectId);
     this.skills = this.skillService.listSkills(activeProject.rootPath, config.disabledSkillIds);
     this.runner = new OpenAiCompatibleRunner(this.database, this.promptBuilder, (event) => this.emit(event));
+    this.terminalManager = new TerminalManager(this.database, (session) =>
+      this.emit({
+        type: "terminal/updated",
+        payload: {
+          session,
+        },
+      }),
+    );
+    this.worktreeManager = new WorktreeManager(this.database, (worktree) =>
+      this.emit({
+        type: "worktree/updated",
+        payload: { worktree },
+      }),
+    );
+    this.environmentManager = new EnvironmentManager(this.database, (environment) =>
+      this.emit({
+        type: "environment/updated",
+        payload: { environment },
+      }),
+    );
+    this.agentTaskManager = new AgentTaskManager(this.database, this.worktreeManager, this.environmentManager, (task) =>
+      this.emit({
+        type: "agent/updated",
+        payload: {
+          task,
+        },
+      }),
+    );
+    this.workflowManager = new WorkflowManager(
+      this.database,
+      this.worktreeManager,
+      this.environmentManager,
+      this.agentTaskManager,
+      (workflow) =>
+        this.emit({
+          type: "workflow/updated",
+          payload: { workflow },
+        }),
+      (run) =>
+        this.emit({
+          type: "workflow/run",
+          payload: { run },
+        }),
+    );
+    this.pluginManager = new PluginManager(this.database, (plugin) =>
+      this.emit({
+        type: "plugin/updated",
+        payload: { plugin },
+      }),
+    );
+    this.mcpManager = new McpManager(
+      this.database,
+      (mount) =>
+        this.emit({
+          type: "mcp/updated",
+          payload: { mount },
+        }),
+      (session) =>
+        this.emit({
+          type: "mcp/session",
+          payload: { session },
+        }),
+    );
+    void this.mcpManager.refreshAll();
     this.skillService.startWatching(activeProject.rootPath, config.disabledSkillIds);
     ensureStoredProviderConfig(config.provider);
     this.stopWatchingExternalConfig = watchStoredConfig(() => {
@@ -69,6 +171,8 @@ export class HarnessServer {
 
   dispose(): void {
     this.stopWatchingExternalConfig();
+    this.terminalManager.dispose();
+    this.agentTaskManager.dispose();
     this.skillService.dispose();
   }
 
@@ -124,6 +228,52 @@ export class HarnessServer {
         return this.readFile(message.params as ReadFileParams);
       case "fs/writePatch":
         return this.writePatch(message.params as WritePatchParams);
+      case "fs/applyPatch":
+        return this.applyPatch(message.params as ApplyPatchParams);
+      case "terminal/create":
+        return this.createTerminal(message.params as TerminalCreateParams);
+      case "terminal/write":
+        return this.writeTerminal(message.params as TerminalWriteParams);
+      case "terminal/read":
+        return this.readTerminal(message.params as TerminalReadParams);
+      case "terminal/resize":
+        return this.resizeTerminal(message.params as TerminalResizeParams);
+      case "terminal/close":
+        return this.closeTerminal(message.params as TerminalCloseParams);
+      case "agent/spawn":
+        return this.spawnAgent(message.params as AgentSpawnParams);
+      case "agent/send_input":
+        return this.sendAgentInput(message.params as AgentSendInputParams);
+      case "agent/wait":
+        return this.waitAgent(message.params as AgentWaitParams);
+      case "agent/close":
+        return this.closeAgent(message.params as AgentCloseParams);
+      case "worktree/create":
+        return this.createWorktree(message.params as WorktreeCreateParams);
+      case "worktree/list":
+        return this.listWorktrees(message.params as WorktreeListParams);
+      case "worktree/remove":
+        return this.removeWorktree(message.params as WorktreeRemoveParams);
+      case "environment/detect":
+        return this.detectEnvironment(message.params as EnvironmentDetectParams);
+      case "environment/list":
+        return { environments: this.database.listEnvironments((message.params as { projectId?: string } | undefined)?.projectId) };
+      case "workflow/list":
+        return { workflows: this.listWorkflows((message.params as { projectId?: string } | undefined)?.projectId) };
+      case "workflow/run":
+        return this.runWorkflow(message.params as WorkflowRunParams);
+      case "workflow/resume":
+        return this.resumeWorkflow(message.params as WorkflowResumeParams);
+      case "workflow/runs":
+        return this.listWorkflowRuns((message.params as { workflowId?: string } | undefined)?.workflowId);
+      case "plugin/list":
+        return this.listPlugins();
+      case "mcp/list":
+        return this.listMcpMounts();
+      case "mcp/sessions":
+        return this.listMcpSessions();
+      case "mcp/refresh":
+        return this.refreshMcpMount(message.params as McpRefreshParams);
       case "skills/list":
         return { skills: this.refreshSkills() };
       case "skills/config/write":
@@ -154,6 +304,8 @@ export class HarnessServer {
       projects: this.database.listProjects(),
       threads: this.database.listThreads(),
       skills,
+      worktrees: this.database.listWorktrees(config.selectedProjectId),
+      environments: this.database.listEnvironments(config.selectedProjectId),
     };
   }
 
@@ -261,6 +413,7 @@ export class HarnessServer {
         selectedProjectId: thread.projectId,
       }),
     );
+    this.clearThreadSessionApprovals(thread.id);
     this.refreshSkills(thread.projectId);
 
     return {
@@ -285,6 +438,8 @@ export class HarnessServer {
       archivedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
+    this.clearThreadSessionApprovals(thread.id);
+    this.terminalManager.closeThreadSessions(thread.id);
 
     return { thread: updated };
   }
@@ -308,15 +463,32 @@ export class HarnessServer {
     };
 
     this.database.createThread(thread);
+    const turnIdMap = new Map<string, string>();
+
+    for (const turn of this.database.listTurns(source.id)) {
+      const forkedTurn: TurnRecord = {
+        ...turn,
+        id: createId("turn"),
+        threadId: thread.id,
+        updatedAt: now,
+        createdAt: now,
+      };
+      this.database.createTurn(forkedTurn);
+      turnIdMap.set(turn.id, forkedTurn.id);
+    }
+
     for (const item of this.database.listItems(source.id)) {
       this.database.createItem({
         ...item,
         id: createId("item"),
         threadId: thread.id,
+        turnId: turnIdMap.get(item.turnId) ?? item.turnId,
         createdAt: now,
         updatedAt: now,
       });
     }
+    this.database.copySessionItems(source.id, thread.id);
+    this.clearThreadSessionApprovals(thread.id);
 
     return { thread };
   }
@@ -351,6 +523,7 @@ export class HarnessServer {
     const discoveredSkills = this.refreshSkills(project.id);
     const workspace = this.resolveThreadWorkspace(project, thread);
     const selectedSkills = this.skillService.resolveSelectedSkills(params.input, params.selectedSkillIds, discoveredSkills);
+    const mcpContext = await this.buildRelevantMcpContext(params.input);
     const finalTurn = await this.runner.runTurn({
       provider: config.provider,
       workspace,
@@ -361,6 +534,20 @@ export class HarnessServer {
       userInput: params.input,
       userAttachments: params.attachments ?? [],
       globalInstructions: config.globalInstructions,
+      runtimeRunMode: config.runtimeRunMode ?? config.providerCapabilities?.recommendedRunMode ?? "full-tools",
+      mcpContext,
+      ideContext: params.includeIdeContext
+        ? {
+            projectName: project.name,
+            workspaceRoot: project.rootPath,
+            threadTitle: thread.title,
+            model: config.provider.model || "Not selected",
+            reasoningEffort: config.provider.reasoningEffort ?? "high",
+            enabledSkills: discoveredSkills
+              .filter((skill) => skill.enabled)
+              .map((skill) => skill.metadata.displayName ?? skill.name),
+          }
+        : undefined,
     });
 
     this.database.updateThread({
@@ -387,6 +574,7 @@ export class HarnessServer {
         status: "cancelled",
         updatedAt: new Date().toISOString(),
       });
+      this.clearThreadSessionApprovals(turn.threadId);
       return { turn: updated };
     }
 
@@ -406,6 +594,7 @@ export class HarnessServer {
           message: "Turn cancelled while awaiting approval.",
         },
       });
+      this.clearThreadSessionApprovals(turn.threadId);
       return { turn: updated };
     }
 
@@ -414,6 +603,7 @@ export class HarnessServer {
       status: "cancelled",
       updatedAt: new Date().toISOString(),
     });
+    this.clearThreadSessionApprovals(turn.threadId);
     return { turn: updated };
   }
 
@@ -503,6 +693,129 @@ export class HarnessServer {
     return JSON.parse(raw) as { path: string; bytesWritten: number };
   }
 
+  private async applyPatch(params: ApplyPatchParams) {
+    const workspace = this.resolveWorkspace(params.threadId);
+    const toolService = new ToolService(workspace, {
+      database: this.database,
+      threadId: params.threadId,
+    });
+    const raw = await toolService.executeTool(
+      "apply_patch",
+      { patch: params.patch },
+      {
+        workspace,
+        emitCommandDelta: () => undefined,
+      },
+    );
+    return JSON.parse(raw);
+  }
+
+  private createTerminal(params: TerminalCreateParams) {
+    const workspace = this.resolveWorkspace(params.threadId);
+    const session = this.terminalManager.createSession(workspace, params);
+    return { session };
+  }
+
+  private writeTerminal(params: TerminalWriteParams) {
+    const session = this.database.getTerminalSession(params.sessionId);
+
+    if (!session) {
+      throw new Error(`Terminal session not found: ${params.sessionId}`);
+    }
+
+    const workspace = this.resolveWorkspace(session.threadId);
+    const toolService = new ToolService(workspace, {
+      database: this.database,
+      threadId: session.threadId,
+    });
+
+    const plan = toolService.planExecution("run_shell", {
+      command: params.input.trim() || "echo",
+      cwd: session.cwd,
+    });
+
+    if (!plan.permission.allowed) {
+      throw new Error(plan.permission.denialReason ?? "Terminal input is blocked by the current sandbox policy.");
+    }
+
+    if (plan.permission.approvalMode !== "none") {
+      throw new Error(plan.permission.approvalReason ?? "Terminal input requires approval and cannot run unattended.");
+    }
+
+    return {
+      session: this.terminalManager.writeInput(params.sessionId, params.input),
+    };
+  }
+
+  private readTerminal(params: TerminalReadParams) {
+    return this.terminalManager.readOutput(params.sessionId);
+  }
+
+  private resizeTerminal(params: TerminalResizeParams) {
+    return {
+      session: this.terminalManager.resizeSession(params.sessionId),
+    };
+  }
+
+  private closeTerminal(params: TerminalCloseParams) {
+    return {
+      session: this.terminalManager.closeSession(params.sessionId),
+    };
+  }
+
+  private spawnAgent(params: AgentSpawnParams) {
+    const thread = this.database.getThread(params.threadId);
+
+    if (!thread) {
+      throw new Error(`Thread not found: ${params.threadId}`);
+    }
+
+    const workspace = this.resolveThreadWorkspace(this.requireProject(thread.projectId), thread);
+    const project = this.requireProject(thread.projectId);
+    const provider = this.database.getConfig().provider;
+    const task = this.agentTaskManager.spawn({
+      provider,
+      workspace,
+      project,
+      parentThreadId: thread.id,
+      parentTurnId: params.turnId,
+      title: params.title?.trim() || "Delegated task",
+      input: params.input,
+      inheritHistory: params.inheritHistory,
+    });
+
+    return { task };
+  }
+
+  private async sendAgentInput(params: AgentSendInputParams) {
+    const task = this.database.getAgentTask(params.agentId);
+
+    if (!task) {
+      throw new Error(`Agent task not found: ${params.agentId}`);
+    }
+
+    if (!this.database.getThread(task.parentThreadId)) {
+      throw new Error(`Thread not found: ${task.parentThreadId}`);
+    }
+
+    const updated = await this.agentTaskManager.sendInput(params.agentId, params.input, this.database.getConfig().provider);
+
+    this.recordAgentTaskResult(updated);
+    return { task: updated };
+  }
+
+  private async waitAgent(params: AgentWaitParams) {
+    const task = await this.agentTaskManager.wait(params.agentId, params.timeoutMs);
+    this.recordAgentTaskResult(task);
+    return { task };
+  }
+
+  private closeAgent(params: AgentCloseParams) {
+    const task = this.agentTaskManager.close(params.agentId);
+    this.recordAgentTaskResult(task);
+    return { task };
+  }
+
   private writeSkillConfig(params: { disabledSkillIds: string[] }): { skills: ReturnType<HarnessServer["refreshSkills"]> } {
     const config = this.database.getConfig();
     this.database.writeConfig({
@@ -513,13 +826,201 @@ export class HarnessServer {
   }
 
   private async providerTest(): Promise<ProviderTestResult> {
-    return this.providerService.test(this.database.getConfig().provider);
+    const provider = this.database.getConfig().provider;
+
+    if (provider.apiFlavor !== "responses") {
+      return {
+        ok: false,
+        status: 0,
+        message: `Provider runtime "${provider.apiFlavor}" can list models but is not supported for agent execution. Use "responses".`,
+      };
+    }
+
+    return this.providerService.test(provider);
   }
 
   private async providerModels(): Promise<ProviderModelsResult> {
     return {
       models: await this.providerService.listModels(this.database.getConfig().provider),
     };
+  }
+
+  private createWorktree(params: WorktreeCreateParams) {
+    const project = this.requireProject(params.projectId);
+    return {
+      worktree: this.worktreeManager.create({
+        project,
+        threadId: params.threadId,
+        agentId: params.agentId,
+        branch: params.branch,
+        baseRef: params.baseRef,
+      }),
+    };
+  }
+
+  private listWorktrees(params: WorktreeListParams | undefined) {
+    return {
+      worktrees: this.worktreeManager.list(params?.projectId),
+    };
+  }
+
+  private removeWorktree(params: WorktreeRemoveParams) {
+    return {
+      worktree: this.worktreeManager.remove(params.worktreeId),
+    };
+  }
+
+  private detectEnvironment(params: EnvironmentDetectParams) {
+    const project = this.requireProject(params.projectId);
+    return {
+      environment: this.environmentManager.detect({
+        project,
+        threadId: params.threadId,
+        worktreeId: params.worktreeId,
+        cwd: params.cwd,
+      }),
+    };
+  }
+
+  private listWorkflows(projectId?: string) {
+    const project = projectId ? this.requireProject(projectId) : this.requireProject(this.database.getConfig().selectedProjectId);
+    return this.workflowManager.list(project);
+  }
+
+  private async runWorkflow(params: WorkflowRunParams): Promise<WorkflowRunResult> {
+    const project = this.requireProject(params.projectId);
+    return this.workflowManager.run({
+      workflowId: params.workflowId,
+      project,
+      provider: this.database.getConfig().provider,
+      workspace: project,
+      threadId: params.threadId,
+      nonInteractive: params.nonInteractive,
+      runId: params.runId,
+    });
+  }
+
+  private async resumeWorkflow(params: WorkflowResumeParams): Promise<WorkflowRunResult> {
+    const run = this.database.getWorkflowRun(params.runId);
+
+    if (!run) {
+      throw new Error(`Workflow run not found: ${params.runId}`);
+    }
+
+    const project = this.requireProject(run.projectId);
+    return this.workflowManager.resume({
+      runId: params.runId,
+      project,
+      provider: this.database.getConfig().provider,
+      workspace: project,
+      approvePausedSteps: params.approvePausedSteps,
+    });
+  }
+
+  private listWorkflowRuns(workflowId?: string): WorkflowRunsResult {
+    return {
+      runs: this.workflowManager.listRuns(workflowId),
+    };
+  }
+
+  private listPlugins(): PluginListResult {
+    const project = this.requireProject(this.database.getConfig().selectedProjectId);
+    return {
+      plugins: this.pluginManager.list(project),
+    };
+  }
+
+  private listMcpMounts(): McpListResult {
+    void this.mcpManager.refreshAll();
+    return {
+      mounts: this.mcpManager.list(),
+    };
+  }
+
+  private listMcpSessions(): McpSessionsResult {
+    return {
+      sessions: this.mcpManager.listSessions(),
+    };
+  }
+
+  private async refreshMcpMount(params: McpRefreshParams): Promise<McpToolsResult> {
+    const refreshed = await this.mcpManager.refreshMount(params.mountId);
+    return {
+      tools: refreshed.tools,
+      prompts: refreshed.prompts,
+      resources: refreshed.resources,
+    };
+  }
+
+  private async buildRelevantMcpContext(userInput: string) {
+    const normalizedInput = userInput.toLowerCase();
+    const mounts = this.mcpManager.list();
+    const context = [];
+
+    for (const mount of mounts) {
+      const cached = this.mcpManager.getCachedMountData(mount.id);
+      const matchingPrompts = cached.prompts.filter((prompt) => scoreMcpEntry(`${prompt.name} ${prompt.description ?? ""}`, normalizedInput) > 0).slice(0, 2);
+      const matchingResources = cached.resources.filter((resource) => scoreMcpEntry(`${resource.uri} ${resource.name ?? ""} ${resource.description ?? ""}`, normalizedInput) > 0).slice(0, 2);
+
+      const resolvedPrompts = await Promise.all(
+        matchingPrompts.map(async (prompt) => ({
+          name: prompt.name,
+          content: await this.mcpManager.getPrompt(mount.id, prompt.name).catch(() => "Unavailable."),
+        })),
+      );
+      const resolvedResources = await Promise.all(
+        matchingResources.map(async (resource) => ({
+          uri: resource.uri,
+          content: await this.mcpManager.readResource(mount.id, resource.uri).catch(() => "Unavailable."),
+        })),
+      );
+
+      if (cached.prompts.length === 0 && cached.resources.length === 0 && resolvedPrompts.length === 0 && resolvedResources.length === 0) {
+        continue;
+      }
+
+      context.push({
+        mount,
+        prompts: cached.prompts,
+        resources: cached.resources,
+        resolvedPrompts,
+        resolvedResources,
+      });
+    }
+
+    return context;
+  }
+
+  private clearThreadSessionApprovals(threadId: string): void {
+    this.database.clearApprovalRules(threadId);
+  }
+
+  private recordAgentTaskResult(task: { parentThreadId: string; parentTurnId?: string; title: string; status: string; finalOutput?: string; id: string }) {
+    if (!task.parentTurnId || task.status === "running") {
+      return;
+    }
+
+    const turn = this.database.getTurn(task.parentTurnId);
+
+    if (!turn) {
+      return;
+    }
+
+    this.database.createItem({
+      id: createId("item"),
+      threadId: task.parentThreadId,
+      turnId: task.parentTurnId,
+      kind: "agentTask",
+      status: task.status === "completed" ? "completed" : "failed",
+      title: `Delegated task: ${task.title}`,
+      body: task.finalOutput ?? `Agent task ${task.id} ended with status ${task.status}.`,
+      metadata: {
+        agentId: task.id,
+        status: task.status,
+      },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
   }
 
   private writeConfig(params: ConfigWriteParams): { config: AppConfig } {
@@ -536,7 +1037,10 @@ export class HarnessServer {
         ...(params.config.workspace ?? {}),
       },
       disabledSkillIds: params.config.disabledSkillIds ?? current.disabledSkillIds,
+      runtimeRunMode: params.config.runtimeRunMode ?? current.runtimeRunMode,
     };
+    next.providerCapabilities = detectProviderCapabilities(next.provider);
+    next.runtimeRunMode = next.runtimeRunMode ?? next.providerCapabilities.recommendedRunMode;
 
     const stored = this.database.writeConfig(next);
 
@@ -646,4 +1150,13 @@ export class HarnessServer {
 
 function inferThreadTitle(input: string): string {
   return input.trim().slice(0, 48) || "New Thread";
+}
+
+function scoreMcpEntry(haystack: string, normalizedInput: string): number {
+  const tokens = haystack
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length > 2);
+
+  return tokens.reduce((score, token) => score + (normalizedInput.includes(token) ? 1 : 0), 0);
 }

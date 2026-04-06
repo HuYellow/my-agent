@@ -11,6 +11,7 @@ export interface JsonSchemaObject {
 
 export type RuntimeToolParameters = ZodTypeAny | JsonSchemaObject;
 export type RuntimeToolSource = "local" | "internal";
+export type ToolApprovalMode = "none" | "preflight" | "deferred";
 
 export interface ToolExecutionContext {
   workspace: WorkspaceProfile;
@@ -33,12 +34,19 @@ export interface ToolActionDescriptor {
   approvalReason?: string;
 }
 
+export interface RuntimeToolCapabilities {
+  streamedOutput?: boolean;
+  resumable?: boolean;
+  deferApproval?: boolean;
+}
+
 export interface RuntimeToolDefinition {
   name: string;
   description: string;
   parameters: RuntimeToolParameters;
   strict: boolean;
   source: RuntimeToolSource;
+  capabilities?: RuntimeToolCapabilities;
   parseArgs: (input: unknown) => Record<string, unknown>;
   buildDescriptor: (args: Record<string, unknown>, context: ToolDescriptorContext) => ToolActionDescriptor;
   execute: (args: Record<string, unknown>, context: ToolExecutionContext) => Promise<string>;
@@ -51,6 +59,7 @@ export interface ToolProvider {
 export interface ToolPermissionDecision {
   allowed: boolean;
   requiresApproval: boolean;
+  approvalMode: ToolApprovalMode;
   denialReason?: string;
   approvalKey?: string;
   approvalReason?: string;
@@ -71,6 +80,13 @@ export class ApprovalRequiredError extends Error {
   ) {
     super(message);
     this.name = "ApprovalRequiredError";
+  }
+}
+
+export class DeferredApprovalRequiredError extends ApprovalRequiredError {
+  constructor(message: string, permission: ToolPermissionDecision) {
+    super(message, permission);
+    this.name = "DeferredApprovalRequiredError";
   }
 }
 

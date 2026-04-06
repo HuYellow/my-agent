@@ -23,6 +23,7 @@ import {
   type ItemRecord,
   type PendingApproval,
   type ProviderProfile,
+  type RuntimeRunMode,
   type SkillDescriptor,
   type ThreadRecord,
   type TurnInputAttachment,
@@ -60,6 +61,20 @@ interface RunnerContext {
   userInput: string;
   userAttachments: TurnInputAttachment[];
   globalInstructions: string;
+  runtimeRunMode?: RuntimeRunMode;
+  mcpContext?: Array<{
+    mount: import("@my-agent/protocol").McpMountRecord;
+    prompts: import("@my-agent/protocol").McpPromptRecord[];
+    resources: import("@my-agent/protocol").McpResourceRecord[];
+  }>;
+  ideContext?: {
+    projectName: string;
+    workspaceRoot: string;
+    threadTitle: string;
+    model: string;
+    reasoningEffort: string;
+    enabledSkills: string[];
+  };
 }
 
 interface PendingRuntime {
@@ -110,8 +125,11 @@ export class OpenAiCompatibleRunner {
       workspace: context.workspace,
       globalInstructions: context.globalInstructions,
       userInput: context.userInput,
+      attachments: context.userAttachments,
       selectedSkills: context.selectedSkills,
       discoveredSkills: context.discoveredSkills,
+      mcpContext: context.mcpContext,
+      ideContext: context.ideContext,
     });
     const toolService = new ToolService(context.workspace, {
       database: this.database,
@@ -125,7 +143,7 @@ export class OpenAiCompatibleRunner {
       threadId: context.thread.id,
       kind: "userMessage",
       title: "User request",
-      body: renderUserInputSummary(context.userInput, context.userAttachments),
+      body: renderUserInputSummary(context.userInput),
       metadata: {
         attachments: context.userAttachments.map((attachment) => ({
           name: attachment.name,
@@ -133,6 +151,7 @@ export class OpenAiCompatibleRunner {
           kind: attachment.kind,
           mediaType: attachment.mediaType,
           truncated: attachment.truncated ?? false,
+          imageDataUrl: attachment.kind === "image" ? attachment.imageDataUrl : undefined,
         })),
       },
       status: "completed",
@@ -151,6 +170,21 @@ export class OpenAiCompatibleRunner {
       return this.completeTurn({ ...context.turn, status: "completed", updatedAt: now() });
     }
 
+    if (context.provider.apiFlavor !== "responses") {
+      this.createItem({
+        turn: context.turn,
+        threadId: context.thread.id,
+        kind: "error",
+        title: "Unsupported provider runtime",
+        body: `Provider runtime "${context.provider.apiFlavor}" is not supported for agent execution. Use a provider configured with the Responses API.`,
+        metadata: {
+          apiFlavor: context.provider.apiFlavor,
+        },
+        status: "failed",
+      });
+      return this.failTurn(context.turn, `Unsupported provider runtime: ${context.provider.apiFlavor}`);
+    }
+
     const runner = this.createRunner(context.provider, context.thread.id);
     const session = new SqliteSession(this.database, context.thread.id);
     const execution = this.beginRunExecution(context.turn, context.thread.id, runner, undefined);
@@ -162,6 +196,7 @@ export class OpenAiCompatibleRunner {
       threadId: context.thread.id,
       toolService,
       governor: execution.governor,
+      runtimeRunMode: context.runtimeRunMode,
     });
 
     try {
@@ -201,16 +236,17 @@ export class OpenAiCompatibleRunner {
         return this.cancelTurn(context.turn, context.thread.id, "Run interrupted by user.");
       }
 
+      const normalizedMessage = normalizeUpstreamModelError(error);
       this.createItem({
         turn: context.turn,
         threadId: context.thread.id,
         kind: "error",
         title: "Run failed",
-        body: error instanceof Error ? error.message : String(error),
+        body: normalizedMessage,
         metadata: {},
         status: "failed",
       });
-      return this.failTurn(context.turn, error instanceof Error ? error.message : String(error));
+      return this.failTurn(context.turn, normalizedMessage);
     } finally {
       execution.cleanup();
       this.runtimeManager.finishTurn(context.turn.id);
@@ -240,6 +276,11 @@ export class OpenAiCompatibleRunner {
     });
 
     await this.ensureThreadSessionSeeded(context.thread.id);
+
+    if (context.provider.apiFlavor !== "responses") {
+      return this.failTurn(context.turn, `Unsupported provider runtime: ${context.provider.apiFlavor}`);
+    }
+
     const runner = this.createRunner(context.provider, context.thread.id);
     const execution = this.beginRunExecution(context.turn, context.thread.id, runner, runtime.governorSnapshot);
     const agent = this.createAgent({
@@ -250,6 +291,7 @@ export class OpenAiCompatibleRunner {
       threadId: context.thread.id,
       toolService,
       governor: execution.governor,
+      runtimeRunMode: "full-tools",
     });
     const state = await RunState.fromString(agent, runtime.serializedState);
     const approvalItem = this.findApprovalItem(state.getInterruptions(), runtime.callId, context.approval, context.provider);
@@ -336,7 +378,7 @@ export class OpenAiCompatibleRunner {
         return this.cancelTurn(runningTurn, context.thread.id, "Run interrupted by user.");
       }
 
-      return this.failTurn(runningTurn, error instanceof Error ? error.message : String(error));
+      return this.failTurn(runningTurn, normalizeUpstreamModelError(error));
     } finally {
       execution.cleanup();
       this.runtimeManager.finishTurn(runningTurn.id);
@@ -351,8 +393,9 @@ export class OpenAiCompatibleRunner {
     threadId: string;
     toolService: ToolService;
     governor: RunGovernor;
+    runtimeRunMode?: RuntimeRunMode;
   }): Agent<any, any> {
-    const tools = params.toolService.getDefinitions().map((definition) => {
+    const tools = selectToolsForRunMode(params.toolService.getDefinitions(), params.runtimeRunMode ?? "full-tools").map((definition) => {
       const modelTool = exposeToolToModel(params.provider, definition);
 
       return tool({
@@ -362,7 +405,7 @@ export class OpenAiCompatibleRunner {
         strict: modelTool.strict,
         needsApproval: async (_runContext: unknown, input: unknown) => {
           const plan = params.toolService.planExecution(modelTool.runtimeName, modelTool.toRuntimeArgs(input));
-          return plan.permission.requiresApproval;
+          return plan.permission.approvalMode !== "none";
         },
         execute: async (input: unknown, _runContext: unknown, details?: { signal?: AbortSignal }) =>
           this.executeToolForSdk(params.toolService, modelTool.runtimeName, modelTool.toRuntimeArgs(input), {
@@ -386,6 +429,10 @@ export class OpenAiCompatibleRunner {
   }
 
   private createRunner(provider: ProviderProfile, threadId: string): Runner {
+    if (provider.apiFlavor !== "responses") {
+      throw new Error(`Provider runtime "${provider.apiFlavor}" is not supported for agent execution.`);
+    }
+
     const normalizedBaseUrl = normalizeProviderBaseUrl(provider.baseUrl);
     const openAIClient = new OpenAI({
       apiKey: provider.apiKey,
@@ -422,6 +469,7 @@ export class OpenAiCompatibleRunner {
           role: "user",
           content: item.body,
         });
+        continue;
       }
 
       if (item.kind === "agentMessage") {
@@ -432,6 +480,20 @@ export class OpenAiCompatibleRunner {
             {
               type: "output_text",
               text: item.body,
+            },
+          ],
+        });
+        continue;
+      }
+
+      if (["toolCall", "toolResult", "approvalResult", "reasoning", "error", "commandExecution", "fileChange"].includes(item.kind)) {
+        items.push({
+          role: "assistant",
+          status: "completed",
+          content: [
+            {
+              type: "output_text",
+              text: renderHistorySummaryItem(item),
             },
           ],
         });
@@ -559,7 +621,6 @@ export class OpenAiCompatibleRunner {
     }, governor.policy.maxWallClockMs);
 
     timer.unref?.();
-    this.createBudgetItem(turn, threadId, governor, Boolean(snapshot));
 
     return {
       controller,
@@ -613,18 +674,6 @@ export class OpenAiCompatibleRunner {
         };
       },
     };
-  }
-
-  private createBudgetItem(turn: TurnRecord, threadId: string, governor: RunGovernor, resumed: boolean): void {
-    this.createItem({
-      turn,
-      threadId,
-      kind: "reasoning",
-      title: resumed ? "Run governance resumed" : "Run governance",
-      body: governor.buildBudgetItemBody(),
-      metadata: governor.buildMetadata(),
-      status: "completed",
-    });
   }
 
   private emitGuardrailDiagnostics(turn: TurnRecord, threadId: string, governor: RunGovernor): void {
@@ -965,9 +1014,10 @@ export class OpenAiCompatibleRunner {
         ToolService.approvalReason(
           resolved.runtimeName,
           `Tool ${resolved.runtimeName} requires approval under policy ${approvalPolicy}.`,
-        ),
+      ),
       args: resolved.runtimeArgs,
       scope: "once",
+      mode: plan?.permission.approvalMode === "deferred" ? "deferred" : "preflight",
       createdAt: now(),
     };
   }
@@ -1179,8 +1229,30 @@ function readCompatToolInput(input: unknown, toolName: string): string {
 }
 
 function trimSessionHistory(historyItems: AgentInputItem[], newItems: AgentInputItem[]): AgentInputItem[] {
-  const trimmedHistory = historyItems.length > 200 ? historyItems.slice(-200) : historyItems;
+  const recentHistory = historyItems.length > 120 ? historyItems.slice(-120) : historyItems;
+  const archivedHistory = historyItems.length > recentHistory.length ? historyItems.slice(0, historyItems.length - recentHistory.length) : [];
+  const summaryItem =
+    archivedHistory.length > 0
+      ? [
+          {
+            role: "assistant" as const,
+            status: "completed" as const,
+            content: [
+              {
+                type: "output_text" as const,
+                text: `Earlier session summary: ${archivedHistory.length} historical items were omitted to stay within the context budget.`,
+              },
+            ],
+          },
+        ]
+      : [];
+  const trimmedHistory = [...summaryItem, ...recentHistory];
   return [...trimmedHistory, ...newItems];
+}
+
+function renderHistorySummaryItem(item: ItemRecord): string {
+  const body = item.body.length > 600 ? `${item.body.slice(0, 600)}...` : item.body;
+  return `[${item.kind}] ${item.title}\n${body}`.trim();
 }
 
 function extractReasoningText(item: RunReasoningItem): string {
@@ -1288,7 +1360,13 @@ function supportsReasoningEffort(model: string): boolean {
 }
 
 function buildTurnInput(userMessage: string, attachments: TurnInputAttachment[]): AgentInputItem[] | string {
-  if (attachments.length === 0) {
+  const imageAttachments = attachments.filter((attachment) => attachment.kind === "image" && attachment.imageDataUrl);
+
+  if (imageAttachments.length === 0) {
+    if (!userMessage.trim() && attachments.length > 0) {
+      return "Use the implicitly provided attachment context for this request.";
+    }
+
     return userMessage;
   }
 
@@ -1301,12 +1379,8 @@ function buildTurnInput(userMessage: string, attachments: TurnInputAttachment[])
     });
   }
 
-  for (const attachment of attachments) {
-    if (attachment.kind === "image" && attachment.imageDataUrl) {
-      content.push({
-        type: "input_text",
-        text: `Attached image: ${attachment.name}${attachment.path ? ` (${attachment.path})` : ""}`,
-      });
+  for (const attachment of imageAttachments) {
+    if (attachment.imageDataUrl) {
       content.push({
         type: "input_image",
         image: attachment.imageDataUrl,
@@ -1319,36 +1393,6 @@ function buildTurnInput(userMessage: string, attachments: TurnInputAttachment[])
       });
       continue;
     }
-
-    if (attachment.kind === "text" && attachment.textContent) {
-      content.push({
-        type: "input_text",
-        text: [
-          `Attached file: ${attachment.name}`,
-          attachment.path ? `Path: ${attachment.path}` : undefined,
-          attachment.mediaType ? `Media type: ${attachment.mediaType}` : undefined,
-          attachment.truncated ? "Note: file content was truncated for inline upload." : undefined,
-          "",
-          attachment.textContent,
-        ]
-          .filter(Boolean)
-          .join("\n"),
-      });
-      continue;
-    }
-
-    content.push({
-      type: "input_text",
-      text: [
-        `Attached file: ${attachment.name}`,
-        attachment.path ? `Path: ${attachment.path}` : undefined,
-        attachment.mediaType ? `Media type: ${attachment.mediaType}` : undefined,
-        attachment.sizeBytes ? `Size: ${attachment.sizeBytes} bytes` : undefined,
-        attachment.textContent ?? "Binary attachment metadata only. Treat it as provided context without inline content.",
-      ]
-        .filter(Boolean)
-        .join("\n"),
-    });
   }
 
   return [
@@ -1359,31 +1403,47 @@ function buildTurnInput(userMessage: string, attachments: TurnInputAttachment[])
   ] as AgentInputItem[];
 }
 
-function renderUserInputSummary(userInput: string, attachments: TurnInputAttachment[]): string {
-  const sections: string[] = [];
+function renderUserInputSummary(userInput: string): string {
+  return userInput.trim();
+}
 
-  if (userInput.trim()) {
-    sections.push(userInput.trim());
+function selectToolsForRunMode(definitions: RuntimeToolDefinition[], runMode: RuntimeRunMode): RuntimeToolDefinition[] {
+  if (runMode === "full-tools") {
+    return definitions;
   }
 
-  if (attachments.length > 0) {
-    sections.push(
-      [
-        "[Attachments]",
-        ...attachments.map((attachment) => {
-          const descriptors = [
-            attachment.kind,
-            attachment.mediaType,
-            attachment.truncated ? "truncated" : undefined,
-          ]
-            .filter(Boolean)
-            .join(", ");
-
-          return `- ${attachment.name}${descriptors ? ` (${descriptors})` : ""}`;
-        }),
-      ].join("\n"),
-    );
+  if (runMode === "no-tools") {
+    return [];
   }
 
-  return sections.join("\n\n");
+  const limitedToolNames = new Set(["read_file", "read_file_range", "exists_path", "stat_path", "find_files", "search_code", "grep_code", "list_repo_tree", "git_status", "git_diff", "git_diff_staged"]);
+  return definitions.filter((definition) => limitedToolNames.has(definition.name));
+}
+
+function normalizeUpstreamModelError(error: unknown): string {
+  const rawMessage = error instanceof Error ? error.message : String(error);
+  const compact = rawMessage.replace(/\s+/g, " ").trim();
+
+  if (looksLikeHtmlError(rawMessage) || looksLikeHtmlError(compact)) {
+    const statusMatch = compact.match(/\b([45]\d{2})\b/);
+    const status = statusMatch?.[1];
+    const title = extractHtmlErrorTitle(rawMessage);
+    const titleSuffix = title ? ` (${title})` : "";
+
+    return status
+      ? `Upstream provider returned an HTML error page (${status})${titleSuffix}. Check the configured baseUrl and whether the provider reliably supports the Responses API.`
+      : `Upstream provider returned an HTML error page${titleSuffix}. Check the configured baseUrl and whether the provider reliably supports the Responses API.`;
+  }
+
+  return compact || "Model request failed.";
+}
+
+function looksLikeHtmlError(value: string): boolean {
+  const trimmed = value.trim();
+  return /^<!doctype html/i.test(trimmed) || /^<html[\s>]/i.test(trimmed) || /<head[\s>]/i.test(trimmed);
+}
+
+function extractHtmlErrorTitle(value: string): string | undefined {
+  const match = value.match(/<title[^>]*>([^<]+)<\/title>/i);
+  return match?.[1]?.trim();
 }

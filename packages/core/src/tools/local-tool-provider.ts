@@ -1,27 +1,64 @@
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { dirname, join, resolve } from "node:path";
-import { type WorkspaceProfile, type WritePatchResult } from "@my-agent/protocol";
+import { existsSync, readFileSync } from "node:fs";
+import { type WorkspaceProfile } from "@my-agent/protocol";
 import { z } from "zod";
-import { isPathInside } from "../utils/path-utils.js";
 import {
-  ToolExecutionAbortedError,
   type RuntimeToolDefinition,
   type ToolActionDescriptor,
-  type ToolExecutionContext,
   type ToolProvider,
 } from "./types.js";
+import { buildShellAnalysis, executeShellCommand, quoteShellArg } from "./local-shell-utils.js";
+import {
+  applyPatchOperations,
+  collectPathCandidates,
+  deleteWorkspacePath,
+  findFiles,
+  listRepoTree,
+  moveWorkspacePath,
+  planPatchOperations,
+  readFileRange,
+  resolveWorkspacePath,
+  searchWorkspace,
+  statPath,
+  writeWholeFile,
+} from "./local-tool-utils.js";
 
 const READ_FILE_SCHEMA = z.object({
   path: z.string(),
 });
 
+const READ_FILE_RANGE_SCHEMA = z.object({
+  path: z.string(),
+  startLine: z.number().int().positive(),
+  endLine: z.number().int().positive().optional(),
+});
+
+const EXISTS_PATH_SCHEMA = z.object({
+  path: z.string(),
+});
+
+const STAT_PATH_SCHEMA = z.object({
+  path: z.string(),
+});
+
 const SEARCH_CODE_SCHEMA = z.object({
   query: z.string().min(1),
+  path: z.string().optional(),
+  regex: z.boolean().optional(),
+  filePattern: z.string().optional(),
+  limit: z.number().int().positive().max(500).optional(),
+});
+
+const FIND_FILES_SCHEMA = z.object({
+  pattern: z.string().min(1),
+  path: z.string().optional(),
+  limit: z.number().int().positive().max(500).optional(),
 });
 
 const LIST_REPO_TREE_SCHEMA = z.object({
   path: z.string().optional(),
+  recursive: z.boolean().optional(),
+  maxDepth: z.number().int().nonnegative().max(20).optional(),
+  includeHidden: z.boolean().optional(),
 });
 
 const EMPTY_SCHEMA = z.object({});
@@ -36,40 +73,27 @@ const WRITE_PATCH_SCHEMA = z.object({
   content: z.string(),
 });
 
-const READ_ONLY_GIT_SUBCOMMANDS = new Set(["status", "diff", "show", "log", "branch", "rev-parse", "ls-files"]);
-const READ_ONLY_COMMANDS = new Set([
-  "dir",
-  "ls",
-  "pwd",
-  "cd",
-  "cat",
-  "type",
-  "echo",
-  "rg",
-  "findstr",
-  "where",
-  "which",
-  "get-childitem",
-  "get-content",
-]);
-const WRITE_COMMANDS = new Set([
-  "rm",
-  "del",
-  "erase",
-  "remove-item",
-  "move-item",
-  "copy-item",
-  "set-content",
-  "add-content",
-  "out-file",
-  "new-item",
-  "mkdir",
-  "md",
-  "touch",
-  "mv",
-  "cp",
-]);
-const NETWORK_COMMANDS = new Set(["curl", "wget", "invoke-webrequest", "iwr", "irm", "scp", "ssh", "ftp"]);
+const APPLY_PATCH_SCHEMA = z.object({
+  patch: z.string().min(1),
+});
+
+const MOVE_PATH_SCHEMA = z.object({
+  from: z.string(),
+  to: z.string(),
+});
+
+const DELETE_PATH_SCHEMA = z.object({
+  path: z.string(),
+  recursive: z.boolean().optional(),
+});
+
+const GIT_ADD_SCHEMA = z.object({
+  paths: z.array(z.string()).min(1),
+});
+
+const GIT_COMMIT_SCHEMA = z.object({
+  message: z.string().min(1),
+});
 
 export class LocalToolProvider implements ToolProvider {
   listTools(workspace: WorkspaceProfile): RuntimeToolDefinition[] {
@@ -82,18 +106,110 @@ export class LocalToolProvider implements ToolProvider {
         source: "local",
         parseArgs: (input) => READ_FILE_SCHEMA.parse(input),
         buildDescriptor: (args) => {
-          const absolute = resolve(workspace.rootPath, String(args.path));
+          const absolute = resolveWorkspacePath(workspace.rootPath, String(args.path));
           return {
             source: "local",
             preview: `Read ${absolute}`,
             scopeKey: absolute,
-            paths: [absolute],
+            paths: collectPathCandidates(absolute),
           };
         },
-        execute: async (args) => {
-          const absolute = resolve(workspace.rootPath, String(args.path));
-          return readFileSync(absolute, "utf8");
+        execute: async (args) => readFileSync(resolveWorkspacePath(workspace.rootPath, String(args.path)), "utf8"),
+      },
+      {
+        name: "read_file_range",
+        description: "Read a line range from a text file in the current workspace.",
+        parameters: READ_FILE_RANGE_SCHEMA,
+        strict: true,
+        source: "local",
+        parseArgs: (input) => READ_FILE_RANGE_SCHEMA.parse(input),
+        buildDescriptor: (args) => {
+          const absolute = resolveWorkspacePath(workspace.rootPath, String(args.path));
+          return {
+            source: "local",
+            preview: `Read ${absolute}:${args.startLine}-${args.endLine ?? args.startLine}`,
+            scopeKey: `${absolute}:${args.startLine}:${args.endLine ?? args.startLine}`,
+            paths: collectPathCandidates(absolute),
+          };
         },
+        execute: async (args) =>
+          JSON.stringify(
+            readFileRange(workspace.rootPath, String(args.path), Number(args.startLine), typeof args.endLine === "number" ? args.endLine : undefined),
+            null,
+            2,
+          ),
+      },
+      {
+        name: "exists_path",
+        description: "Check whether a file or directory exists in the current workspace.",
+        parameters: EXISTS_PATH_SCHEMA,
+        strict: true,
+        source: "local",
+        parseArgs: (input) => EXISTS_PATH_SCHEMA.parse(input),
+        buildDescriptor: (args) => {
+          const absolute = resolveWorkspacePath(workspace.rootPath, String(args.path));
+          return {
+            source: "local",
+            preview: `Exists ${absolute}`,
+            scopeKey: absolute,
+            paths: collectPathCandidates(absolute),
+          };
+        },
+        execute: async (args) =>
+          JSON.stringify(
+            {
+              path: resolveWorkspacePath(workspace.rootPath, String(args.path)),
+              exists: readFileExists(workspace.rootPath, String(args.path)),
+            },
+            null,
+            2,
+          ),
+      },
+      {
+        name: "stat_path",
+        description: "Read file or directory metadata for a workspace path.",
+        parameters: STAT_PATH_SCHEMA,
+        strict: true,
+        source: "local",
+        parseArgs: (input) => STAT_PATH_SCHEMA.parse(input),
+        buildDescriptor: (args) => {
+          const absolute = resolveWorkspacePath(workspace.rootPath, String(args.path));
+          return {
+            source: "local",
+            preview: `Stat ${absolute}`,
+            scopeKey: absolute,
+            paths: collectPathCandidates(absolute),
+          };
+        },
+        execute: async (args) => JSON.stringify(statPath(workspace.rootPath, String(args.path)), null, 2),
+      },
+      {
+        name: "find_files",
+        description: "Find files by glob-style pattern in the current workspace.",
+        parameters: FIND_FILES_SCHEMA,
+        strict: true,
+        source: "local",
+        parseArgs: (input) => FIND_FILES_SCHEMA.parse(input),
+        buildDescriptor: (args) => {
+          const target = args.path ? resolveWorkspacePath(workspace.rootPath, String(args.path)) : workspace.rootPath;
+          return {
+            source: "local",
+            preview: `Find files in ${target} matching ${args.pattern}`,
+            scopeKey: `${target}:${args.pattern}:${args.limit ?? 200}`,
+            paths: collectPathCandidates(target),
+          };
+        },
+        execute: async (args) =>
+          JSON.stringify(
+            findFiles(
+              workspace.rootPath,
+              String(args.pattern),
+              typeof args.path === "string" ? args.path : undefined,
+              typeof args.limit === "number" ? args.limit : 200,
+            ),
+            null,
+            2,
+          ),
       },
       {
         name: "search_code",
@@ -102,44 +218,47 @@ export class LocalToolProvider implements ToolProvider {
         strict: true,
         source: "local",
         parseArgs: (input) => SEARCH_CODE_SCHEMA.parse(input),
-        buildDescriptor: (args) => ({
-          source: "local",
-          preview: `Search code for "${String(args.query)}"`,
-          scopeKey: String(args.query).trim().toLowerCase(),
-          paths: [workspace.rootPath],
-        }),
-        execute: async (args) => {
-          const query = String(args.query).trim();
-          return JSON.stringify(searchWorkspace(workspace.rootPath, query), null, 2);
-        },
+        buildDescriptor: (args) => buildSearchDescriptor(workspace, args),
+        execute: async (args) => JSON.stringify(searchWorkspace(workspace.rootPath, normalizeSearchArgs(args)), null, 2),
+      },
+      {
+        name: "grep_code",
+        description: "Search code with optional regex support and file filters.",
+        parameters: SEARCH_CODE_SCHEMA,
+        strict: true,
+        source: "local",
+        parseArgs: (input) => SEARCH_CODE_SCHEMA.parse(input),
+        buildDescriptor: (args) => buildSearchDescriptor(workspace, args),
+        execute: async (args) => JSON.stringify(searchWorkspace(workspace.rootPath, normalizeSearchArgs(args)), null, 2),
       },
       {
         name: "list_repo_tree",
-        description: "List top-level files and directories in the workspace or a subdirectory.",
+        description: "List files and directories in the workspace or a subdirectory.",
         parameters: LIST_REPO_TREE_SCHEMA,
         strict: true,
         source: "local",
         parseArgs: (input) => LIST_REPO_TREE_SCHEMA.parse(input),
         buildDescriptor: (args) => {
-          const target = args.path ? resolve(workspace.rootPath, String(args.path)) : workspace.rootPath;
+          const target = args.path ? resolveWorkspacePath(workspace.rootPath, String(args.path)) : workspace.rootPath;
           return {
             source: "local",
             preview: `List ${target}`,
-            scopeKey: target,
-            paths: [target],
+            scopeKey: `${target}:${args.recursive ?? true}:${args.maxDepth ?? 3}:${args.includeHidden ?? false}`,
+            paths: collectPathCandidates(target),
           };
         },
-        execute: async (args) => {
-          const target = args.path ? resolve(workspace.rootPath, String(args.path)) : workspace.rootPath;
-          return JSON.stringify(
-            readdirSync(target, { withFileTypes: true }).map((entry) => ({
-              name: entry.name,
-              type: entry.isDirectory() ? "dir" : "file",
-            })),
+        execute: async (args) =>
+          JSON.stringify(
+            listRepoTree(
+              workspace.rootPath,
+              typeof args.path === "string" ? args.path : undefined,
+              typeof args.recursive === "boolean" ? args.recursive : true,
+              typeof args.maxDepth === "number" ? args.maxDepth : 3,
+              typeof args.includeHidden === "boolean" ? args.includeHidden : false,
+            ),
             null,
             2,
-          );
-        },
+          ),
       },
       {
         name: "git_status",
@@ -147,6 +266,7 @@ export class LocalToolProvider implements ToolProvider {
         parameters: EMPTY_SCHEMA,
         strict: true,
         source: "local",
+        capabilities: { streamedOutput: true },
         parseArgs: (input) => EMPTY_SCHEMA.parse(input),
         buildDescriptor: () => ({
           source: "local",
@@ -154,7 +274,7 @@ export class LocalToolProvider implements ToolProvider {
           scopeKey: "git:status",
           paths: [workspace.rootPath],
         }),
-        execute: async (_args, context) => executeCommand("git status --short --branch", context, workspace.rootPath),
+        execute: async (_args, context) => executeShellCommand("git status --short --branch", context, workspace.rootPath),
       },
       {
         name: "git_diff",
@@ -162,6 +282,7 @@ export class LocalToolProvider implements ToolProvider {
         parameters: EMPTY_SCHEMA,
         strict: true,
         source: "local",
+        capabilities: { streamedOutput: true },
         parseArgs: (input) => EMPTY_SCHEMA.parse(input),
         buildDescriptor: () => ({
           source: "local",
@@ -169,7 +290,65 @@ export class LocalToolProvider implements ToolProvider {
           scopeKey: "git:diff",
           paths: [workspace.rootPath],
         }),
-        execute: async (_args, context) => executeCommand("git diff", context, workspace.rootPath),
+        execute: async (_args, context) => executeShellCommand("git diff", context, workspace.rootPath),
+      },
+      {
+        name: "git_diff_staged",
+        description: "Get git diff for staged changes.",
+        parameters: EMPTY_SCHEMA,
+        strict: true,
+        source: "local",
+        capabilities: { streamedOutput: true },
+        parseArgs: (input) => EMPTY_SCHEMA.parse(input),
+        buildDescriptor: () => ({
+          source: "local",
+          preview: "git diff --staged",
+          scopeKey: "git:diff:staged",
+          paths: [workspace.rootPath],
+        }),
+        execute: async (_args, context) => executeShellCommand("git diff --staged", context, workspace.rootPath),
+      },
+      {
+        name: "git_add",
+        description: "Stage files for commit.",
+        parameters: GIT_ADD_SCHEMA,
+        strict: true,
+        source: "local",
+        capabilities: { streamedOutput: true, deferApproval: true },
+        parseArgs: (input) => GIT_ADD_SCHEMA.parse(input),
+        buildDescriptor: (args) => {
+          const paths = normalizeStringArray(args.paths);
+          return {
+            source: "local",
+            preview: `git add ${paths.join(" ")}`,
+            scopeKey: `git:add:${paths.join("|")}`,
+            paths: [workspace.rootPath, ...paths.flatMap((entry) => collectPathCandidates(resolveWorkspacePath(workspace.rootPath, entry)))],
+            risky: true,
+            writes: true,
+            approvalReason: "Staging files requires approval.",
+          };
+        },
+        execute: async (args, context) =>
+          executeShellCommand(`git add -- ${normalizeStringArray(args.paths).map((entry) => quoteShellArg(entry)).join(" ")}`, context, workspace.rootPath),
+      },
+      {
+        name: "git_commit",
+        description: "Create a non-interactive git commit.",
+        parameters: GIT_COMMIT_SCHEMA,
+        strict: true,
+        source: "local",
+        capabilities: { streamedOutput: true, deferApproval: true },
+        parseArgs: (input) => GIT_COMMIT_SCHEMA.parse(input),
+        buildDescriptor: (args) => ({
+          source: "local",
+          preview: `git commit -m ${args.message}`,
+          scopeKey: `git:commit:${args.message}`,
+          paths: [workspace.rootPath],
+          risky: true,
+          writes: true,
+          approvalReason: "Creating a git commit requires approval.",
+        }),
+        execute: async (args, context) => executeShellCommand(`git commit -m ${quoteShellArg(String(args.message))}`, context, workspace.rootPath),
       },
       {
         name: "run_shell",
@@ -177,11 +356,12 @@ export class LocalToolProvider implements ToolProvider {
         parameters: RUN_SHELL_SCHEMA,
         strict: true,
         source: "local",
+        capabilities: { streamedOutput: true, deferApproval: true },
         parseArgs: (input) => RUN_SHELL_SCHEMA.parse(input),
         buildDescriptor: (args) => buildShellDescriptor(workspace, args),
         execute: async (args, context) => {
-          const cwd = args.cwd ? resolve(workspace.rootPath, String(args.cwd)) : workspace.rootPath;
-          return executeCommand(String(args.command), context, cwd);
+          const cwd = args.cwd ? resolveWorkspacePath(workspace.rootPath, String(args.cwd)) : workspace.rootPath;
+          return executeShellCommand(String(args.command), context, cwd);
         },
       },
       {
@@ -190,29 +370,95 @@ export class LocalToolProvider implements ToolProvider {
         parameters: WRITE_PATCH_SCHEMA,
         strict: true,
         source: "local",
+        capabilities: { deferApproval: true },
         parseArgs: (input) => WRITE_PATCH_SCHEMA.parse(input),
         buildDescriptor: (args) => {
-          const absolute = resolve(workspace.rootPath, String(args.path));
+          const absolute = resolveWorkspacePath(workspace.rootPath, String(args.path));
           return {
             source: "local",
             preview: `Write ${absolute}`,
             scopeKey: absolute,
-            paths: [absolute],
+            paths: collectPathCandidates(absolute),
             risky: true,
             writes: true,
             approvalReason: `Writing ${absolute} requires approval.`,
           };
         },
-        execute: async (args) => {
-          const absolute = resolve(workspace.rootPath, String(args.path));
-          mkdirSync(dirname(absolute), { recursive: true });
-          writeFileSync(absolute, String(args.content), "utf8");
-          const result: WritePatchResult = {
-            path: absolute,
-            bytesWritten: Buffer.byteLength(String(args.content), "utf8"),
+        execute: async (args) => JSON.stringify(writeWholeFile(workspace.rootPath, String(args.path), String(args.content)), null, 2),
+      },
+      {
+        name: "apply_patch",
+        description: "Apply a structured patch document to the workspace.",
+        parameters: APPLY_PATCH_SCHEMA,
+        strict: true,
+        source: "local",
+        capabilities: { deferApproval: true },
+        parseArgs: (input) => APPLY_PATCH_SCHEMA.parse(input),
+        buildDescriptor: (args) => {
+          const operations = planPatchOperations(workspace.rootPath, String(args.patch));
+          return {
+            source: "local",
+            preview: "apply_patch",
+            scopeKey: operations.map((entry) => `${entry.action}:${entry.path}${entry.moveTo ? `->${entry.moveTo}` : ""}`).join("|"),
+            paths: operations.flatMap((entry) => {
+              const current = resolveWorkspacePath(workspace.rootPath, entry.path);
+              const target = entry.moveTo ? resolveWorkspacePath(workspace.rootPath, entry.moveTo) : undefined;
+              return [current, target]
+                .filter((value): value is string => Boolean(value))
+                .flatMap((value) => collectPathCandidates(value));
+            }),
+            risky: true,
+            writes: true,
+            approvalReason: "Applying a patch requires approval.",
           };
-          return JSON.stringify(result, null, 2);
         },
+        execute: async (args) => JSON.stringify(applyPatchOperations(workspace.rootPath, String(args.patch)), null, 2),
+      },
+      {
+        name: "move_path",
+        description: "Move or rename a file or directory in the workspace.",
+        parameters: MOVE_PATH_SCHEMA,
+        strict: true,
+        source: "local",
+        capabilities: { deferApproval: true },
+        parseArgs: (input) => MOVE_PATH_SCHEMA.parse(input),
+        buildDescriptor: (args) => {
+          const from = resolveWorkspacePath(workspace.rootPath, String(args.from));
+          const to = resolveWorkspacePath(workspace.rootPath, String(args.to));
+          return {
+            source: "local",
+            preview: `Move ${from} -> ${to}`,
+            scopeKey: `${from}->${to}`,
+            paths: [...collectPathCandidates(from), ...collectPathCandidates(to)],
+            risky: true,
+            writes: true,
+            approvalReason: `Moving ${from} to ${to} requires approval.`,
+          };
+        },
+        execute: async (args) => JSON.stringify(moveWorkspacePath(workspace.rootPath, String(args.from), String(args.to)), null, 2),
+      },
+      {
+        name: "delete_path",
+        description: "Delete a file or directory in the workspace.",
+        parameters: DELETE_PATH_SCHEMA,
+        strict: true,
+        source: "local",
+        capabilities: { deferApproval: true },
+        parseArgs: (input) => DELETE_PATH_SCHEMA.parse(input),
+        buildDescriptor: (args) => {
+          const absolute = resolveWorkspacePath(workspace.rootPath, String(args.path));
+          return {
+            source: "local",
+            preview: `Delete ${absolute}`,
+            scopeKey: `${absolute}:${args.recursive ?? true}`,
+            paths: collectPathCandidates(absolute),
+            risky: true,
+            writes: true,
+            approvalReason: `Deleting ${absolute} requires approval.`,
+          };
+        },
+        execute: async (args) =>
+          JSON.stringify(deleteWorkspacePath(workspace.rootPath, String(args.path), typeof args.recursive === "boolean" ? args.recursive : true), null, 2),
       },
     ];
   }
@@ -220,8 +466,8 @@ export class LocalToolProvider implements ToolProvider {
 
 function buildShellDescriptor(workspace: WorkspaceProfile, args: Record<string, unknown>): ToolActionDescriptor {
   const command = String(args.command);
-  const cwd = args.cwd ? resolve(workspace.rootPath, String(args.cwd)) : workspace.rootPath;
-  const analysis = analyzeShellCommand(command, cwd, workspace.rootPath);
+  const cwd = args.cwd ? resolveWorkspacePath(workspace.rootPath, String(args.cwd)) : workspace.rootPath;
+  const analysis = buildShellAnalysis(command, cwd, workspace.rootPath);
 
   return {
     source: "local",
@@ -231,290 +477,41 @@ function buildShellDescriptor(workspace: WorkspaceProfile, args: Record<string, 
     risky: true,
     writes: analysis.writes,
     network: analysis.network,
-    approvalReason: `Command execution requires approval: ${command}`,
+    approvalReason: analysis.privileged
+      ? `Privileged command execution requires explicit approval: ${command}`
+      : `Command execution requires approval: ${command}`,
   };
 }
 
-function analyzeShellCommand(command: string, cwd: string, workspaceRoot: string): {
-  scopeKey: string;
-  paths: string[];
-  network: boolean;
-  writes: boolean;
-  safeReadOnly: boolean;
-} {
-  const tokens = tokenizeCommand(command);
-  const lowered = tokens.map((token) => token.toLowerCase());
-  const first = lowered[0] ?? "";
-  const second = lowered[1] ?? "";
-  const hasRedirection = /(^|[^\w])(>>?|2>|out-file)([^\w]|$)/i.test(command);
-  const hasGitWrite = first === "git" && ["apply", "checkout", "restore", "clean", "merge", "rebase", "commit", "add"].includes(second);
-  const hasPackageWrite =
-    ["npm", "pnpm", "yarn", "bun"].includes(first) && ["install", "add", "update", "upgrade", "publish"].includes(second);
-  const hasPythonWrite = ["pip", "pip3", "python", "python3"].includes(first) && second === "-m" && lowered[2] === "pip" && lowered[3] === "install";
-  const hasCargoWrite = ["cargo", "go"].includes(first) && ["install", "add", "get"].includes(second);
-  const writes =
-    hasRedirection ||
-    hasGitWrite ||
-    hasPackageWrite ||
-    hasPythonWrite ||
-    hasCargoWrite ||
-    lowered.some((token) => WRITE_COMMANDS.has(token));
-  const network =
-    NETWORK_COMMANDS.has(first) ||
-    (first === "git" && ["clone", "fetch", "pull", "push"].includes(second)) ||
-    hasPackageWrite ||
-    hasPythonWrite ||
-    hasCargoWrite;
-  const safeReadOnly =
-    !writes &&
-    !network &&
-    ((first === "git" && READ_ONLY_GIT_SUBCOMMANDS.has(second)) || READ_ONLY_COMMANDS.has(first));
-  const paths = lowered
-    .map((_token, index) => tokens[index]!)
-    .filter((token) => isAbsolutePathToken(token))
-    .map((token) => resolve(cwd, stripWrappingQuotes(token)))
-    .filter((path) => path !== workspaceRoot || isPathInside(workspaceRoot, path));
+function buildSearchDescriptor(workspace: WorkspaceProfile, args: Record<string, unknown>): ToolActionDescriptor {
+  const target = args.path ? resolveWorkspacePath(workspace.rootPath, String(args.path)) : workspace.rootPath;
 
   return {
-    scopeKey: normalizeCommandScope(command),
-    paths,
-    network,
-    writes,
-    safeReadOnly,
+    source: "local",
+    preview: `Search ${target} for "${String(args.query)}"`,
+    scopeKey: `${target}:${String(args.query).trim().toLowerCase()}:${String(args.regex ?? false)}:${String(args.filePattern ?? "")}:${String(args.limit ?? 100)}`,
+    paths: collectPathCandidates(target),
   };
 }
 
-function executeCommand(command: string, context: ToolExecutionContext, cwd: string): Promise<string> {
-  if (context.workspace.sandboxMode === "read-only") {
-    const analysis = analyzeShellCommand(command, cwd, context.workspace.rootPath);
-
-    if (!analysis.safeReadOnly) {
-      throw new Error(`Read-only sandbox rejected command: ${command}`);
-    }
-  }
-
-  return new Promise((resolvePromise, rejectPromise) => {
-    const child = spawnCommand(command, cwd, context.workspace.shell);
-    let finished = false;
-    let stdout = "";
-    let stderr = "";
-    const cleanupAbort = attachAbortListener(context.signal, child, () => {
-      if (finished) {
-        return;
-      }
-
-      finished = true;
-      rejectPromise(new ToolExecutionAbortedError(`Command interrupted: ${command}`));
-    });
-
-    child.stdout.on("data", (chunk) => {
-      const text = chunk.toString();
-      stdout += text;
-      context.emitCommandDelta(text);
-    });
-
-    child.stderr.on("data", (chunk) => {
-      const text = chunk.toString();
-      stderr += text;
-      context.emitCommandDelta(text);
-    });
-
-    child.on("error", (error) => {
-      cleanupAbort();
-
-      if (finished) {
-        return;
-      }
-
-      finished = true;
-      rejectPromise(error);
-    });
-
-    child.on("close", (code) => {
-      cleanupAbort();
-
-      if (finished) {
-        return;
-      }
-
-      finished = true;
-      resolvePromise(
-        JSON.stringify(
-          {
-            code: code ?? -1,
-            stdout,
-            stderr,
-            interrupted: false,
-          },
-          null,
-          2,
-        ),
-      );
-    });
-  });
+function readFileExists(rootPath: string, path: string): boolean {
+  return existsSync(resolveWorkspacePath(rootPath, path));
 }
 
-function spawnCommand(command: string, cwd: string, shell: string): ChildProcessWithoutNullStreams {
-  const normalized = shell.toLowerCase();
-
-  if (normalized.includes("powershell")) {
-    return spawn(shell, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command], {
-      cwd,
-      env: process.env,
-      windowsHide: true,
-    });
-  }
-
-  if (normalized.includes("bash")) {
-    return spawn(shell, ["-lc", command], {
-      cwd,
-      env: process.env,
-      windowsHide: true,
-    });
-  }
-
-  return spawn(command, {
-    cwd,
-    shell: true,
-    env: process.env,
-    windowsHide: true,
-  });
-}
-
-function attachAbortListener(
-  signal: AbortSignal | undefined,
-  child: ChildProcessWithoutNullStreams,
-  onAbort: () => void,
-): () => void {
-  if (!signal) {
-    return () => undefined;
-  }
-
-  if (signal.aborted) {
-    void killProcessTree(child);
-    onAbort();
-    return () => undefined;
-  }
-
-  const handler = () => {
-    void killProcessTree(child);
-    onAbort();
+function normalizeSearchArgs(args: Record<string, unknown>) {
+  return {
+    query: String(args.query),
+    path: typeof args.path === "string" ? args.path : undefined,
+    regex: typeof args.regex === "boolean" ? args.regex : false,
+    filePattern: typeof args.filePattern === "string" ? args.filePattern : undefined,
+    limit: typeof args.limit === "number" ? args.limit : 100,
   };
-
-  signal.addEventListener("abort", handler, { once: true });
-  return () => signal.removeEventListener("abort", handler);
 }
 
-async function killProcessTree(child: ChildProcessWithoutNullStreams): Promise<void> {
-  if (child.killed || child.pid === undefined) {
-    return;
+function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
   }
 
-  if (process.platform === "win32") {
-    await new Promise<void>((resolvePromise) => {
-      const killer = spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
-        stdio: "ignore",
-        windowsHide: true,
-      });
-
-      killer.on("close", () => resolvePromise());
-      killer.on("error", () => resolvePromise());
-    });
-    return;
-  }
-
-  child.kill("SIGTERM");
-}
-
-function searchWorkspace(root: string, query: string): Array<Record<string, unknown>> {
-  const loweredQuery = query.toLowerCase();
-  const matches: Array<Record<string, unknown>> = [];
-
-  for (const file of walk(root)) {
-    const relativePath = file.slice(root.length + 1);
-
-    if (relativePath.toLowerCase().includes(loweredQuery)) {
-      matches.push({
-        type: "file",
-        path: relativePath,
-      });
-    }
-
-    if (matches.length >= 50) {
-      break;
-    }
-
-    let content: string;
-
-    try {
-      content = readFileSync(file, "utf8");
-    } catch {
-      continue;
-    }
-
-    const lines = content.split(/\r?\n/);
-
-    for (let index = 0; index < lines.length; index += 1) {
-      const line = lines[index]!;
-      const column = line.toLowerCase().indexOf(loweredQuery);
-
-      if (column === -1) {
-        continue;
-      }
-
-      matches.push({
-        type: "match",
-        path: relativePath,
-        line: index + 1,
-        column: column + 1,
-        preview: line.trim().slice(0, 240),
-      });
-
-      if (matches.length >= 50) {
-        return matches;
-      }
-    }
-  }
-
-  return matches;
-}
-
-function walk(root: string): string[] {
-  const entries = readdirSync(root, { withFileTypes: true });
-  const files: string[] = [];
-
-  for (const entry of entries) {
-    if ([".git", "node_modules", "dist", "dist-electron", ".next"].includes(entry.name)) {
-      continue;
-    }
-
-    const absolute = join(root, entry.name);
-
-    if (entry.isDirectory()) {
-      files.push(...walk(absolute));
-      continue;
-    }
-
-    files.push(absolute);
-  }
-
-  return files;
-}
-
-function tokenizeCommand(command: string): string[] {
-  const matches = command.match(/"[^"]*"|'[^']*'|`[^`]*`|[^\s]+/g);
-  return matches ?? [];
-}
-
-function isAbsolutePathToken(token: string): boolean {
-  const normalized = stripWrappingQuotes(token);
-  return /^[a-z]:[\\/]/i.test(normalized) || normalized.startsWith("\\\\") || normalized.startsWith("/");
-}
-
-function stripWrappingQuotes(token: string): string {
-  return token.replace(/^['"`]|['"`]$/g, "");
-}
-
-function normalizeCommandScope(command: string): string {
-  return command.trim().replace(/\s+/g, " ").toLowerCase();
+  return value.map((entry) => String(entry));
 }

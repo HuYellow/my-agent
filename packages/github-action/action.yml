@@ -1,0 +1,18 @@
+name: "my-agent Runtime"
+description: "Run a my-agent workflow or non-interactive prompt in GitHub Actions."
+inputs:
+  workflow_id:
+    description: "Workflow id to run."
+    required: false
+  project_id:
+    description: "Project id registered in the runtime."
+    required: false
+  prompt:
+    description: "Prompt to run in non-interactive mode."
+    required: false
+  thread_title:
+    description: "Optional thread title when running a prompt."
+    required: false
+runs:
+  using: "node20"
+  main: "dist/index.js"

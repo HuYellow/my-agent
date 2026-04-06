@@ -16,6 +16,7 @@ export class SandboxPolicy {
       return {
         allowed: false,
         requiresApproval: false,
+        approvalMode: "none",
         approvalKey: descriptor.scopeKey,
         denialReason: `Operation targets a path outside the workspace: ${outsidePaths[0]}.`,
       };
@@ -25,6 +26,7 @@ export class SandboxPolicy {
       return {
         allowed: false,
         requiresApproval: false,
+        approvalMode: "none",
         approvalKey: descriptor.scopeKey,
         denialReason: "Read-only sandbox blocks write operations.",
       };
@@ -34,6 +36,7 @@ export class SandboxPolicy {
       return {
         allowed: false,
         requiresApproval: false,
+        approvalMode: "none",
         approvalKey: descriptor.scopeKey,
         denialReason: `Network-capable operations require danger-full-access sandbox mode.`,
       };
@@ -43,6 +46,7 @@ export class SandboxPolicy {
       return {
         allowed: true,
         requiresApproval: false,
+        approvalMode: "none",
         approvalKey: descriptor.scopeKey,
         approvalReason: descriptor.approvalReason,
         sessionApproved: options.sessionApproved ?? false,
@@ -50,9 +54,20 @@ export class SandboxPolicy {
     }
 
     if (descriptor.risky) {
+      if (workspace.approvalPolicy === "on-failure") {
+        return {
+          allowed: true,
+          requiresApproval: false,
+          approvalMode: "deferred",
+          approvalKey: descriptor.scopeKey,
+          approvalReason: descriptor.approvalReason ?? `Tool action "${descriptor.preview}" can be retried after approval.`,
+        };
+      }
+
       return {
         allowed: true,
         requiresApproval: true,
+        approvalMode: "preflight",
         approvalKey: descriptor.scopeKey,
         approvalReason: descriptor.approvalReason ?? `Tool action "${descriptor.preview}" requires approval.`,
       };
@@ -61,6 +76,7 @@ export class SandboxPolicy {
     return {
       allowed: true,
       requiresApproval: false,
+      approvalMode: "none",
       approvalKey: descriptor.scopeKey,
     };
   }

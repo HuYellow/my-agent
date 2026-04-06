@@ -154,4 +154,27 @@ describe("my-agent file config integration", () => {
     expect(existsSync(join(myAgentHome, "config.toml"))).toBe(true);
     expect(existsSync(join(myAgentHome, "auth.json"))).toBe(true);
   });
+
+  it("falls back from legacy ai_sdk provider config to responses", () => {
+    const myAgentHome = mkdtempSync(join(tmpdir(), "my-agent-home-"));
+    process.env.MY_AGENT_HOME = myAgentHome;
+    writeFileSync(
+      join(myAgentHome, "config.toml"),
+      [
+        'model_provider = "legacy"',
+        'model = "gpt-5.4"',
+        "",
+        "[model_providers.legacy]",
+        'name = "legacy"',
+        'base_url = "https://aixj.vip"',
+        'wire_api = "ai_sdk"',
+        "requires_openai_auth = true",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    writeFileSync(join(myAgentHome, "auth.json"), JSON.stringify({ OPENAI_API_KEY: "sk-test" }, null, 2), "utf8");
+
+    expect(loadStoredProviderConfig()?.provider.apiFlavor).toBe("responses");
+  });
 });

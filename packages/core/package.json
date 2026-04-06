@@ -5,6 +5,16 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./runtime-kernel": {
+      "types": "./dist/runtime-kernel.d.ts",
+      "import": "./dist/runtime-kernel.js"
+    }
+  },
   "bin": {
     "my-agent-core": "dist/index.js"
   },

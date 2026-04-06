@@ -52,6 +52,9 @@ export class InternalToolProvider implements ToolProvider {
       parameters: manifest.parameters as JsonSchemaObject,
       strict: true,
       source: "internal" as const,
+      capabilities: {
+        deferApproval: false,
+      },
       parseArgs: (input) => parseManifestArgs(manifest, input),
       buildDescriptor: (args) => ({
         source: "internal",

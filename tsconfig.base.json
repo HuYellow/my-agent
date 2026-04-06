@@ -16,6 +16,12 @@
     ],
     "baseUrl": ".",
     "paths": {
+      "@my-agent/core": [
+        "packages/core/src/index.ts"
+      ],
+      "@my-agent/core/runtime-kernel": [
+        "packages/core/src/runtime-kernel.ts"
+      ],
       "@my-agent/protocol": [
         "packages/protocol/src/index.ts"
       ]

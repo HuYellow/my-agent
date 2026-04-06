@@ -2,9 +2,13 @@ import { type WorkspaceProfile } from "@my-agent/protocol";
 import { HarnessDatabase } from "../store/database.js";
 import { InternalToolProvider } from "./internal-tool-provider.js";
 import { LocalToolProvider } from "./local-tool-provider.js";
+import { McpToolProvider } from "./mcp-tool-provider.js";
+import { PluginToolProvider } from "./plugin-tool-provider.js";
 import { SandboxPolicy } from "./sandbox-policy.js";
+import { McpManager } from "../services/mcp-manager.js";
 import {
   ApprovalRequiredError,
+  DeferredApprovalRequiredError,
   type PlannedToolExecution,
   type RuntimeToolDefinition,
   type ToolExecutionContext,
@@ -15,6 +19,7 @@ interface ToolServiceOptions {
   database?: HarnessDatabase;
   threadId?: string;
   homeDir?: string;
+  mcpManager?: McpManager;
 }
 
 export class ToolService {
@@ -25,7 +30,12 @@ export class ToolService {
     private readonly workspace: WorkspaceProfile,
     private readonly options: ToolServiceOptions = {},
   ) {
-    this.providers = [new LocalToolProvider(), new InternalToolProvider(options.homeDir)];
+    this.providers = [
+      new LocalToolProvider(),
+      new InternalToolProvider(options.homeDir),
+      new PluginToolProvider(),
+      new McpToolProvider(options.database, options.mcpManager),
+    ];
   }
 
   getDefinitions(): RuntimeToolDefinition[] {
@@ -52,9 +62,17 @@ export class ToolService {
       this.options.threadId && this.options.database
         ? this.options.database.hasApprovalRule(this.options.threadId, definition.name, approvalKey)
         : false;
-    const permission = this.sandboxPolicy.evaluate(descriptor, this.workspace, {
+    let permission = this.sandboxPolicy.evaluate(descriptor, this.workspace, {
       sessionApproved,
     });
+
+    if (permission.approvalMode === "deferred" && definition.capabilities?.deferApproval === false) {
+      permission = {
+        ...permission,
+        approvalMode: "preflight",
+        requiresApproval: true,
+      };
+    }
 
     return {
       definition,
@@ -80,6 +98,13 @@ export class ToolService {
     if (plan.permission.requiresApproval) {
       throw new ApprovalRequiredError(
         plan.permission.approvalReason ?? `Tool ${plan.definition.name} requires approval before it can run.`,
+        plan.permission,
+      );
+    }
+
+    if (plan.permission.approvalMode === "deferred") {
+      throw new DeferredApprovalRequiredError(
+        plan.permission.approvalReason ?? `Tool ${plan.definition.name} requires approval before it can be retried.`,
         plan.permission,
       );
     }
