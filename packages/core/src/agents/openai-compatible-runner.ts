@@ -27,6 +27,7 @@ import {
   type SkillDescriptor,
   type ThreadRecord,
   type TurnInputAttachment,
+  type TurnSteerRecord,
   type TurnRecord,
   type WorkspaceProfile,
 } from "@my-agent/protocol";
@@ -119,6 +120,14 @@ export class OpenAiCompatibleRunner {
     return this.runtimeManager.abortTurn(turnId);
   }
 
+  steerTurn(steer: TurnSteerRecord): boolean {
+    return this.runtimeManager.queueSteer(steer.turnId, {
+      id: steer.id,
+      input: steer.input,
+      priority: steer.priority,
+    });
+  }
+
   async runTurn(context: RunnerContext): Promise<TurnRecord> {
     const builtPrompt = this.promptBuilder.build({
       cwd: context.workspace.rootPath,
@@ -206,7 +215,7 @@ export class OpenAiCompatibleRunner {
         session,
         signal: execution.controller.signal,
         sessionInputCallback: trimSessionHistory,
-        callModelInputFilter: this.createCallModelInputFilter(execution.governor),
+        callModelInputFilter: this.createCallModelInputFilter(context.turn, execution.governor),
         errorHandlers: this.createRunErrorHandlers(execution.governor),
       });
 
@@ -348,7 +357,7 @@ export class OpenAiCompatibleRunner {
         session,
         signal: execution.controller.signal,
         sessionInputCallback: trimSessionHistory,
-        callModelInputFilter: this.createCallModelInputFilter(execution.governor),
+        callModelInputFilter: this.createCallModelInputFilter(runningTurn, execution.governor),
         errorHandlers: this.createRunErrorHandlers(execution.governor),
       });
 
@@ -649,17 +658,40 @@ export class OpenAiCompatibleRunner {
     };
   }
 
-  private createCallModelInputFilter(governor: RunGovernor): CallModelInputFilter {
+  private createCallModelInputFilter(turn: TurnRecord, governor: RunGovernor): CallModelInputFilter {
     return ({ modelData }) => {
       const adaptiveInstructions = governor.buildAdaptiveInstructions();
+      const queuedSteers = this.runtimeManager.drainSteers(turn.id);
 
-      if (!adaptiveInstructions) {
+      const steerInstructions =
+        queuedSteers.length > 0
+          ? queuedSteers
+              .map(
+                (queuedSteer, index) =>
+                  `${index + 1}. [${queuedSteer.priority.toUpperCase()}] ${queuedSteer.input}`,
+              )
+              .join("\n")
+          : "";
+
+      if (!adaptiveInstructions && !steerInstructions) {
         return modelData;
+      }
+
+      const instructionSections: string[] = [];
+
+      if (adaptiveInstructions) {
+        instructionSections.push(`# Budget Reminder\n${adaptiveInstructions}`);
+      }
+
+      if (steerInstructions) {
+        instructionSections.push(`# Runtime Steer\nApply these latest user steering instructions in this run before continuing:\n${steerInstructions}`);
       }
 
       return {
         ...modelData,
-        instructions: modelData.instructions ? `${modelData.instructions}\n\n# Budget Reminder\n${adaptiveInstructions}` : adaptiveInstructions,
+        instructions: modelData.instructions
+          ? `${modelData.instructions}\n\n${instructionSections.join("\n\n")}`
+          : instructionSections.join("\n\n"),
       };
     };
   }

@@ -78,4 +78,52 @@ describe("HarnessDatabase projects", () => {
       },
     ]);
   });
+
+  it("persists review runs with structured findings", () => {
+    const root = mkdtempSync(join(tmpdir(), "my-agent-db-"));
+    const database = new HarnessDatabase(join(root, "app.db"));
+    const project = database.listProjects()[0]!;
+    const now = new Date().toISOString();
+
+    database.createReview({
+      id: "review-1",
+      projectId: project.id,
+      threadId: "thread-visible",
+      executionContextId: "exec-1",
+      status: "completed",
+      source: { kind: "workspace" },
+      summary: "One actionable issue found.",
+      findings: [
+        {
+          id: "finding-1",
+          severity: "high",
+          summary: "Null guard is missing",
+          detail: "A missing null check can crash the request path.",
+          file: "src/app.ts",
+          line: 42,
+        },
+      ],
+      createdAt: now,
+      updatedAt: now,
+      completedAt: now,
+    });
+
+    expect(database.listReviews(project.id)).toMatchObject([
+      {
+        id: "review-1",
+        projectId: project.id,
+        threadId: "thread-visible",
+        executionContextId: "exec-1",
+        summary: "One actionable issue found.",
+        findings: [
+          {
+            id: "finding-1",
+            severity: "high",
+            file: "src/app.ts",
+            line: 42,
+          },
+        ],
+      },
+    ]);
+  });
 });

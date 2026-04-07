@@ -212,6 +212,7 @@ export interface InitializeResult {
   worktrees?: WorktreeRecord[];
   environments?: EnvironmentRecord[];
   executionContexts?: ExecutionContextRecord[];
+  reviews?: ReviewRecord[];
 }
 
 export interface StartThreadParams {
@@ -265,6 +266,30 @@ export interface InterruptTurnParams {
   turnId: string;
 }
 
+export interface TurnSteerParams {
+  turnId: string;
+  input: string;
+  priority?: "low" | "normal" | "high";
+  visibility?: "user" | "system";
+}
+
+export interface TurnSteerRecord {
+  id: string;
+  turnId: string;
+  threadId: string;
+  input: string;
+  priority: "low" | "normal" | "high";
+  visibility: "user" | "system";
+  status: "queued" | "applied" | "rejected";
+  createdAt: string;
+  appliedAt?: string;
+  message?: string;
+}
+
+export interface TurnSteerResult {
+  steer: TurnSteerRecord;
+}
+
 export interface ApprovalResponseParams {
   approvalId: string;
   decision: "approve" | "reject";
@@ -273,6 +298,52 @@ export interface ApprovalResponseParams {
 
 export interface ApprovalResponseResult {
   turn: TurnRecord;
+}
+
+export interface ReviewSource {
+  kind: "workspace" | "staged" | "base_branch" | "commit";
+  baseBranch?: string;
+  commit?: string;
+}
+
+export interface ReviewFinding {
+  id: string;
+  severity: "low" | "medium" | "high" | "critical";
+  summary: string;
+  detail?: string;
+  file?: string;
+  line?: number;
+}
+
+export interface ReviewRecord {
+  id: string;
+  projectId: string;
+  threadId?: string;
+  executionContextId?: string;
+  status: "queued" | "running" | "completed" | "failed";
+  source: ReviewSource;
+  instructions?: string;
+  summary?: string;
+  findings: ReviewFinding[];
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+}
+
+export interface ReviewStartParams {
+  projectId?: string;
+  threadId?: string;
+  source?: ReviewSource;
+  instructions?: string;
+}
+
+export interface ReviewStartResult {
+  review: ReviewRecord;
+}
+
+export interface ReviewListResult {
+  reviews: ReviewRecord[];
 }
 
 export interface ListSkillsResult {
@@ -524,6 +595,7 @@ export interface McpToolRecord {
 export type HarnessEvent =
   | EventEnvelope<"thread/started", { thread: ThreadRecord }>
   | EventEnvelope<"turn/started", { turn: TurnRecord }>
+  | EventEnvelope<"turn/steered", { steer: TurnSteerRecord }>
   | EventEnvelope<"item/started", { item: ItemRecord }>
   | EventEnvelope<"item/delta", { itemId: string; delta: string }>
   | EventEnvelope<"item/completed", { item: ItemRecord }>
@@ -532,6 +604,9 @@ export type HarnessEvent =
   | EventEnvelope<"turn/completed", { turn: TurnRecord }>
   | EventEnvelope<"turn/cancelled", { turn: TurnRecord; message: string }>
   | EventEnvelope<"turn/failed", { turn: TurnRecord; message: string }>
+  | EventEnvelope<"review/started", { review: ReviewRecord }>
+  | EventEnvelope<"review/status", { review: ReviewRecord }>
+  | EventEnvelope<"review/result", { review: ReviewRecord }>
   | EventEnvelope<"config/changed", { config: AppConfig }>
   | EventEnvelope<"skills/changed", { skills: SkillDescriptor[] }>
   | EventEnvelope<"terminal/updated", { session: TerminalSessionRecord }>

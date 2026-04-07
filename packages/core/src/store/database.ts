@@ -16,6 +16,7 @@ import {
   type PendingApproval,
   type PluginRecord,
   type ProjectRecord,
+  type ReviewRecord,
   type TerminalSessionRecord,
   type ThreadRecord,
   type TurnRecord,
@@ -277,6 +278,22 @@ export class HarnessDatabase {
         resources_json TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS reviews (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        thread_id TEXT,
+        execution_context_id TEXT,
+        status TEXT NOT NULL,
+        source_json TEXT NOT NULL,
+        instructions TEXT,
+        summary TEXT,
+        findings_json TEXT NOT NULL,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT
+      );
     `);
     this.migrate();
   }
@@ -457,6 +474,90 @@ export class HarnessDatabase {
       .prepare("SELECT * FROM items WHERE thread_id = ? ORDER BY created_at ASC")
       .all(threadId)
       .map((row) => this.mapItem(row as Record<string, unknown>));
+  }
+
+  createReview(review: ReviewRecord): ReviewRecord {
+    this.db
+      .prepare(
+        `
+          INSERT INTO reviews(
+            id,
+            project_id,
+            thread_id,
+            execution_context_id,
+            status,
+            source_json,
+            instructions,
+            summary,
+            findings_json,
+            error,
+            created_at,
+            updated_at,
+            completed_at
+          ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+      )
+      .run(
+        review.id,
+        review.projectId,
+        review.threadId ?? null,
+        review.executionContextId ?? null,
+        review.status,
+        JSON.stringify(review.source),
+        review.instructions ?? null,
+        review.summary ?? null,
+        JSON.stringify(review.findings),
+        review.error ?? null,
+        review.createdAt,
+        review.updatedAt,
+        review.completedAt ?? null,
+      );
+    return review;
+  }
+
+  getReview(reviewId: string): ReviewRecord | null {
+    const row = this.db.prepare("SELECT * FROM reviews WHERE id = ?").get(reviewId) as Record<string, unknown> | undefined;
+    return row ? this.mapReview(row) : null;
+  }
+
+  listReviews(projectId?: string, threadId?: string): ReviewRecord[] {
+    let rows: Record<string, unknown>[];
+
+    if (threadId) {
+      rows = this.db.prepare("SELECT * FROM reviews WHERE thread_id = ? ORDER BY created_at DESC").all(threadId) as Record<string, unknown>[];
+    } else if (projectId) {
+      rows = this.db.prepare("SELECT * FROM reviews WHERE project_id = ? ORDER BY created_at DESC").all(projectId) as Record<string, unknown>[];
+    } else {
+      rows = this.db.prepare("SELECT * FROM reviews ORDER BY created_at DESC").all() as Record<string, unknown>[];
+    }
+
+    return rows.map((row) => this.mapReview(row));
+  }
+
+  updateReview(review: ReviewRecord): ReviewRecord {
+    this.db
+      .prepare(
+        `
+          UPDATE reviews
+          SET project_id = ?, thread_id = ?, execution_context_id = ?, status = ?, source_json = ?, instructions = ?, summary = ?, findings_json = ?, error = ?, updated_at = ?, completed_at = ?
+          WHERE id = ?
+        `,
+      )
+      .run(
+        review.projectId,
+        review.threadId ?? null,
+        review.executionContextId ?? null,
+        review.status,
+        JSON.stringify(review.source),
+        review.instructions ?? null,
+        review.summary ?? null,
+        JSON.stringify(review.findings),
+        review.error ?? null,
+        review.updatedAt,
+        review.completedAt ?? null,
+        review.id,
+      );
+    return review;
   }
 
   putPendingApproval(approval: PendingApproval, runtime: Record<string, unknown>): PendingApproval {
@@ -1046,6 +1147,24 @@ export class HarnessDatabase {
     };
   }
 
+  private mapReview(row: Record<string, unknown>): ReviewRecord {
+    return {
+      id: String(row.id),
+      projectId: String(row.project_id),
+      threadId: row.thread_id ? String(row.thread_id) : undefined,
+      executionContextId: row.execution_context_id ? String(row.execution_context_id) : undefined,
+      status: row.status as ReviewRecord["status"],
+      source: JSON.parse(String(row.source_json)) as ReviewRecord["source"],
+      instructions: row.instructions ? String(row.instructions) : undefined,
+      summary: row.summary ? String(row.summary) : undefined,
+      findings: JSON.parse(String(row.findings_json)) as ReviewRecord["findings"],
+      error: row.error ? String(row.error) : undefined,
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+      completedAt: row.completed_at ? String(row.completed_at) : undefined,
+    };
+  }
+
   private mapApproval(row: Record<string, unknown>): PendingApproval {
     return {
       id: String(row.id),
@@ -1331,6 +1450,26 @@ export class HarnessDatabase {
           detected_tools_json TEXT NOT NULL,
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL
+        )
+      `);
+    }
+
+    if (!this.tableExists("reviews")) {
+      this.db.exec(`
+        CREATE TABLE reviews (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          thread_id TEXT,
+          execution_context_id TEXT,
+          status TEXT NOT NULL,
+          source_json TEXT NOT NULL,
+          instructions TEXT,
+          summary TEXT,
+          findings_json TEXT NOT NULL,
+          error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          completed_at TEXT
         )
       `);
     }

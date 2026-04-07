@@ -54,6 +54,7 @@ import {
   type PluginRecord,
   type ProjectRecord,
   type ProviderModelRecord,
+  type ReviewRecord,
   type SandboxMode,
   type SkillDescriptor,
   type TurnInputAttachment,
@@ -183,6 +184,7 @@ export function App() {
     projects,
     threads,
     threadSessions,
+    reviews,
     skills,
     activeProjectId,
     activeThreadId,
@@ -198,7 +200,9 @@ export function App() {
     updateThread,
     selectThread,
     sendTurn,
+    steerTurn,
     interruptTurn,
+    startReview,
     respondApproval,
     toggleSkill,
     updateConfig,
@@ -233,6 +237,7 @@ export function App() {
   const [sandboxMenuOpen, setSandboxMenuOpen] = useState(false);
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
   const [branchSearch, setBranchSearch] = useState("");
+  const [steerInput, setSteerInput] = useState("");
   const [branchSummary, setBranchSummary] = useState<BranchSummary>({
     isGitRepo: false,
     currentBranch: null,
@@ -421,6 +426,7 @@ export function App() {
 
     return candidate?.id;
   }, [activeSession?.turns]);
+  const steerableTurnId = interruptibleTurnId;
   const workingThreadIds = useMemo(
     () =>
       new Set(
@@ -432,6 +438,19 @@ export function App() {
   );
   const currentThreadBusy = Boolean(activeThreadId && workingThreadIds.has(activeThreadId));
   const canInterrupt = currentThreadBusy && Boolean(interruptibleTurnId);
+  const activeReviews = useMemo(
+    () =>
+      reviews.filter((review) => {
+        if (activeThreadId && review.threadId) {
+          return review.threadId === activeThreadId;
+        }
+
+        return Boolean(activeProjectId) && review.projectId === activeProjectId;
+      }),
+    [activeProjectId, activeThreadId, reviews],
+  );
+  const latestReview = activeReviews[0] ?? null;
+  const reviewRunning = activeReviews.some((review) => review.status === "running");
   const enabledSkills = useMemo(() => skills.filter((skill) => skill.enabled), [skills]);
   const currentSkillDetail = useMemo(
     () => skills.find((skill) => skill.id === skillDetailId) ?? null,
@@ -877,6 +896,29 @@ export function App() {
     await sendTurn(composedMessage, [], attachments, includeIdeContext);
   };
 
+  const submitSteer = async () => {
+    const message = steerInput.trim();
+
+    if (!steerableTurnId || !message) {
+      return;
+    }
+
+    await steerTurn(steerableTurnId, message);
+    setSteerInput("");
+  };
+
+  const triggerWorkspaceReview = async () => {
+    if (!activeProjectId) {
+      return;
+    }
+
+    await startReview({
+      projectId: activeProjectId,
+      threadId: activeThreadId,
+      source: { kind: "workspace" },
+    });
+  };
+
   const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (currentThreadBusy) {
       return;
@@ -1064,10 +1106,22 @@ export function App() {
                 <h1>{activeThread?.title ?? "New Thread"}</h1>
                 <span className="main-header__project">{activeProject?.name ?? "Current Project"}</span>
               </div>
+              <div className="main-header__actions">
+                <button
+                  type="button"
+                  className="main-header__action"
+                  onClick={() => void triggerWorkspaceReview()}
+                  disabled={!activeProjectId || reviewRunning}
+                >
+                  <Shield size={14} />
+                  <span>{reviewRunning ? "Reviewing…" : "Review diff"}</span>
+                </button>
+              </div>
             </header>
 
             {/* 濠电姷鏁告慨鐑藉极閹间礁纾婚柣鎰惈閸ㄥ倿鏌ｉ姀鐘冲暈闁稿顑呴埞鎴︽偐閹绘帗娈銈嗘礋娴滃爼寮诲☉妯锋婵炲棙鍔楃粙鍥╃磽娴ｆ彃浜鹃梺绯曞墲鐪夌紒璇叉閺屾洟宕煎┑鍥ф濡炪倕绻堥崕鐢稿蓟?*/}
             <div className="message-area" ref={messageAreaRef}>
+              {latestReview && <ReviewSummaryCard review={latestReview} />}
               {orderedItems.length === 0 ? (
                 <EmptyState />
               ) : (
@@ -1083,6 +1137,15 @@ export function App() {
                 />
               )}
             </div>
+
+            {steerableTurnId && (
+              <SteerCard
+                value={steerInput}
+                onChange={setSteerInput}
+                onSubmit={() => void submitSteer()}
+                disabled={!steerInput.trim()}
+              />
+            )}
 
             {/* 闂傚倸鍊风粈浣革耿闁秴鍌ㄧ憸鏃堝箖濞差亜惟闁靛鍟浠嬪箖閵忋倖鍋傞幖杈剧秶缁辩敻姊虹拠鎻掝劉缂佸甯熼幗顐ょ磽閸屾氨孝婵炲樊鍙冨濠氭偄閻撳海鐣鹃悷婊冪Ч瀵櫕娼忛埞鎯т壕婵炲牆鐏濋弸鐔封攽閻愯韬€?*/}
             <ComposerBar
@@ -2594,6 +2657,81 @@ function ApprovalRequest({
   );
 }
 
+function ReviewSummaryCard({ review }: { review: ReviewRecord }) {
+  return (
+    <section className="review-card">
+      <div className="review-card__header">
+        <div>
+          <div className="review-card__title">Code review</div>
+          <div className={`review-card__status review-card__status--${review.status}`}>
+            {review.status === "running" ? "Running" : review.status === "failed" ? "Failed" : "Completed"}
+          </div>
+        </div>
+        <div className="review-card__meta">{formatReviewSourceLabel(review.source)}</div>
+      </div>
+      <p className="review-card__summary">{review.error ?? review.summary ?? "Review is in progress."}</p>
+      {review.findings.length > 0 && (
+        <div className="review-card__findings">
+          {review.findings.map((finding) => (
+            <article key={finding.id} className="review-finding">
+              <div className="review-finding__header">
+                <span className={`review-finding__severity review-finding__severity--${finding.severity}`}>{finding.severity}</span>
+                <strong>{finding.summary}</strong>
+              </div>
+              {(finding.file || finding.line) && (
+                <div className="review-finding__location">
+                  {finding.file ?? "Unknown file"}
+                  {finding.line ? `:${finding.line}` : ""}
+                </div>
+              )}
+              {finding.detail && <p className="review-finding__detail">{finding.detail}</p>}
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function SteerCard({
+  value,
+  onChange,
+  onSubmit,
+  disabled,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  onSubmit: () => void;
+  disabled: boolean;
+}) {
+  return (
+    <section className="steer-card">
+      <div className="steer-card__header">
+        <strong>Steer current run</strong>
+        <span>Inject a follow-up instruction without restarting the turn.</span>
+      </div>
+      <div className="steer-card__body">
+        <textarea
+          className="steer-card__input"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault();
+              onSubmit();
+            }
+          }}
+          placeholder="Example: prioritize the failing test first, then update the parser"
+          rows={2}
+        />
+        <button type="button" className="steer-card__submit" onClick={onSubmit} disabled={disabled}>
+          Send steer
+        </button>
+      </div>
+    </section>
+  );
+}
+
 function ComposerBar({
   input,
   onChange,
@@ -3639,6 +3777,18 @@ function getChangedFilePath(item: ItemRecord): string | null {
 
   const match = item.title.match(/^File change:\s+(.+)$/);
   return match?.[1] ?? null;
+}
+
+function formatReviewSourceLabel(source: ReviewRecord["source"]): string {
+  if (source.kind === "base_branch") {
+    return `Base ${source.baseBranch ?? "branch"}`;
+  }
+
+  if (source.kind === "commit") {
+    return source.commit ? `Commit ${source.commit.slice(0, 12)}` : "Commit";
+  }
+
+  return source.kind === "workspace" ? "Workspace diff" : "Staged diff";
 }
 
 async function loadChangedFileSummaries(

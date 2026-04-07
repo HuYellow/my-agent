@@ -25,6 +25,9 @@ import {
   type ProviderTestResult,
   type ProviderModelsResult,
   type ReadFileParams,
+  type ReviewListResult,
+  type ReviewStartParams,
+  type ReviewStartResult,
   type ResumeThreadParams,
   type ResumeThreadResult,
   type TerminalCloseParams,
@@ -38,6 +41,9 @@ import {
   type StartTurnResult,
   type ThreadRecord,
   type TurnInputAttachment,
+  type TurnSteerParams,
+  type TurnSteerRecord,
+  type TurnSteerResult,
   type TurnRecord,
   type WorktreeCreateParams,
   type WorktreeListParams,
@@ -63,6 +69,7 @@ import { ensureStoredProviderConfig, syncStoredProviderConfig, watchStoredConfig
 import { PluginManager } from "../services/plugin-manager.js";
 import { PromptBuilder } from "../services/prompt-builder.js";
 import { ProviderService } from "../services/provider-service.js";
+import { ReviewManager } from "../services/review-manager.js";
 import { SkillService } from "../services/skill-service.js";
 import { TerminalManager } from "../services/terminal-manager.js";
 import { WorkflowManager } from "../services/workflow-manager.js";
@@ -84,6 +91,7 @@ export class HarnessServer {
   private readonly workflowManager: WorkflowManager;
   private readonly pluginManager: PluginManager;
   private readonly mcpManager: McpManager;
+  private readonly reviewManager: ReviewManager;
 
   constructor(
     private readonly database: HarnessDatabase,
@@ -173,6 +181,13 @@ export class HarnessServer {
           payload: { session },
         }),
     );
+    this.reviewManager = new ReviewManager(
+      this.database,
+      this.providerService,
+      this.environmentManager,
+      this.executionContextManager,
+      (event) => this.emit(event),
+    );
     void this.mcpManager.refreshAll();
     this.skillService.startWatching(activeProject.rootPath, config.disabledSkillIds);
     ensureStoredProviderConfig(config.provider);
@@ -235,8 +250,14 @@ export class HarnessServer {
         return this.forkThread(message.params as ForkThreadParams);
       case "turn/start":
         return this.startTurn(message.params as StartTurnParams);
+      case "turn/steer":
+        return this.steerTurn(message.params as TurnSteerParams);
       case "turn/interrupt":
         return this.interruptTurn(String((message.params as { turnId: string }).turnId));
+      case "review/start":
+        return this.startReview((message.params ?? {}) as ReviewStartParams);
+      case "review/list":
+        return this.listReviews(message.params as { projectId?: string; threadId?: string } | undefined);
       case "approval/respond":
         return this.respondApproval(message.params as ApprovalResponseParams);
       case "command/exec":
@@ -324,6 +345,7 @@ export class HarnessServer {
       worktrees: this.database.listWorktrees(config.selectedProjectId),
       environments: this.database.listEnvironments(config.selectedProjectId),
       executionContexts: this.database.listExecutionContexts(config.selectedProjectId),
+      reviews: this.reviewManager.list(config.selectedProjectId),
     };
   }
 
@@ -577,6 +599,40 @@ export class HarnessServer {
     return { turn: finalTurn };
   }
 
+  private steerTurn(params: TurnSteerParams): TurnSteerResult {
+    const turn = this.database.getTurn(params.turnId);
+
+    if (!turn) {
+      throw new Error(`Turn not found: ${params.turnId}`);
+    }
+
+    const steer: TurnSteerRecord = {
+      id: createId("steer"),
+      turnId: turn.id,
+      threadId: turn.threadId,
+      input: params.input.trim(),
+      priority: params.priority ?? "normal",
+      visibility: params.visibility ?? "user",
+      status: "queued",
+      createdAt: new Date().toISOString(),
+    };
+
+    if (!steer.input) {
+      throw new Error("Steer input cannot be empty.");
+    }
+
+    if (!this.runner.steerTurn(steer)) {
+      throw new Error("Turn is no longer running, so steer could not be applied.");
+    }
+
+    this.emit({
+      type: "turn/steered",
+      payload: { steer },
+    });
+
+    return { steer };
+  }
+
   private interruptTurn(turnId: string): { turn: TurnRecord } {
     const turn = this.database.getTurn(turnId);
 
@@ -623,6 +679,25 @@ export class HarnessServer {
     });
     this.clearThreadSessionApprovals(turn.threadId);
     return { turn: updated };
+  }
+
+  private startReview(params: ReviewStartParams): ReviewStartResult {
+    const thread = params.threadId ? this.database.getThread(params.threadId) : null;
+    const project = this.requireProject(params.projectId ?? thread?.projectId);
+    const review = this.reviewManager.start({
+      project,
+      provider: this.database.getConfig().provider,
+      threadId: thread?.id,
+      source: params.source,
+      instructions: params.instructions,
+    });
+    return { review };
+  }
+
+  private listReviews(params?: { projectId?: string; threadId?: string }): ReviewListResult {
+    return {
+      reviews: this.reviewManager.list(params?.projectId, params?.threadId),
+    };
   }
 
   private async respondApproval(params: ApprovalResponseParams): Promise<{ turn: TurnRecord }> {

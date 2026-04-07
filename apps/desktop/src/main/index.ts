@@ -17,9 +17,11 @@ import {
   type JsonRpcNotification,
   type JsonRpcRequest,
   type JsonRpcResponse,
+  type ReviewStartParams,
   type StartThreadParams,
   type StartTurnParams,
   type TurnInputAttachment,
+  type TurnSteerParams,
   type WorkflowRunParams,
   type WorktreeCreateParams,
   type WorktreeListParams,
@@ -371,10 +373,13 @@ function registerIpc(): void {
   });
   ipcMain.handle("thread:start", (_event, params: StartThreadParams) => harness.request("thread/start", params));
   ipcMain.handle("thread:resume", (_event, params: { threadId: string }) => harness.request("thread/resume", params));
-  ipcMain.handle("thread:update", (_event, params: UpdateThreadParams) => harness.request("thread/update", params));
-  ipcMain.handle("turn:start", (_event, params: StartTurnParams) => harness.request("turn/start", params));
-  ipcMain.handle("turn:interrupt", (_event, params: InterruptTurnParams) => harness.request("turn/interrupt", params));
-  ipcMain.handle("command:exec", (_event, params: CommandExecParams) => harness.request("command/exec", params));
+ipcMain.handle("thread:update", (_event, params: UpdateThreadParams) => harness.request("thread/update", params));
+ipcMain.handle("turn:start", (_event, params: StartTurnParams) => harness.request("turn/start", params));
+ipcMain.handle("turn:steer", (_event, params: TurnSteerParams) => harness.request("turn/steer", params));
+ipcMain.handle("turn:interrupt", (_event, params: InterruptTurnParams) => harness.request("turn/interrupt", params));
+ipcMain.handle("review:start", (_event, params: ReviewStartParams) => harness.request("review/start", params));
+ipcMain.handle("review:list", (_event, params: { projectId?: string; threadId?: string }) => harness.request("review/list", params));
+ipcMain.handle("command:exec", (_event, params: CommandExecParams) => harness.request("command/exec", params));
   ipcMain.handle("approval:respond", (_event, params: ApprovalResponseParams) => harness.request("approval/respond", params));
   ipcMain.handle("skills:list", () => harness.request("skills/list"));
   ipcMain.handle("skills:config:write", (_event, params: { disabledSkillIds: string[] }) => harness.request("skills/config/write", params));

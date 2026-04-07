@@ -13,6 +13,8 @@ import {
   type PendingApproval,
   type PluginRecord,
   type ProjectRecord,
+  type ReviewRecord,
+  type ReviewStartParams,
   type SkillDescriptor,
   type StartThreadParams,
   type StartTurnParams,
@@ -22,6 +24,8 @@ import {
   type WorkflowRunRecord,
   type TurnInputAttachment,
   type ThreadRecord,
+  type TurnSteerParams,
+  type TurnSteerRecord,
   type TurnRecord,
   type UpdateThreadParams,
   type UpdateProjectParams,
@@ -37,7 +41,10 @@ declare global {
       startThread: (params: StartThreadParams) => Promise<{ thread: ThreadRecord }>;
       resumeThread: (threadId: string) => Promise<{ thread: ThreadRecord; turns: TurnRecord[]; items: ItemRecord[]; pendingApproval?: PendingApproval | null }>;
       startTurn: (params: StartTurnParams) => Promise<{ turn: TurnRecord }>;
+      steerTurn: (params: TurnSteerParams) => Promise<{ steer: TurnSteerRecord }>;
       interruptTurn: (params: InterruptTurnParams) => Promise<{ turn: TurnRecord }>;
+      startReview: (params: ReviewStartParams) => Promise<{ review: ReviewRecord }>;
+      listReviews: (params?: { projectId?: string; threadId?: string }) => Promise<{ reviews: ReviewRecord[] }>;
       respondApproval: (params: ApprovalResponseParams) => Promise<{ turn: TurnRecord }>;
       listSkills: () => Promise<{ skills: SkillDescriptor[] }>;
       writeSkillConfig: (disabledSkillIds: string[]) => Promise<{ skills: SkillDescriptor[] }>;

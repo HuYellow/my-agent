@@ -1,35 +1,82 @@
 export class RuntimeManager {
-  private readonly controllers = new Map<string, AbortController>();
+  private readonly runtimes = new Map<
+    string,
+    {
+      controller: AbortController;
+      steerQueue: Array<{
+        id: string;
+        input: string;
+        priority: "low" | "normal" | "high";
+      }>;
+    }
+  >();
 
   startTurn(turnId: string): AbortController {
-    const existing = this.controllers.get(turnId);
+    const existing = this.runtimes.get(turnId);
 
     if (existing) {
-      existing.abort();
+      existing.controller.abort();
     }
 
     const controller = new AbortController();
-    this.controllers.set(turnId, controller);
+    this.runtimes.set(turnId, {
+      controller,
+      steerQueue: [],
+    });
     return controller;
   }
 
   abortTurn(turnId: string): boolean {
-    const controller = this.controllers.get(turnId);
+    const runtime = this.runtimes.get(turnId);
 
-    if (!controller) {
+    if (!runtime) {
       return false;
     }
 
-    controller.abort();
-    this.controllers.delete(turnId);
+    runtime.controller.abort();
+    this.runtimes.delete(turnId);
     return true;
   }
 
   finishTurn(turnId: string): void {
-    this.controllers.delete(turnId);
+    this.runtimes.delete(turnId);
   }
 
   isActive(turnId: string): boolean {
-    return this.controllers.has(turnId);
+    return this.runtimes.has(turnId);
+  }
+
+  queueSteer(
+    turnId: string,
+    steer: {
+      id: string;
+      input: string;
+      priority: "low" | "normal" | "high";
+    },
+  ): boolean {
+    const runtime = this.runtimes.get(turnId);
+
+    if (!runtime) {
+      return false;
+    }
+
+    runtime.steerQueue.push(steer);
+    return true;
+  }
+
+  drainSteers(turnId: string): Array<{
+    id: string;
+    input: string;
+    priority: "low" | "normal" | "high";
+  }> {
+    const runtime = this.runtimes.get(turnId);
+
+    if (!runtime || runtime.steerQueue.length === 0) {
+      return [];
+    }
+
+    const queued = [...runtime.steerQueue];
+    runtime.steerQueue.length = 0;
+    return queued;
   }
 }

@@ -8,9 +8,11 @@ import {
   type PendingApproval,
   type ProjectRecord,
   type ProviderModelRecord,
+  type ReviewRecord,
   type SkillDescriptor,
   type TurnInputAttachment,
   type ThreadRecord,
+  type TurnSteerRecord,
   type TurnRecord,
 } from "@my-agent/protocol";
 
@@ -31,6 +33,7 @@ interface AppState {
   projects: ProjectRecord[];
   threads: ThreadRecord[];
   threadSessions: Record<string, ThreadSessionState>;
+  reviews: ReviewRecord[];
   skills: SkillDescriptor[];
   activeProjectId?: string;
   activeThreadId?: string;
@@ -47,7 +50,9 @@ interface AppState {
   createThread: (title?: string, projectId?: string) => Promise<void>;
   selectThread: (threadId: string) => Promise<void>;
   sendTurn: (input: string, selectedSkillIds?: string[], attachments?: TurnInputAttachment[], includeIdeContext?: boolean) => Promise<void>;
+  steerTurn: (turnId: string, input: string, priority?: TurnSteerRecord["priority"]) => Promise<TurnSteerRecord>;
   interruptTurn: (turnId: string) => Promise<void>;
+  startReview: (params: { projectId?: string; threadId?: string; source?: ReviewRecord["source"]; instructions?: string }) => Promise<ReviewRecord>;
   respondApproval: (approvalId: string, decision: "approve" | "reject", scope?: "once" | "session") => Promise<void>;
   toggleSkill: (skillId: string) => Promise<void>;
   updateConfig: (config: Partial<AppConfig>) => Promise<void>;
@@ -63,6 +68,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   projects: [],
   threads: [],
   threadSessions: {},
+  reviews: [],
   skills: [],
   providerModels: [],
   providerModelsLoading: false,
@@ -91,6 +97,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           projects: initial.projects,
           threads: initial.threads,
           threadSessions: Object.fromEntries(initial.threads.map((thread) => [thread.id, createEmptyThreadSession()])),
+          reviews: initial.reviews ?? [],
           skills: initial.skills,
           config: initial.config,
           activeProjectId,
@@ -249,6 +256,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       throw error;
     }
   },
+  steerTurn: async (turnId, input, priority) => {
+    const result = (await window.myAgent.steerTurn({
+      turnId,
+      input,
+      priority,
+    })) as { steer: TurnSteerRecord };
+    return result.steer;
+  },
   interruptTurn: async (turnId) => {
     const result = (await window.myAgent.interruptTurn({ turnId })) as { turn: TurnRecord };
 
@@ -260,6 +275,13 @@ export const useAppStore = create<AppState>((set, get) => ({
         pendingApproval: session.pendingApproval?.turnId === result.turn.id ? null : session.pendingApproval,
       })),
     }));
+  },
+  startReview: async (params) => {
+    const result = (await window.myAgent.startReview(params)) as { review: ReviewRecord };
+    set((state) => ({
+      reviews: upsertReview(state.reviews, result.review),
+    }));
+    return result.review;
   },
   respondApproval: async (approvalId, decision, scope) => {
     const result = (await window.myAgent.respondApproval({
@@ -360,6 +382,28 @@ export const useAppStore = create<AppState>((set, get) => ({
           })),
         }));
         break;
+      case "turn/steered":
+        set((state) => ({
+          threadSessions: updateThreadSession(state.threadSessions, event.payload.steer.threadId, (session) => ({
+            ...session,
+            items: upsertItem(session.items, {
+              id: event.payload.steer.id,
+              threadId: event.payload.steer.threadId,
+              turnId: event.payload.steer.turnId,
+              kind: "userMessage",
+              status: "completed",
+              title: "Steer input",
+              body: event.payload.steer.input,
+              metadata: {
+                steerId: event.payload.steer.id,
+                priority: event.payload.steer.priority,
+              },
+              createdAt: event.payload.steer.createdAt,
+              updatedAt: event.payload.steer.createdAt,
+            }),
+          })),
+        }));
+        break;
       case "item/started":
       case "item/completed":
         set((state) => ({
@@ -415,6 +459,13 @@ export const useAppStore = create<AppState>((set, get) => ({
           })),
         }));
         break;
+      case "review/started":
+      case "review/status":
+      case "review/result":
+        set((state) => ({
+          reviews: upsertReview(state.reviews, event.payload.review),
+        }));
+        break;
       case "config/changed":
         set((state) => ({
           config: event.payload.config,
@@ -437,6 +488,10 @@ function upsertThread(threads: ThreadRecord[], thread: ThreadRecord): ThreadReco
 
 function upsertTurn(turns: TurnRecord[], turn: TurnRecord): TurnRecord[] {
   return [...turns.filter((entry) => entry.id !== turn.id), turn].sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+}
+
+function upsertReview(reviews: ReviewRecord[], review: ReviewRecord): ReviewRecord[] {
+  return [...reviews.filter((entry) => entry.id !== review.id), review].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
 }
 
 function upsertItem(items: ItemRecord[], item: ItemRecord): ItemRecord[] {

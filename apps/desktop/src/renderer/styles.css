@@ -5487,3 +5487,154 @@ html[data-theme="dark"] .settings-nav-item--active::before {
 html[data-theme="dark"] .runtime-stat__indicator {
   box-shadow: 0 0 12px var(--accent-soft);
 }
+
+.main-header__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+  -webkit-app-region: no-drag;
+}
+
+.main-header__action {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-elevated) 88%, transparent);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.main-header__action:disabled {
+  opacity: 0.6;
+}
+
+.review-card,
+.steer-card {
+  width: min(980px, 100%);
+  margin: 0 auto 18px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--surface-elevated) 92%, transparent);
+  box-shadow: var(--shadow-edge);
+}
+
+.review-card__header,
+.steer-card__header,
+.steer-card__body,
+.review-finding__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.review-card__title {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.review-card__meta,
+.review-card__summary,
+.review-finding__location,
+.review-finding__detail,
+.steer-card__header span {
+  color: var(--muted);
+}
+
+.review-card__status,
+.review-finding__severity {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 4px 9px;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.review-card__status--running,
+.review-finding__severity--medium {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.review-card__status--completed,
+.review-finding__severity--low {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.review-card__status--failed,
+.review-finding__severity--high,
+.review-finding__severity--critical {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+}
+
+.review-card__summary {
+  margin: 12px 0 0;
+  line-height: 1.6;
+}
+
+.review-card__findings {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.review-finding {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 80%, transparent);
+  border: 1px solid color-mix(in srgb, var(--line) 90%, transparent);
+}
+
+.review-finding__location,
+.review-finding__detail {
+  margin-top: 8px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.steer-card__header {
+  margin-bottom: 12px;
+}
+
+.steer-card__header strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.steer-card__input {
+  flex: 1;
+  min-height: 72px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--text);
+  resize: vertical;
+}
+
+.steer-card__submit {
+  align-self: stretch;
+  padding: 0 16px;
+  border: none;
+  border-radius: 14px;
+  background: linear-gradient(180deg, var(--accent), var(--accent-alt));
+  color: white;
+  font-weight: 800;
+}
+
+.steer-card__submit:disabled {
+  opacity: 0.6;
+}
