@@ -12,6 +12,7 @@ import {
   type ProviderModelRecord,
   type PendingApproval,
   type PluginRecord,
+  type ProviderActionParams,
   type ProjectRecord,
   type ReviewRecord,
   type ReviewStartParams,
@@ -51,8 +52,8 @@ declare global {
       readSkillDocument: (skillPath: string) => Promise<{ content: string }>;
       readConfig: () => Promise<{ config: AppConfig }>;
       writeConfig: (params: ConfigWriteParams) => Promise<{ config: AppConfig }>;
-      testProvider: () => Promise<{ ok: boolean; status: number; message: string }>;
-      listProviderModels: () => Promise<{ models: ProviderModelRecord[] }>;
+      testProvider: (params?: ProviderActionParams) => Promise<{ ok: boolean; status: number; message: string }>;
+      listProviderModels: (params?: ProviderActionParams) => Promise<{ models: ProviderModelRecord[] }>;
       listWorktrees: (projectId?: string) => Promise<{ worktrees: WorktreeRecord[] }>;
       createWorktree: (params: { projectId: string; threadId?: string; branch?: string; baseRef?: string }) => Promise<{ worktree: WorktreeRecord }>;
       removeWorktree: (worktreeId: string) => Promise<{ worktree: WorktreeRecord }>;

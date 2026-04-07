@@ -212,6 +212,8 @@ export interface InitializeResult {
   worktrees?: WorktreeRecord[];
   environments?: EnvironmentRecord[];
   executionContexts?: ExecutionContextRecord[];
+  terminals?: TerminalSessionRecord[];
+  terminalCapabilities?: TerminalBackendCapability[];
   reviews?: ReviewRecord[];
 }
 
@@ -364,6 +366,10 @@ export interface ProviderModelsResult {
   models: ProviderModelRecord[];
 }
 
+export interface ProviderActionParams {
+  provider?: Partial<ProviderProfile>;
+}
+
 export interface TurnInputAttachment {
   path: string;
   name: string;
@@ -424,9 +430,26 @@ export interface TerminalSessionRecord {
   workspaceId: string;
   cwd: string;
   shell: string;
-  status: "open" | "closed";
+  backend: "pipe" | "pty";
+  status: "starting" | "open" | "closing" | "closed" | "failed";
+  cols?: number;
+  rows?: number;
+  pid?: number;
+  exitCode?: number;
+  failureReason?: string;
+  startedAt: string;
+  lastActiveAt: string;
+  closedAt?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface TerminalBackendCapability {
+  kind: TerminalSessionRecord["backend"];
+  available: boolean;
+  interactive: boolean;
+  supportsResize: boolean;
+  reason?: string;
 }
 
 export interface TerminalReadResult {
@@ -669,6 +692,8 @@ export interface TerminalCreateParams {
   threadId?: string;
   cwd?: string;
   shell?: string;
+  cols?: number;
+  rows?: number;
 }
 
 export interface TerminalCreateResult {

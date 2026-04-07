@@ -22,6 +22,7 @@ import {
   type JsonRpcRequest,
   type ProjectRecord,
   type JsonRpcResponse,
+  type ProviderActionParams,
   type ProviderTestResult,
   type ProviderModelsResult,
   type ReadFileParams,
@@ -317,9 +318,9 @@ export class HarnessServer {
       case "skills/config/write":
         return this.writeSkillConfig((message.params ?? {}) as { disabledSkillIds: string[] });
       case "provider/test":
-        return this.providerTest();
+        return this.providerTest(message.params as ProviderActionParams | undefined);
       case "provider/models":
-        return this.providerModels();
+        return this.providerModels(message.params as ProviderActionParams | undefined);
       case "config/read":
         return { config: this.database.getConfig() };
       case "config/write":
@@ -345,6 +346,8 @@ export class HarnessServer {
       worktrees: this.database.listWorktrees(config.selectedProjectId),
       environments: this.database.listEnvironments(config.selectedProjectId),
       executionContexts: this.database.listExecutionContexts(config.selectedProjectId),
+      terminals: this.database.listTerminalSessions(),
+      terminalCapabilities: this.terminalManager.listCapabilities(),
       reviews: this.reviewManager.list(config.selectedProjectId),
     };
   }
@@ -861,7 +864,7 @@ export class HarnessServer {
 
   private resizeTerminal(params: TerminalResizeParams) {
     return {
-      session: this.terminalManager.resizeSession(params.sessionId),
+      session: this.terminalManager.resizeSession(params.sessionId, params.cols, params.rows),
     };
   }
 
@@ -956,8 +959,8 @@ export class HarnessServer {
     return { skills: this.refreshSkills(config.selectedProjectId) };
   }
 
-  private async providerTest(): Promise<ProviderTestResult> {
-    const provider = this.database.getConfig().provider;
+  private async providerTest(params?: ProviderActionParams): Promise<ProviderTestResult> {
+    const provider = this.resolveProviderActionProfile(params);
 
     if (provider.apiFlavor !== "responses") {
       return {
@@ -970,9 +973,16 @@ export class HarnessServer {
     return this.providerService.test(provider);
   }
 
-  private async providerModels(): Promise<ProviderModelsResult> {
+  private async providerModels(params?: ProviderActionParams): Promise<ProviderModelsResult> {
     return {
-      models: await this.providerService.listModels(this.database.getConfig().provider),
+      models: await this.providerService.listModels(this.resolveProviderActionProfile(params)),
+    };
+  }
+
+  private resolveProviderActionProfile(params?: ProviderActionParams): AppConfig["provider"] {
+    return {
+      ...this.database.getConfig().provider,
+      ...(params?.provider ?? {}),
     };
   }
 

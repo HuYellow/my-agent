@@ -7,9 +7,12 @@ import {
   type ItemRecord,
   type PendingApproval,
   type ProjectRecord,
+  type ProviderProfile,
   type ProviderModelRecord,
   type ReviewRecord,
   type SkillDescriptor,
+  type TerminalBackendCapability,
+  type TerminalSessionRecord,
   type TurnInputAttachment,
   type ThreadRecord,
   type TurnSteerRecord,
@@ -34,6 +37,8 @@ interface AppState {
   threads: ThreadRecord[];
   threadSessions: Record<string, ThreadSessionState>;
   reviews: ReviewRecord[];
+  terminals: TerminalSessionRecord[];
+  terminalCapabilities: TerminalBackendCapability[];
   skills: SkillDescriptor[];
   activeProjectId?: string;
   activeThreadId?: string;
@@ -56,8 +61,8 @@ interface AppState {
   respondApproval: (approvalId: string, decision: "approve" | "reject", scope?: "once" | "session") => Promise<void>;
   toggleSkill: (skillId: string) => Promise<void>;
   updateConfig: (config: Partial<AppConfig>) => Promise<void>;
-  testProvider: () => Promise<void>;
-  refreshProviderModels: () => Promise<void>;
+  testProvider: (provider?: Partial<ProviderProfile>) => Promise<void>;
+  refreshProviderModels: (provider?: Partial<ProviderProfile>) => Promise<void>;
   handleEvent: (event: HarnessEvent) => void;
 }
 
@@ -69,6 +74,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   threads: [],
   threadSessions: {},
   reviews: [],
+  terminals: [],
+  terminalCapabilities: [],
   skills: [],
   providerModels: [],
   providerModelsLoading: false,
@@ -98,6 +105,8 @@ export const useAppStore = create<AppState>((set, get) => ({
           threads: initial.threads,
           threadSessions: Object.fromEntries(initial.threads.map((thread) => [thread.id, createEmptyThreadSession()])),
           reviews: initial.reviews ?? [],
+          terminals: initial.terminals ?? [],
+          terminalCapabilities: initial.terminalCapabilities ?? [],
           skills: initial.skills,
           config: initial.config,
           activeProjectId,
@@ -327,20 +336,27 @@ export const useAppStore = create<AppState>((set, get) => ({
     const result = (await window.myAgent.writeConfig({ config })) as { config: AppConfig };
     set({ config: result.config, activeProjectId: result.config.selectedProjectId ?? get().activeProjectId });
   },
-  testProvider: async () => {
-    const result = (await window.myAgent.testProvider()) as { ok: boolean; status: number; message: string };
+  testProvider: async (provider) => {
+    const currentProvider = get().config?.provider;
+    const effectiveProvider = currentProvider ? { ...currentProvider, ...(provider ?? {}) } : undefined;
+    const result = (await window.myAgent.testProvider(effectiveProvider ? { provider: effectiveProvider } : undefined)) as {
+      ok: boolean;
+      status: number;
+      message: string;
+    };
     set({
       providerTestMessage: result.ok ? `Provider OK (${result.status})` : `Provider failed (${result.status}): ${result.message}`,
     });
   },
-  refreshProviderModels: async () => {
-    const provider = get().config?.provider;
+  refreshProviderModels: async (provider) => {
+    const currentProvider = get().config?.provider;
+    const effectiveProvider = currentProvider ? { ...currentProvider, ...(provider ?? {}) } : undefined;
 
-    if (!provider?.baseUrl) {
+    if (!effectiveProvider?.baseUrl) {
       set({
         providerModels: [],
         providerModelsLoading: false,
-        providerModelsError: undefined,
+        providerModelsError: "Provider baseUrl is empty.",
       });
       return;
     }
@@ -351,7 +367,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
 
     try {
-      const result = (await window.myAgent.listProviderModels()) as { models: ProviderModelRecord[] };
+      const result = (await window.myAgent.listProviderModels({ provider: effectiveProvider })) as {
+        models: ProviderModelRecord[];
+      };
       set({
         providerModels: result.models,
         providerModelsLoading: false,
@@ -466,6 +484,11 @@ export const useAppStore = create<AppState>((set, get) => ({
           reviews: upsertReview(state.reviews, event.payload.review),
         }));
         break;
+      case "terminal/updated":
+        set((state) => ({
+          terminals: upsertTerminal(state.terminals, event.payload.session),
+        }));
+        break;
       case "config/changed":
         set((state) => ({
           config: event.payload.config,
@@ -492,6 +515,10 @@ function upsertTurn(turns: TurnRecord[], turn: TurnRecord): TurnRecord[] {
 
 function upsertReview(reviews: ReviewRecord[], review: ReviewRecord): ReviewRecord[] {
   return [...reviews.filter((entry) => entry.id !== review.id), review].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+}
+
+function upsertTerminal(terminals: TerminalSessionRecord[], terminal: TerminalSessionRecord): TerminalSessionRecord[] {
+  return [...terminals.filter((entry) => entry.id !== terminal.id), terminal].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
 }
 
 function upsertItem(items: ItemRecord[], item: ItemRecord): ItemRecord[] {

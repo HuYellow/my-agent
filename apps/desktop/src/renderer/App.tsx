@@ -53,10 +53,13 @@ import {
   type PendingApproval,
   type PluginRecord,
   type ProjectRecord,
+  type ProviderProfile,
   type ProviderModelRecord,
   type ReviewRecord,
   type SandboxMode,
   type SkillDescriptor,
+  type TerminalBackendCapability,
+  type TerminalSessionRecord,
   type TurnInputAttachment,
   type TurnRecord,
   type WorktreeRecord,
@@ -79,6 +82,7 @@ interface ProviderFormState {
 type NavView = "threads" | "skills" | "plugins" | "automation" | "settings";
 type ComposerAttachment = TurnInputAttachment;
 type ThemeMode = "light" | "dark";
+type ReviewSourceKind = ReviewRecord["source"]["kind"];
 
 const SIDEBAR_WIDTH_STORAGE_KEY = "my-agent-sidebar-width-ratio";
 const SIDEBAR_MIN_RATIO = 0.18;
@@ -97,6 +101,13 @@ const SANDBOX_MODE_OPTIONS: Array<{ value: SandboxMode; label: string; hint: str
   { value: "read-only", label: "Read only", hint: "Only allow reading files inside the workspace." },
   { value: "workspace-write", label: "Workspace write", hint: "Allow editing files inside the workspace." },
   { value: "danger-full-access", label: "Full access", hint: "Allow unrestricted filesystem and network access." },
+];
+
+const REVIEW_SOURCE_OPTIONS: Array<{ value: ReviewSourceKind; label: string; hint: string }> = [
+  { value: "workspace", label: "Workspace diff", hint: "Review current unstaged and staged changes against HEAD." },
+  { value: "staged", label: "Staged diff", hint: "Review only what is currently staged for commit." },
+  { value: "base_branch", label: "Base branch", hint: "Review the diff from a target base branch to HEAD." },
+  { value: "commit", label: "Commit", hint: "Review a specific commit patch by SHA." },
 ];
 
 interface BranchSummary {
@@ -185,6 +196,8 @@ export function App() {
     threads,
     threadSessions,
     reviews,
+    terminals,
+    terminalCapabilities,
     skills,
     activeProjectId,
     activeThreadId,
@@ -237,6 +250,10 @@ export function App() {
   const [sandboxMenuOpen, setSandboxMenuOpen] = useState(false);
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
   const [branchSearch, setBranchSearch] = useState("");
+  const [reviewMenuOpen, setReviewMenuOpen] = useState(false);
+  const [reviewSourceKind, setReviewSourceKind] = useState<ReviewSourceKind>("workspace");
+  const [reviewBaseBranch, setReviewBaseBranch] = useState("main");
+  const [reviewCommit, setReviewCommit] = useState("");
   const [steerInput, setSteerInput] = useState("");
   const [branchSummary, setBranchSummary] = useState<BranchSummary>({
     isGitRepo: false,
@@ -258,6 +275,7 @@ export function App() {
   const reasoningMenuRef = useRef<HTMLDivElement | null>(null);
   const sandboxMenuRef = useRef<HTMLDivElement | null>(null);
   const branchMenuRef = useRef<HTMLDivElement | null>(null);
+  const reviewMenuRef = useRef<HTMLDivElement | null>(null);
   const appContainerRef = useRef<HTMLDivElement | null>(null);
   const messageAreaRef = useRef<HTMLDivElement | null>(null);
   const sidebarResizeStateRef = useRef<{ pointerId: number; startX: number; startRatio: number } | null>(null);
@@ -332,6 +350,10 @@ export function App() {
 
       if (branchMenuRef.current && !branchMenuRef.current.contains(target)) {
         setBranchMenuOpen(false);
+      }
+
+      if (reviewMenuRef.current && !reviewMenuRef.current.contains(target)) {
+        setReviewMenuOpen(false);
       }
     };
 
@@ -451,6 +473,33 @@ export function App() {
   );
   const latestReview = activeReviews[0] ?? null;
   const reviewRunning = activeReviews.some((review) => review.status === "running");
+  const reviewSourceLabel = useMemo(() => {
+    switch (reviewSourceKind) {
+      case "staged":
+        return "Staged";
+      case "base_branch":
+        return `Base: ${reviewBaseBranch.trim() || "branch"}`;
+      case "commit":
+        return `Commit: ${reviewCommit.trim() ? reviewCommit.trim().slice(0, 10) : "SHA"}`;
+      default:
+        return "Workspace";
+    }
+  }, [reviewBaseBranch, reviewCommit, reviewSourceKind]);
+  const canStartReview = useMemo(() => {
+    if (!activeProjectId || reviewRunning) {
+      return false;
+    }
+
+    if (reviewSourceKind === "base_branch") {
+      return reviewBaseBranch.trim().length > 0;
+    }
+
+    if (reviewSourceKind === "commit") {
+      return reviewCommit.trim().length > 0;
+    }
+
+    return true;
+  }, [activeProjectId, reviewBaseBranch, reviewCommit, reviewRunning, reviewSourceKind]);
   const enabledSkills = useMemo(() => skills.filter((skill) => skill.enabled), [skills]);
   const currentSkillDetail = useMemo(
     () => skills.find((skill) => skill.id === skillDetailId) ?? null,
@@ -907,16 +956,24 @@ export function App() {
     setSteerInput("");
   };
 
-  const triggerWorkspaceReview = async () => {
+  const triggerReview = async () => {
     if (!activeProjectId) {
       return;
     }
 
+    const source: ReviewRecord["source"] =
+      reviewSourceKind === "base_branch"
+        ? { kind: "base_branch", baseBranch: reviewBaseBranch.trim() }
+        : reviewSourceKind === "commit"
+          ? { kind: "commit", commit: reviewCommit.trim() }
+          : { kind: reviewSourceKind };
+
     await startReview({
       projectId: activeProjectId,
       threadId: activeThreadId,
-      source: { kind: "workspace" },
+      source,
     });
+    setReviewMenuOpen(false);
   };
 
   const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -1107,15 +1164,77 @@ export function App() {
                 <span className="main-header__project">{activeProject?.name ?? "Current Project"}</span>
               </div>
               <div className="main-header__actions">
-                <button
-                  type="button"
-                  className="main-header__action"
-                  onClick={() => void triggerWorkspaceReview()}
-                  disabled={!activeProjectId || reviewRunning}
-                >
-                  <Shield size={14} />
-                  <span>{reviewRunning ? "Reviewing…" : "Review diff"}</span>
-                </button>
+                <div className="review-popover-anchor" ref={reviewMenuRef}>
+                  <button
+                    type="button"
+                    className="main-header__action"
+                    onClick={() => setReviewMenuOpen((current) => !current)}
+                    disabled={!activeProjectId || reviewRunning}
+                  >
+                    <Shield size={14} />
+                    <span>{reviewRunning ? "Reviewing…" : `Review · ${reviewSourceLabel}`}</span>
+                    <ChevronDown size={12} />
+                  </button>
+
+                  {reviewMenuOpen && (
+                    <div className="review-popover">
+                      <div className="review-popover__header">
+                        <strong>Review source</strong>
+                        <small>Choose which diff to review before launching.</small>
+                      </div>
+
+                      <div className="review-popover__options">
+                        {REVIEW_SOURCE_OPTIONS.map((option) => (
+                          <button
+                            key={option.value}
+                            type="button"
+                            className={`review-popover__option ${option.value === reviewSourceKind ? "review-popover__option--active" : ""}`}
+                            onClick={() => setReviewSourceKind(option.value)}
+                          >
+                            <span className="review-popover__option-body">
+                              <strong>{option.label}</strong>
+                              <small>{option.hint}</small>
+                            </span>
+                            {option.value === reviewSourceKind && <Check size={14} />}
+                          </button>
+                        ))}
+                      </div>
+
+                      {reviewSourceKind === "base_branch" && (
+                        <label className="review-popover__field">
+                          <span>Base branch</span>
+                          <input
+                            type="text"
+                            value={reviewBaseBranch}
+                            onChange={(event) => setReviewBaseBranch(event.target.value)}
+                            placeholder="main"
+                          />
+                        </label>
+                      )}
+
+                      {reviewSourceKind === "commit" && (
+                        <label className="review-popover__field">
+                          <span>Commit SHA</span>
+                          <input
+                            type="text"
+                            value={reviewCommit}
+                            onChange={(event) => setReviewCommit(event.target.value)}
+                            placeholder="abc1234"
+                          />
+                        </label>
+                      )}
+
+                      <div className="review-popover__footer">
+                        <button type="button" className="review-popover__cancel" onClick={() => setReviewMenuOpen(false)}>
+                          Cancel
+                        </button>
+                        <button type="button" className="review-popover__submit" onClick={() => void triggerReview()} disabled={!canStartReview}>
+                          Start review
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             </header>
 
@@ -1248,6 +1367,9 @@ export function App() {
             plugins={runtimePlugins}
             mcpMounts={runtimeMcpMounts}
             mcpSessions={runtimeMcpSessions}
+            terminalSessions={terminals}
+            terminalCapabilities={terminalCapabilities}
+            activeProjectId={activeProjectId}
             onRefreshMount={(mountId) =>
               window.myAgent.refreshMcpMount(mountId).then(() =>
                 window.myAgent.listMcpSessions().then((result) => setRuntimeMcpSessions(result.sessions)),
@@ -1273,17 +1395,18 @@ export function App() {
             }
           />
         ) : (
-          <SettingsPanel
-            project={activeProject}
-            providerForm={providerForm}
-            setProviderForm={setProviderForm}
-            providerTestMessage={providerTestMessage}
-            providerModels={availableModels}
-            providerModelsLoading={providerModelsLoading}
-            onTestProvider={testProvider}
-            onRefreshProviderModels={refreshProviderModels}
-            worktrees={runtimeWorktrees}
-            environments={runtimeEnvironments}
+            <SettingsPanel
+              project={activeProject}
+              providerForm={providerForm}
+              setProviderForm={setProviderForm}
+              providerTestMessage={providerTestMessage}
+              providerModels={availableModels}
+              providerModelsLoading={providerModelsLoading}
+              providerModelsError={providerModelsError}
+              onTestProvider={() => testProvider(buildProviderProfileFromForm(config?.provider, providerForm))}
+              onRefreshProviderModels={() => refreshProviderModels(buildProviderProfileFromForm(config?.provider, providerForm))}
+              worktrees={runtimeWorktrees}
+              environments={runtimeEnvironments}
             onSaveConfig={() =>
               void Promise.all([
                 updateConfig({
@@ -1754,20 +1877,65 @@ function RuntimePluginsPanel({
   plugins,
   mcpMounts,
   mcpSessions,
+  terminalSessions,
+  terminalCapabilities,
+  activeProjectId,
   onRefreshMount,
 }: {
   plugins: PluginRecord[];
   mcpMounts: McpMountRecord[];
   mcpSessions: McpSessionRecord[];
+  terminalSessions: TerminalSessionRecord[];
+  terminalCapabilities: TerminalBackendCapability[];
+  activeProjectId?: string;
   onRefreshMount: (mountId: string) => Promise<unknown>;
 }) {
+  const visibleTerminalSessions = activeProjectId
+    ? terminalSessions.filter((session) => session.workspaceId === activeProjectId)
+    : terminalSessions;
+
   return (
     <div className="skills-page">
       <div className="skills-page__header">
         <h2 className="skills-page__title">Runtime Surfaces</h2>
-        <span className="skills-page__count">{plugins.length} plugins · {mcpMounts.length} MCP mounts</span>
+        <span className="skills-page__count">
+          {plugins.length} plugins · {mcpMounts.length} MCP mounts · {visibleTerminalSessions.length} terminal sessions
+        </span>
       </div>
       <div className="skills-grid">
+        {terminalCapabilities.map((capability) => (
+          <div key={`terminal-cap:${capability.kind}`} className="skill-card">
+            <div className="skill-card__header">
+              <div>
+                <h3>{capability.kind.toUpperCase()} terminal backend</h3>
+                <span>{capability.available ? "Available" : "Planned"}</span>
+              </div>
+              <span className={`skill-card__status ${capability.available ? "skill-card__status--enabled" : ""}`}>
+                {capability.available ? "Ready" : "Unavailable"}
+              </span>
+            </div>
+            <p>{capability.reason ?? "No detail available."}</p>
+            <pre>interactive={String(capability.interactive)} resize={String(capability.supportsResize)}</pre>
+          </div>
+        ))}
+        {visibleTerminalSessions.map((session) => (
+          <div key={session.id} className="skill-card">
+            <div className="skill-card__header">
+              <div>
+                <h3>Terminal {session.id.slice(-6)}</h3>
+                <span>{session.backend.toUpperCase()} · {session.shell}</span>
+              </div>
+              <span className={`skill-card__status ${session.status === "open" ? "skill-card__status--enabled" : ""}`}>
+                {session.status}
+              </span>
+            </div>
+            <p>{session.cwd}</p>
+            <pre>
+              pid={session.pid ?? "-"} exit={session.exitCode ?? "-"} size={session.cols ?? "?"}x{session.rows ?? "?"}
+              {session.failureReason ? `\nreason=${session.failureReason}` : ""}
+            </pre>
+          </div>
+        ))}
         {plugins.map((plugin) => (
           <div key={plugin.id} className="skill-card">
             <div className="skill-card__header">
@@ -1891,6 +2059,7 @@ function SettingsPanel({
   providerTestMessage,
   providerModels,
   providerModelsLoading,
+  providerModelsError,
   worktrees,
   environments,
   onTestProvider,
@@ -1904,6 +2073,7 @@ function SettingsPanel({
   providerTestMessage?: string;
   providerModels: ProviderModelRecord[];
   providerModelsLoading: boolean;
+  providerModelsError?: string;
   worktrees: WorktreeRecord[];
   environments: EnvironmentRecord[];
   onTestProvider: () => Promise<void>;
@@ -1980,6 +2150,7 @@ function SettingsPanel({
               setProviderForm={setProviderForm}
               providerModels={providerModels}
               providerModelsLoading={providerModelsLoading}
+              providerModelsError={providerModelsError}
               onRefreshModels={onRefreshProviderModels}
               onTestProvider={onTestProvider}
               providerTestMessage={providerTestMessage}
@@ -2024,6 +2195,7 @@ function ApiConfigCard({
   setProviderForm,
   providerModels,
   providerModelsLoading,
+  providerModelsError,
   onRefreshModels,
   onTestProvider,
   providerTestMessage,
@@ -2032,6 +2204,7 @@ function ApiConfigCard({
   setProviderForm: React.Dispatch<React.SetStateAction<ProviderFormState>>;
   providerModels: ProviderModelRecord[];
   providerModelsLoading: boolean;
+  providerModelsError?: string;
   onRefreshModels: () => Promise<void>;
   onTestProvider: () => Promise<void>;
   providerTestMessage?: string;
@@ -2113,12 +2286,30 @@ function ApiConfigCard({
             Test Provider
           </button>
         </div>
+        {providerModelsError && <div className="settings-panel__message">{providerModelsError}</div>}
         {providerTestMessage && (
           <div className="settings-panel__message">{providerTestMessage}</div>
         )}
       </div>
     </div>
   );
+}
+
+function buildProviderProfileFromForm(
+  provider: ProviderProfile | undefined,
+  providerForm: ProviderFormState,
+): ProviderProfile | undefined {
+  if (!provider) {
+    return undefined;
+  }
+
+  return {
+    ...provider,
+    baseUrl: providerForm.baseUrl,
+    apiKey: providerForm.apiKey,
+    model: providerForm.model,
+    reasoningEffort: providerForm.reasoningEffort,
+  };
 }
 
 function ProjectConfigCard({
@@ -2725,7 +2916,7 @@ function SteerCard({
           rows={2}
         />
         <button type="button" className="steer-card__submit" onClick={onSubmit} disabled={disabled}>
-          Send steer
+          Steer
         </button>
       </div>
     </section>

@@ -52,8 +52,14 @@ class HarnessClient {
     }
 
     if (backendMode !== "stdio") {
-      this.startLocalServer(appServerEntry);
-      return;
+      if (existsSync(appServerEntry)) {
+        this.startLocalServer(appServerEntry);
+        return;
+      }
+
+      safeConsoleLog(
+        `[my-agent] App server entry not found at ${appServerEntry}; falling back to stdio harness.`,
+      );
     }
 
     if (this.child) {
@@ -399,8 +405,8 @@ ipcMain.handle("command:exec", (_event, params: CommandExecParams) => harness.re
   });
   ipcMain.handle("config:read", () => harness.request("config/read"));
   ipcMain.handle("config:write", (_event, params: ConfigWriteParams) => harness.request("config/write", params));
-  ipcMain.handle("provider:test", () => harness.request("provider/test"));
-  ipcMain.handle("provider:models", () => harness.request("provider/models"));
+  ipcMain.handle("provider:test", (_event, params) => harness.request("provider/test", params));
+  ipcMain.handle("provider:models", (_event, params) => harness.request("provider/models", params));
   ipcMain.handle("worktree:list", (_event, params: WorktreeListParams) => harness.request("worktree/list", params));
   ipcMain.handle("worktree:create", (_event, params: WorktreeCreateParams) => harness.request("worktree/create", params));
   ipcMain.handle("worktree:remove", (_event, params: WorktreeRemoveParams) => harness.request("worktree/remove", params));

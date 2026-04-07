@@ -126,4 +126,37 @@ describe("HarnessDatabase projects", () => {
       },
     ]);
   });
+
+  it("persists extended terminal session state for future PTY backends", () => {
+    const root = mkdtempSync(join(tmpdir(), "my-agent-db-"));
+    const database = new HarnessDatabase(join(root, "app.db"));
+    const now = new Date().toISOString();
+
+    database.createTerminalSession({
+      id: "terminal-1",
+      threadId: "thread-visible",
+      workspaceId: "workspace-1",
+      cwd: root,
+      shell: process.platform === "win32" ? "powershell" : "bash",
+      backend: "pipe",
+      status: "open",
+      cols: 120,
+      rows: 40,
+      pid: 4321,
+      startedAt: now,
+      lastActiveAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    expect(database.getTerminalSession("terminal-1")).toMatchObject({
+      backend: "pipe",
+      status: "open",
+      cols: 120,
+      rows: 40,
+      pid: 4321,
+      startedAt: now,
+      lastActiveAt: now,
+    });
+  });
 });

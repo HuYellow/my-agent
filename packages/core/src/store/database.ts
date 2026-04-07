@@ -142,7 +142,16 @@ export class HarnessDatabase {
         workspace_id TEXT NOT NULL,
         cwd TEXT NOT NULL,
         shell TEXT NOT NULL,
+        backend TEXT NOT NULL DEFAULT 'pipe',
         status TEXT NOT NULL,
+        cols INTEGER,
+        rows INTEGER,
+        pid INTEGER,
+        exit_code INTEGER,
+        failure_reason TEXT,
+        started_at TEXT,
+        last_active_at TEXT,
+        closed_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -671,16 +680,57 @@ export class HarnessDatabase {
   createTerminalSession(session: TerminalSessionRecord): TerminalSessionRecord {
     this.db
       .prepare(
-        "INSERT INTO terminal_sessions(id, thread_id, workspace_id, cwd, shell, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+        `INSERT INTO terminal_sessions(
+          id, thread_id, workspace_id, cwd, shell, backend, status, cols, rows, pid, exit_code, failure_reason, started_at, last_active_at, closed_at, created_at, updated_at
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
       )
-      .run(session.id, session.threadId ?? null, session.workspaceId, session.cwd, session.shell, session.status, session.createdAt, session.updatedAt);
+      .run(
+        session.id,
+        session.threadId ?? null,
+        session.workspaceId,
+        session.cwd,
+        session.shell,
+        session.backend,
+        session.status,
+        session.cols ?? null,
+        session.rows ?? null,
+        session.pid ?? null,
+        session.exitCode ?? null,
+        session.failureReason ?? null,
+        session.startedAt,
+        session.lastActiveAt,
+        session.closedAt ?? null,
+        session.createdAt,
+        session.updatedAt,
+      );
     return session;
   }
 
   updateTerminalSession(session: TerminalSessionRecord): TerminalSessionRecord {
     this.db
-      .prepare("UPDATE terminal_sessions SET thread_id = ?, workspace_id = ?, cwd = ?, shell = ?, status = ?, updated_at = ? WHERE id = ?")
-      .run(session.threadId ?? null, session.workspaceId, session.cwd, session.shell, session.status, session.updatedAt, session.id);
+      .prepare(
+        `UPDATE terminal_sessions
+         SET thread_id = ?, workspace_id = ?, cwd = ?, shell = ?, backend = ?, status = ?, cols = ?, rows = ?, pid = ?, exit_code = ?, failure_reason = ?, started_at = ?, last_active_at = ?, closed_at = ?, updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(
+        session.threadId ?? null,
+        session.workspaceId,
+        session.cwd,
+        session.shell,
+        session.backend,
+        session.status,
+        session.cols ?? null,
+        session.rows ?? null,
+        session.pid ?? null,
+        session.exitCode ?? null,
+        session.failureReason ?? null,
+        session.startedAt,
+        session.lastActiveAt,
+        session.closedAt ?? null,
+        session.updatedAt,
+        session.id,
+      );
     return session;
   }
 
@@ -1185,7 +1235,16 @@ export class HarnessDatabase {
       workspaceId: String(row.workspace_id),
       cwd: String(row.cwd),
       shell: String(row.shell),
+      backend: (row.backend as TerminalSessionRecord["backend"]) ?? "pipe",
       status: row.status as TerminalSessionRecord["status"],
+      cols: typeof row.cols === "number" ? row.cols : row.cols != null ? Number(row.cols) : undefined,
+      rows: typeof row.rows === "number" ? row.rows : row.rows != null ? Number(row.rows) : undefined,
+      pid: typeof row.pid === "number" ? row.pid : row.pid != null ? Number(row.pid) : undefined,
+      exitCode: typeof row.exit_code === "number" ? row.exit_code : row.exit_code != null ? Number(row.exit_code) : undefined,
+      failureReason: row.failure_reason ? String(row.failure_reason) : undefined,
+      startedAt: row.started_at ? String(row.started_at) : String(row.created_at),
+      lastActiveAt: row.last_active_at ? String(row.last_active_at) : String(row.updated_at),
+      closedAt: row.closed_at ? String(row.closed_at) : undefined,
       createdAt: String(row.created_at),
       updatedAt: String(row.updated_at),
     };
@@ -1452,6 +1511,42 @@ export class HarnessDatabase {
           updated_at TEXT NOT NULL
         )
       `);
+    }
+
+    if (!this.columnExists("terminal_sessions", "backend")) {
+      this.db.exec("ALTER TABLE terminal_sessions ADD COLUMN backend TEXT NOT NULL DEFAULT 'pipe'");
+    }
+
+    if (!this.columnExists("terminal_sessions", "cols")) {
+      this.db.exec("ALTER TABLE terminal_sessions ADD COLUMN cols INTEGER");
+    }
+
+    if (!this.columnExists("terminal_sessions", "rows")) {
+      this.db.exec("ALTER TABLE terminal_sessions ADD COLUMN rows INTEGER");
+    }
+
+    if (!this.columnExists("terminal_sessions", "pid")) {
+      this.db.exec("ALTER TABLE terminal_sessions ADD COLUMN pid INTEGER");
+    }
+
+    if (!this.columnExists("terminal_sessions", "exit_code")) {
+      this.db.exec("ALTER TABLE terminal_sessions ADD COLUMN exit_code INTEGER");
+    }
+
+    if (!this.columnExists("terminal_sessions", "failure_reason")) {
+      this.db.exec("ALTER TABLE terminal_sessions ADD COLUMN failure_reason TEXT");
+    }
+
+    if (!this.columnExists("terminal_sessions", "started_at")) {
+      this.db.exec("ALTER TABLE terminal_sessions ADD COLUMN started_at TEXT");
+    }
+
+    if (!this.columnExists("terminal_sessions", "last_active_at")) {
+      this.db.exec("ALTER TABLE terminal_sessions ADD COLUMN last_active_at TEXT");
+    }
+
+    if (!this.columnExists("terminal_sessions", "closed_at")) {
+      this.db.exec("ALTER TABLE terminal_sessions ADD COLUMN closed_at TEXT");
     }
 
     if (!this.tableExists("reviews")) {

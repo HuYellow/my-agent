@@ -88,6 +88,20 @@ async function handleMcpMessage(message: { id?: string | number; method?: string
               },
             },
             {
+              name: "steer_turn",
+              description: "Inject a steer instruction into a running turn.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  turnId: { type: "string" },
+                  input: { type: "string" },
+                  priority: { type: "string", enum: ["low", "normal", "high"] },
+                },
+                required: ["turnId", "input"],
+                additionalProperties: false,
+              },
+            },
+            {
               name: "read_file",
               description: "Read a file via the runtime.",
               inputSchema: {
@@ -96,6 +110,41 @@ async function handleMcpMessage(message: { id?: string | number; method?: string
                   path: { type: "string" },
                 },
                 required: ["path"],
+                additionalProperties: false,
+              },
+            },
+            {
+              name: "start_review",
+              description: "Start a structured code review against a diff source.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  projectId: { type: "string" },
+                  threadId: { type: "string" },
+                  instructions: { type: "string" },
+                  source: {
+                    type: "object",
+                    properties: {
+                      kind: { type: "string", enum: ["workspace", "staged", "base_branch", "commit"] },
+                      baseBranch: { type: "string" },
+                      commit: { type: "string" },
+                    },
+                    required: ["kind"],
+                    additionalProperties: false,
+                  },
+                },
+                additionalProperties: false,
+              },
+            },
+            {
+              name: "list_reviews",
+              description: "List structured review runs.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  projectId: { type: "string" },
+                  threadId: { type: "string" },
+                },
                 additionalProperties: false,
               },
             },
@@ -159,11 +208,38 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
       });
       return JSON.stringify("result" in response ? response.result : response.error, null, 2);
     }
+    case "steer_turn": {
+      const response = await runtime.server.handle({
+        jsonrpc: "2.0",
+        id: "turn-steer",
+        method: "turn/steer",
+        params: args,
+      });
+      return JSON.stringify("result" in response ? response.result : response.error, null, 2);
+    }
     case "read_file": {
       const response = await runtime.server.handle({
         jsonrpc: "2.0",
         id: "file-read",
         method: "fs/readFile",
+        params: args,
+      });
+      return JSON.stringify("result" in response ? response.result : response.error, null, 2);
+    }
+    case "start_review": {
+      const response = await runtime.server.handle({
+        jsonrpc: "2.0",
+        id: "review-start",
+        method: "review/start",
+        params: args,
+      });
+      return JSON.stringify("result" in response ? response.result : response.error, null, 2);
+    }
+    case "list_reviews": {
+      const response = await runtime.server.handle({
+        jsonrpc: "2.0",
+        id: "review-list",
+        method: "review/list",
         params: args,
       });
       return JSON.stringify("result" in response ? response.result : response.error, null, 2);

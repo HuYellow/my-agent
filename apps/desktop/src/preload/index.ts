@@ -6,6 +6,7 @@ import {
   type CreateProjectParams,
   type HarnessEvent,
   type InterruptTurnParams,
+  type ProviderActionParams,
   type ReviewRecord,
   type ReviewStartParams,
   type ProviderModelRecord,
@@ -45,8 +46,9 @@ const api = {
   revealSkillPath: (skillPath: string) => ipcRenderer.invoke("skills:path:reveal", { skillPath }) as Promise<{ ok: boolean; error?: string }>,
   readConfig: () => ipcRenderer.invoke("config:read"),
   writeConfig: (params: ConfigWriteParams) => ipcRenderer.invoke("config:write", params),
-  testProvider: () => ipcRenderer.invoke("provider:test"),
-  listProviderModels: () => ipcRenderer.invoke("provider:models") as Promise<{ models: ProviderModelRecord[] }>,
+  testProvider: (params?: ProviderActionParams) => ipcRenderer.invoke("provider:test", params),
+  listProviderModels: (params?: ProviderActionParams) =>
+    ipcRenderer.invoke("provider:models", params) as Promise<{ models: ProviderModelRecord[] }>,
   listWorktrees: (projectId?: string) => ipcRenderer.invoke("worktree:list", { projectId }) as Promise<{ worktrees: WorktreeRecord[] }>,
   createWorktree: (params: { projectId: string; threadId?: string; branch?: string; baseRef?: string }) =>
     ipcRenderer.invoke("worktree:create", params) as Promise<{ worktree: WorktreeRecord }>,
