@@ -28,4 +28,54 @@ describe("HarnessDatabase projects", () => {
       sandboxMode: projects[0]!.sandboxMode,
     });
   });
+
+  it("hides hidden threads from the default listing and persists execution contexts", () => {
+    const root = mkdtempSync(join(tmpdir(), "my-agent-db-"));
+    const database = new HarnessDatabase(join(root, "app.db"));
+    const project = database.listProjects()[0]!;
+    const now = new Date().toISOString();
+
+    database.createThread({
+      id: "thread-visible",
+      title: "Visible",
+      projectId: project.id,
+      hidden: false,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    database.createThread({
+      id: "thread-hidden",
+      title: "Hidden",
+      projectId: project.id,
+      hidden: true,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    database.createExecutionContext({
+      id: "exec-1",
+      projectId: project.id,
+      kind: "agent",
+      threadId: "thread-hidden",
+      agentId: "agent-1",
+      cwd: root,
+      shell: process.platform === "win32" ? "powershell" : "bash",
+      envJson: { PATH: process.env.PATH ?? "" },
+      detectedTools: ["git"],
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    expect(database.listThreads().map((thread) => thread.id)).toEqual(["thread-visible"]);
+    expect(database.listThreads({ includeHidden: true }).map((thread) => thread.id)).toContain("thread-hidden");
+    expect(database.listExecutionContexts(project.id)).toMatchObject([
+      {
+        id: "exec-1",
+        kind: "agent",
+        threadId: "thread-hidden",
+        agentId: "agent-1",
+      },
+    ]);
+  });
 });

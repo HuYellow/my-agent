@@ -133,6 +133,7 @@ export interface ThreadRecord {
   title: string;
   projectId: string;
   sandboxMode: SandboxMode;
+  hidden?: boolean;
   createdAt: string;
   updatedAt: string;
   archivedAt?: string | null;
@@ -210,6 +211,7 @@ export interface InitializeResult {
   skills: SkillDescriptor[];
   worktrees?: WorktreeRecord[];
   environments?: EnvironmentRecord[];
+  executionContexts?: ExecutionContextRecord[];
 }
 
 export interface StartThreadParams {
@@ -361,15 +363,44 @@ export interface TerminalReadResult {
   output: string;
 }
 
+export interface ExecutionContextRecord {
+  id: string;
+  projectId: string;
+  kind: "thread" | "agent" | "workflow" | "review";
+  threadId?: string;
+  agentId?: string;
+  worktreeId?: string;
+  environmentId?: string;
+  cwd: string;
+  shell: string;
+  envJson: Record<string, string>;
+  detectedTools: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentTaskSummary {
+  finalMessage?: string;
+  toolCallCount: number;
+  fileChangeCount: number;
+  commandCount: number;
+  approvalRequestCount: number;
+  changedPaths: string[];
+}
+
 export interface AgentTaskRecord {
   id: string;
   parentThreadId: string;
   parentTurnId?: string;
   title: string;
-  status: "running" | "completed" | "failed" | "cancelled";
+  status: "running" | "awaiting_approval" | "completed" | "failed" | "cancelled";
   finalOutput?: string;
+  childThreadId?: string;
+  lastTurnId?: string;
   worktreeId?: string;
   environmentId?: string;
+  executionContextId?: string;
+  summary?: AgentTaskSummary;
   createdAt: string;
   updatedAt: string;
 }
@@ -507,6 +538,7 @@ export type HarnessEvent =
   | EventEnvelope<"agent/updated", { task: AgentTaskRecord }>
   | EventEnvelope<"worktree/updated", { worktree: WorktreeRecord }>
   | EventEnvelope<"environment/updated", { environment: EnvironmentRecord }>
+  | EventEnvelope<"executionContext/updated", { executionContext: ExecutionContextRecord }>
   | EventEnvelope<"workflow/updated", { workflow: WorkflowRecord }>
   | EventEnvelope<"plugin/updated", { plugin: PluginRecord }>
   | EventEnvelope<"mcp/updated", { mount: McpMountRecord }>

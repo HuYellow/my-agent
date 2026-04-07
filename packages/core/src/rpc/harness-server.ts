@@ -57,6 +57,7 @@ import { OpenAiCompatibleRunner } from "../agents/openai-compatible-runner.js";
 import { AgentTaskManager } from "../services/agent-task-manager.js";
 import { detectProviderCapabilities } from "../services/provider-capabilities.js";
 import { EnvironmentManager } from "../services/environment-manager.js";
+import { ExecutionContextManager } from "../services/execution-context-manager.js";
 import { McpManager } from "../services/mcp-manager.js";
 import { ensureStoredProviderConfig, syncStoredProviderConfig, watchStoredConfig } from "../services/my-agent-config.js";
 import { PluginManager } from "../services/plugin-manager.js";
@@ -79,6 +80,7 @@ export class HarnessServer {
   private readonly agentTaskManager: AgentTaskManager;
   private readonly worktreeManager: WorktreeManager;
   private readonly environmentManager: EnvironmentManager;
+  private readonly executionContextManager: ExecutionContextManager;
   private readonly workflowManager: WorkflowManager;
   private readonly pluginManager: PluginManager;
   private readonly mcpManager: McpManager;
@@ -113,13 +115,28 @@ export class HarnessServer {
         payload: { environment },
       }),
     );
-    this.agentTaskManager = new AgentTaskManager(this.database, this.worktreeManager, this.environmentManager, (task) =>
+    this.executionContextManager = new ExecutionContextManager(this.database, (executionContext) =>
       this.emit({
-        type: "agent/updated",
-        payload: {
-          task,
-        },
+        type: "executionContext/updated",
+        payload: { executionContext },
       }),
+    );
+    const delegatedRunner = new OpenAiCompatibleRunner(this.database, this.promptBuilder, () => undefined);
+    this.agentTaskManager = new AgentTaskManager(
+      this.database,
+      this.worktreeManager,
+      this.environmentManager,
+      this.executionContextManager,
+      delegatedRunner,
+      (task) => {
+        this.upsertAgentTaskResultItem(task);
+        this.emit({
+          type: "agent/updated",
+          payload: {
+            task,
+          },
+        });
+      },
     );
     this.workflowManager = new WorkflowManager(
       this.database,
@@ -306,6 +323,7 @@ export class HarnessServer {
       skills,
       worktrees: this.database.listWorktrees(config.selectedProjectId),
       environments: this.database.listEnvironments(config.selectedProjectId),
+      executionContexts: this.database.listExecutionContexts(config.selectedProjectId),
     };
   }
 
@@ -623,17 +641,32 @@ export class HarnessServer {
     }
 
     const project = this.requireProject(thread.projectId);
-
-    const updated = await this.runner.resumeAfterApproval(
-      {
-        approval: pending.approval,
-        turn,
-        thread,
-        workspace: project,
-        provider: config.provider,
-      },
-      params,
-    );
+    const delegatedTask = this.database.getAgentTaskByChildThreadId(thread.id);
+    const workspace = this.resolveThreadWorkspace(project, thread);
+    const updated = delegatedTask
+      ? await this.agentTaskManager.resumeAfterApproval(
+          {
+            approval: pending.approval,
+            turn,
+            thread,
+            workspace,
+            provider: config.provider,
+          },
+          params,
+        ).then((task) => {
+          const latestTurn = task?.lastTurnId ? this.database.getTurn(task.lastTurnId) : null;
+          return latestTurn ?? turn;
+        })
+      : await this.runner.resumeAfterApproval(
+          {
+            approval: pending.approval,
+            turn,
+            thread,
+            workspace,
+            provider: config.provider,
+          },
+          params,
+        );
 
     return { turn: updated };
   }
@@ -763,7 +796,7 @@ export class HarnessServer {
     };
   }
 
-  private spawnAgent(params: AgentSpawnParams) {
+  private async spawnAgent(params: AgentSpawnParams) {
     const thread = this.database.getThread(params.threadId);
 
     if (!thread) {
@@ -772,9 +805,12 @@ export class HarnessServer {
 
     const workspace = this.resolveThreadWorkspace(this.requireProject(thread.projectId), thread);
     const project = this.requireProject(thread.projectId);
-    const provider = this.database.getConfig().provider;
+    const config = this.database.getConfig();
+    const discoveredSkills = this.refreshSkills(project.id);
+    const selectedSkills = this.skillService.resolveSelectedSkills(params.input, params.selectedSkillIds, discoveredSkills);
+    const mcpContext = await this.buildRelevantMcpContext(params.input);
     const task = this.agentTaskManager.spawn({
-      provider,
+      provider: config.provider,
       workspace,
       project,
       parentThreadId: thread.id,
@@ -782,6 +818,11 @@ export class HarnessServer {
       title: params.title?.trim() || "Delegated task",
       input: params.input,
       inheritHistory: params.inheritHistory,
+      globalInstructions: config.globalInstructions,
+      runtimeRunMode: config.runtimeRunMode ?? config.providerCapabilities?.recommendedRunMode ?? "full-tools",
+      discoveredSkills,
+      selectedSkills,
+      mcpContext,
     });
 
     return { task };
@@ -798,21 +839,36 @@ export class HarnessServer {
       throw new Error(`Thread not found: ${task.parentThreadId}`);
     }
 
-    const updated = await this.agentTaskManager.sendInput(params.agentId, params.input, this.database.getConfig().provider);
+    const parentThread = this.database.getThread(task.parentThreadId);
 
-    this.recordAgentTaskResult(updated);
+    if (!parentThread) {
+      throw new Error(`Thread not found: ${task.parentThreadId}`);
+    }
+
+    const config = this.database.getConfig();
+    const project = this.requireProject(parentThread.projectId);
+    const discoveredSkills = this.refreshSkills(project.id);
+    const selectedSkills = this.skillService.resolveSelectedSkills(params.input, undefined, discoveredSkills);
+    const mcpContext = await this.buildRelevantMcpContext(params.input);
+    const updated = await this.agentTaskManager.sendInput(params.agentId, params.input, {
+      provider: config.provider,
+      globalInstructions: config.globalInstructions,
+      runtimeRunMode: config.runtimeRunMode ?? config.providerCapabilities?.recommendedRunMode ?? "full-tools",
+      discoveredSkills,
+      selectedSkills,
+      mcpContext,
+    });
+
     return { task: updated };
   }
 
   private async waitAgent(params: AgentWaitParams) {
     const task = await this.agentTaskManager.wait(params.agentId, params.timeoutMs);
-    this.recordAgentTaskResult(task);
     return { task };
   }
 
   private closeAgent(params: AgentCloseParams) {
     const task = this.agentTaskManager.close(params.agentId);
-    this.recordAgentTaskResult(task);
     return { task };
   }
 
@@ -995,7 +1051,15 @@ export class HarnessServer {
     this.database.clearApprovalRules(threadId);
   }
 
-  private recordAgentTaskResult(task: { parentThreadId: string; parentTurnId?: string; title: string; status: string; finalOutput?: string; id: string }) {
+  private upsertAgentTaskResultItem(task: {
+    parentThreadId: string;
+    parentTurnId?: string;
+    title: string;
+    status: string;
+    finalOutput?: string;
+    id: string;
+    summary?: import("@my-agent/protocol").AgentTaskSummary;
+  }) {
     if (!task.parentTurnId || task.status === "running") {
       return;
     }
@@ -1006,20 +1070,48 @@ export class HarnessServer {
       return;
     }
 
-    this.database.createItem({
+    const existing = this.database
+      .listItems(task.parentThreadId)
+      .find((item) => item.kind === "agentTask" && item.turnId === task.parentTurnId && item.metadata?.agentId === task.id);
+    const now = new Date().toISOString();
+    const body = task.finalOutput ?? `Agent task ${task.id} ended with status ${task.status}.`;
+    const metadata = {
+      agentId: task.id,
+      status: task.status,
+      summary: task.summary,
+    };
+
+    if (existing) {
+      const updated = this.database.updateItem({
+        ...existing,
+        status: task.status === "completed" ? "completed" : task.status === "awaiting_approval" ? "in_progress" : "failed",
+        title: `Delegated task: ${task.title}`,
+        body,
+        metadata,
+        updatedAt: now,
+      });
+      this.emit({
+        type: "item/completed",
+        payload: { item: updated },
+      });
+      return;
+    }
+
+    const created = this.database.createItem({
       id: createId("item"),
       threadId: task.parentThreadId,
       turnId: task.parentTurnId,
       kind: "agentTask",
-      status: task.status === "completed" ? "completed" : "failed",
+      status: task.status === "completed" ? "completed" : task.status === "awaiting_approval" ? "in_progress" : "failed",
       title: `Delegated task: ${task.title}`,
-      body: task.finalOutput ?? `Agent task ${task.id} ended with status ${task.status}.`,
-      metadata: {
-        agentId: task.id,
-        status: task.status,
-      },
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      body,
+      metadata,
+      createdAt: now,
+      updatedAt: now,
+    });
+    this.emit({
+      type: created.status === "in_progress" ? "item/started" : "item/completed",
+      payload: { item: created },
     });
   }
 

@@ -6,6 +6,7 @@ import {
   type EnvironmentRecord,
   type AgentTaskRecord,
   type AppConfig,
+  type ExecutionContextRecord,
   type ItemRecord,
   type McpMountRecord,
   type McpPromptRecord,
@@ -45,7 +46,10 @@ const DEFAULT_WORKSPACE: WorkspaceProfile = {
   approvalPolicy: "on-request",
 };
 
-type ThreadWriteRecord = Omit<ThreadRecord, "sandboxMode"> & { sandboxMode?: ThreadRecord["sandboxMode"] };
+type ThreadWriteRecord = Omit<ThreadRecord, "sandboxMode"> & {
+  sandboxMode?: ThreadRecord["sandboxMode"];
+  hidden?: ThreadRecord["hidden"];
+};
 
 export class HarnessDatabase {
   private readonly db: DatabaseSync;
@@ -75,6 +79,7 @@ export class HarnessDatabase {
         title TEXT NOT NULL,
         workspace_id TEXT NOT NULL,
         sandbox_mode TEXT NOT NULL DEFAULT 'workspace-write',
+        hidden INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         archived_at TEXT
@@ -148,8 +153,12 @@ export class HarnessDatabase {
         title TEXT NOT NULL,
         status TEXT NOT NULL,
         final_output TEXT,
+        child_thread_id TEXT,
+        last_turn_id TEXT,
         worktree_id TEXT,
         environment_id TEXT,
+        execution_context_id TEXT,
+        summary_json TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -177,6 +186,22 @@ export class HarnessDatabase {
         detected_tools_json TEXT NOT NULL,
         python_venv_path TEXT,
         node_version TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS execution_contexts (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        thread_id TEXT,
+        agent_id TEXT,
+        worktree_id TEXT,
+        environment_id TEXT,
+        cwd TEXT NOT NULL,
+        shell TEXT NOT NULL,
+        env_json TEXT NOT NULL,
+        detected_tools_json TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -305,11 +330,12 @@ export class HarnessDatabase {
     return config;
   }
 
-  listThreads(): ThreadRecord[] {
-    return this.db
-      .prepare("SELECT * FROM threads ORDER BY updated_at DESC")
-      .all()
-      .map((row) => this.mapThread(row as Record<string, unknown>));
+  listThreads(options: { includeHidden?: boolean } = {}): ThreadRecord[] {
+    const rows = options.includeHidden
+      ? (this.db.prepare("SELECT * FROM threads ORDER BY updated_at DESC").all() as Record<string, unknown>[])
+      : (this.db.prepare("SELECT * FROM threads WHERE COALESCE(hidden, 0) = 0 ORDER BY updated_at DESC").all() as Record<string, unknown>[]);
+
+    return rows.map((row) => this.mapThread(row));
   }
 
   listProjects(): ProjectRecord[] {
@@ -351,7 +377,7 @@ export class HarnessDatabase {
     const normalized = this.normalizeThread(thread);
     this.db
       .prepare(
-        "INSERT INTO threads(id, title, workspace_id, project_id, sandbox_mode, created_at, updated_at, archived_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO threads(id, title, workspace_id, project_id, sandbox_mode, hidden, created_at, updated_at, archived_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
       )
       .run(
         normalized.id,
@@ -359,6 +385,7 @@ export class HarnessDatabase {
         normalized.projectId,
         normalized.projectId,
         normalized.sandboxMode,
+        normalized.hidden ? 1 : 0,
         normalized.createdAt,
         normalized.updatedAt,
         normalized.archivedAt ?? null,
@@ -369,12 +396,13 @@ export class HarnessDatabase {
   updateThread(thread: ThreadWriteRecord): ThreadRecord {
     const normalized = this.normalizeThread(thread);
     this.db
-      .prepare("UPDATE threads SET title = ?, workspace_id = ?, project_id = ?, sandbox_mode = ?, updated_at = ?, archived_at = ? WHERE id = ?")
+      .prepare("UPDATE threads SET title = ?, workspace_id = ?, project_id = ?, sandbox_mode = ?, hidden = ?, updated_at = ?, archived_at = ? WHERE id = ?")
       .run(
         normalized.title,
         normalized.projectId,
         normalized.projectId,
         normalized.sandboxMode,
+        normalized.hidden ? 1 : 0,
         normalized.updatedAt,
         normalized.archivedAt ?? null,
         normalized.id,
@@ -565,7 +593,7 @@ export class HarnessDatabase {
   createAgentTask(task: AgentTaskRecord): AgentTaskRecord {
     this.db
       .prepare(
-        "INSERT INTO agent_tasks(id, parent_thread_id, parent_turn_id, title, status, final_output, worktree_id, environment_id, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO agent_tasks(id, parent_thread_id, parent_turn_id, title, status, final_output, child_thread_id, last_turn_id, worktree_id, environment_id, execution_context_id, summary_json, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       )
       .run(
         task.id,
@@ -574,8 +602,12 @@ export class HarnessDatabase {
         task.title,
         task.status,
         task.finalOutput ?? null,
+        task.childThreadId ?? null,
+        task.lastTurnId ?? null,
         task.worktreeId ?? null,
         task.environmentId ?? null,
+        task.executionContextId ?? null,
+        task.summary ? JSON.stringify(task.summary) : null,
         task.createdAt,
         task.updatedAt,
       );
@@ -587,10 +619,31 @@ export class HarnessDatabase {
     return row ? this.mapAgentTask(row) : null;
   }
 
+  getAgentTaskByChildThreadId(threadId: string): AgentTaskRecord | null {
+    const row = this.db.prepare("SELECT * FROM agent_tasks WHERE child_thread_id = ? ORDER BY created_at DESC LIMIT 1").get(threadId) as
+      | Record<string, unknown>
+      | undefined;
+    return row ? this.mapAgentTask(row) : null;
+  }
+
   updateAgentTask(task: AgentTaskRecord): AgentTaskRecord {
     this.db
-      .prepare("UPDATE agent_tasks SET title = ?, status = ?, final_output = ?, worktree_id = ?, environment_id = ?, updated_at = ? WHERE id = ?")
-      .run(task.title, task.status, task.finalOutput ?? null, task.worktreeId ?? null, task.environmentId ?? null, task.updatedAt, task.id);
+      .prepare(
+        "UPDATE agent_tasks SET title = ?, status = ?, final_output = ?, child_thread_id = ?, last_turn_id = ?, worktree_id = ?, environment_id = ?, execution_context_id = ?, summary_json = ?, updated_at = ? WHERE id = ?",
+      )
+      .run(
+        task.title,
+        task.status,
+        task.finalOutput ?? null,
+        task.childThreadId ?? null,
+        task.lastTurnId ?? null,
+        task.worktreeId ?? null,
+        task.environmentId ?? null,
+        task.executionContextId ?? null,
+        task.summary ? JSON.stringify(task.summary) : null,
+        task.updatedAt,
+        task.id,
+      );
     return task;
   }
 
@@ -659,6 +712,63 @@ export class HarnessDatabase {
       ? (this.db.prepare("SELECT * FROM environments WHERE project_id = ? ORDER BY created_at ASC").all(projectId) as Record<string, unknown>[])
       : (this.db.prepare("SELECT * FROM environments ORDER BY created_at ASC").all() as Record<string, unknown>[]);
     return rows.map((row) => this.mapEnvironment(row));
+  }
+
+  createExecutionContext(executionContext: ExecutionContextRecord): ExecutionContextRecord {
+    this.db
+      .prepare(
+        "INSERT INTO execution_contexts(id, project_id, kind, thread_id, agent_id, worktree_id, environment_id, cwd, shell, env_json, detected_tools_json, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        executionContext.id,
+        executionContext.projectId,
+        executionContext.kind,
+        executionContext.threadId ?? null,
+        executionContext.agentId ?? null,
+        executionContext.worktreeId ?? null,
+        executionContext.environmentId ?? null,
+        executionContext.cwd,
+        executionContext.shell,
+        JSON.stringify(executionContext.envJson),
+        JSON.stringify(executionContext.detectedTools),
+        executionContext.createdAt,
+        executionContext.updatedAt,
+      );
+    return executionContext;
+  }
+
+  updateExecutionContext(executionContext: ExecutionContextRecord): ExecutionContextRecord {
+    this.db
+      .prepare(
+        "UPDATE execution_contexts SET project_id = ?, kind = ?, thread_id = ?, agent_id = ?, worktree_id = ?, environment_id = ?, cwd = ?, shell = ?, env_json = ?, detected_tools_json = ?, updated_at = ? WHERE id = ?",
+      )
+      .run(
+        executionContext.projectId,
+        executionContext.kind,
+        executionContext.threadId ?? null,
+        executionContext.agentId ?? null,
+        executionContext.worktreeId ?? null,
+        executionContext.environmentId ?? null,
+        executionContext.cwd,
+        executionContext.shell,
+        JSON.stringify(executionContext.envJson),
+        JSON.stringify(executionContext.detectedTools),
+        executionContext.updatedAt,
+        executionContext.id,
+      );
+    return executionContext;
+  }
+
+  getExecutionContext(executionContextId: string): ExecutionContextRecord | null {
+    const row = this.db.prepare("SELECT * FROM execution_contexts WHERE id = ?").get(executionContextId) as Record<string, unknown> | undefined;
+    return row ? this.mapExecutionContext(row) : null;
+  }
+
+  listExecutionContexts(projectId?: string): ExecutionContextRecord[] {
+    const rows = projectId
+      ? (this.db.prepare("SELECT * FROM execution_contexts WHERE project_id = ? ORDER BY created_at ASC").all(projectId) as Record<string, unknown>[])
+      : (this.db.prepare("SELECT * FROM execution_contexts ORDER BY created_at ASC").all() as Record<string, unknown>[]);
+    return rows.map((row) => this.mapExecutionContext(row));
   }
 
   upsertWorkflow(workflow: WorkflowRecord): WorkflowRecord {
@@ -890,6 +1000,7 @@ export class HarnessDatabase {
       title: String(row.title),
       projectId: String(row.project_id ?? row.workspace_id),
       sandboxMode: (row.sandbox_mode as ThreadRecord["sandboxMode"]) ?? "workspace-write",
+      hidden: Number(row.hidden ?? 0) === 1,
       createdAt: String(row.created_at),
       updatedAt: String(row.updated_at),
       archivedAt: row.archived_at ? String(row.archived_at) : null,
@@ -969,8 +1080,12 @@ export class HarnessDatabase {
       title: String(row.title),
       status: row.status as AgentTaskRecord["status"],
       finalOutput: row.final_output ? String(row.final_output) : undefined,
+      childThreadId: row.child_thread_id ? String(row.child_thread_id) : undefined,
+      lastTurnId: row.last_turn_id ? String(row.last_turn_id) : undefined,
       worktreeId: row.worktree_id ? String(row.worktree_id) : undefined,
       environmentId: row.environment_id ? String(row.environment_id) : undefined,
+      executionContextId: row.execution_context_id ? String(row.execution_context_id) : undefined,
+      summary: row.summary_json ? (JSON.parse(String(row.summary_json)) as AgentTaskRecord["summary"]) : undefined,
       createdAt: String(row.created_at),
       updatedAt: String(row.updated_at),
     };
@@ -1002,6 +1117,24 @@ export class HarnessDatabase {
       detectedTools: JSON.parse(String(row.detected_tools_json)) as string[],
       pythonVenvPath: row.python_venv_path ? String(row.python_venv_path) : undefined,
       nodeVersion: row.node_version ? String(row.node_version) : undefined,
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+    };
+  }
+
+  private mapExecutionContext(row: Record<string, unknown>): ExecutionContextRecord {
+    return {
+      id: String(row.id),
+      projectId: String(row.project_id),
+      kind: row.kind as ExecutionContextRecord["kind"],
+      threadId: row.thread_id ? String(row.thread_id) : undefined,
+      agentId: row.agent_id ? String(row.agent_id) : undefined,
+      worktreeId: row.worktree_id ? String(row.worktree_id) : undefined,
+      environmentId: row.environment_id ? String(row.environment_id) : undefined,
+      cwd: String(row.cwd),
+      shell: String(row.shell),
+      envJson: JSON.parse(String(row.env_json)) as Record<string, string>,
+      detectedTools: JSON.parse(String(row.detected_tools_json)) as string[],
       createdAt: String(row.created_at),
       updatedAt: String(row.updated_at),
     };
@@ -1089,12 +1222,32 @@ export class HarnessDatabase {
       this.db.exec("ALTER TABLE threads ADD COLUMN sandbox_mode TEXT");
     }
 
+    if (!this.columnExists("threads", "hidden")) {
+      this.db.exec("ALTER TABLE threads ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0");
+    }
+
     if (!this.columnExists("agent_tasks", "worktree_id")) {
       this.db.exec("ALTER TABLE agent_tasks ADD COLUMN worktree_id TEXT");
     }
 
     if (!this.columnExists("agent_tasks", "environment_id")) {
       this.db.exec("ALTER TABLE agent_tasks ADD COLUMN environment_id TEXT");
+    }
+
+    if (!this.columnExists("agent_tasks", "child_thread_id")) {
+      this.db.exec("ALTER TABLE agent_tasks ADD COLUMN child_thread_id TEXT");
+    }
+
+    if (!this.columnExists("agent_tasks", "last_turn_id")) {
+      this.db.exec("ALTER TABLE agent_tasks ADD COLUMN last_turn_id TEXT");
+    }
+
+    if (!this.columnExists("agent_tasks", "execution_context_id")) {
+      this.db.exec("ALTER TABLE agent_tasks ADD COLUMN execution_context_id TEXT");
+    }
+
+    if (!this.columnExists("agent_tasks", "summary_json")) {
+      this.db.exec("ALTER TABLE agent_tasks ADD COLUMN summary_json TEXT");
     }
 
     if (!this.columnExists("plugins", "sandbox_mode")) {
@@ -1157,6 +1310,26 @@ export class HarnessDatabase {
           tools_json TEXT NOT NULL,
           prompts_json TEXT NOT NULL,
           resources_json TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )
+      `);
+    }
+
+    if (!this.tableExists("execution_contexts")) {
+      this.db.exec(`
+        CREATE TABLE execution_contexts (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          thread_id TEXT,
+          agent_id TEXT,
+          worktree_id TEXT,
+          environment_id TEXT,
+          cwd TEXT NOT NULL,
+          shell TEXT NOT NULL,
+          env_json TEXT NOT NULL,
+          detected_tools_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL
         )
       `);
@@ -1227,6 +1400,7 @@ export class HarnessDatabase {
     return {
       ...thread,
       sandboxMode: thread.sandboxMode ?? fallbackSandboxMode,
+      hidden: thread.hidden ?? false,
       archivedAt: thread.archivedAt ?? null,
     };
   }

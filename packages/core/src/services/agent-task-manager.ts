@@ -1,27 +1,57 @@
-import { type AgentTaskRecord, type EnvironmentRecord, type ProjectRecord, type ProviderProfile, type WorkspaceProfile, type WorktreeRecord } from "@my-agent/protocol";
+import {
+  type AgentTaskRecord,
+  type EnvironmentRecord,
+  type PendingApproval,
+  type ProjectRecord,
+  type ProviderProfile,
+  type RuntimeRunMode,
+  type SkillDescriptor,
+  type ThreadRecord,
+  type TurnRecord,
+  type WorkspaceProfile,
+  type WorktreeRecord,
+} from "@my-agent/protocol";
+import { OpenAiCompatibleRunner } from "../agents/openai-compatible-runner.js";
 import { HarnessDatabase } from "../store/database.js";
 import { createId } from "../utils/ids.js";
-import { ProviderService, type ChatMessage } from "./provider-service.js";
+import { type ApprovalResponseParams } from "@my-agent/protocol";
 import { EnvironmentManager } from "./environment-manager.js";
+import { ExecutionContextManager } from "./execution-context-manager.js";
 import { WorktreeManager } from "./worktree-manager.js";
+
+interface AgentTaskRunOptions {
+  provider: ProviderProfile;
+  globalInstructions?: string;
+  runtimeRunMode?: RuntimeRunMode;
+  discoveredSkills?: SkillDescriptor[];
+  selectedSkills?: SkillDescriptor[];
+  mcpContext?: Array<{
+    mount: import("@my-agent/protocol").McpMountRecord;
+    prompts: import("@my-agent/protocol").McpPromptRecord[];
+    resources: import("@my-agent/protocol").McpResourceRecord[];
+  }>;
+}
 
 interface LiveAgentTask {
   task: AgentTaskRecord;
-  controller: AbortController;
-  messages: ChatMessage[];
-  currentRun?: Promise<AgentTaskRecord>;
+  childThread: ThreadRecord;
+  project: ProjectRecord;
+  workspace: WorkspaceProfile;
   worktree?: WorktreeRecord;
-  environment?: EnvironmentRecord;
+  environment: EnvironmentRecord;
+  currentRun?: Promise<AgentTaskRecord>;
+  lastRunOptions: AgentTaskRunOptions;
 }
 
 export class AgentTaskManager {
   private readonly tasks = new Map<string, LiveAgentTask>();
-  private readonly providerService = new ProviderService();
 
   constructor(
     private readonly database: HarnessDatabase,
     private readonly worktreeManager: WorktreeManager,
     private readonly environmentManager: EnvironmentManager,
+    private readonly executionContextManager: ExecutionContextManager,
+    private readonly runner: OpenAiCompatibleRunner,
     private readonly onUpdate: (task: AgentTaskRecord) => void,
   ) {}
 
@@ -34,15 +64,44 @@ export class AgentTaskManager {
     title: string;
     input: string;
     inheritHistory?: boolean;
+    globalInstructions?: string;
+    runtimeRunMode?: import("@my-agent/protocol").RuntimeRunMode;
+    discoveredSkills?: SkillDescriptor[];
+    selectedSkills?: SkillDescriptor[];
+    mcpContext?: AgentTaskRunOptions["mcpContext"];
   }): AgentTaskRecord {
     const now = new Date().toISOString();
     const taskId = createId("agent");
     const worktree = canCreateWorktree(params.project) ? this.worktreeManager.create({ project: params.project, agentId: taskId }) : undefined;
+    const delegatedWorkspace = buildDelegatedWorkspace(params.workspace, params.project, worktree);
+    const childThread = this.database.createThread({
+      id: createId("thread"),
+      title: params.title?.trim() || "Delegated task",
+      projectId: params.project.id,
+      sandboxMode: delegatedWorkspace.sandboxMode,
+      hidden: true,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+
+    if (params.inheritHistory) {
+      this.database.copySessionItems(params.parentThreadId, childThread.id);
+    }
+
     const environment = this.environmentManager.detect({
       project: params.project,
-      threadId: params.parentThreadId,
+      threadId: childThread.id,
       worktreeId: worktree?.id,
-      cwd: worktree?.path ?? params.workspace.rootPath,
+      cwd: delegatedWorkspace.rootPath,
+    });
+    const executionContext = this.executionContextManager.create({
+      project: params.project,
+      kind: "agent",
+      threadId: childThread.id,
+      agentId: taskId,
+      worktree,
+      environment,
     });
     const task = this.database.createAgentTask({
       id: taskId,
@@ -50,70 +109,83 @@ export class AgentTaskManager {
       parentTurnId: params.parentTurnId,
       title: params.title,
       status: "running",
+      childThreadId: childThread.id,
       worktreeId: worktree?.id,
       environmentId: environment.id,
+      executionContextId: executionContext.id,
       createdAt: now,
       updatedAt: now,
     });
     const live: LiveAgentTask = {
       task,
-      controller: new AbortController(),
-      messages: [
-        {
-          role: "system",
-          content: [
-            "You are a delegated coding sub-agent.",
-            `Workspace root: ${params.workspace.rootPath}`,
-            worktree ? `Worktree path: ${worktree.path}` : undefined,
-            environment ? `Environment cwd: ${environment.cwd}` : undefined,
-            environment?.detectedTools.length ? `Detected tools: ${environment.detectedTools.join(", ")}` : undefined,
-            "Respond concisely and focus only on the delegated task.",
-          ]
-            .filter(Boolean)
-            .join("\n"),
-        },
-        {
-          role: "user",
-          content: params.input,
-        },
-      ],
+      childThread,
+      project: params.project,
+      workspace: delegatedWorkspace,
       worktree,
       environment,
+      lastRunOptions: {
+        provider: params.provider,
+        globalInstructions: params.globalInstructions,
+        runtimeRunMode: params.runtimeRunMode,
+        discoveredSkills: params.discoveredSkills ?? [],
+        selectedSkills: params.selectedSkills ?? [],
+        mcpContext: params.mcpContext,
+      },
     };
 
     this.tasks.set(task.id, live);
-    live.currentRun = this.runTask(live, params.provider);
     this.onUpdate(task);
+    live.currentRun = this.runTask(live, params.input, live.lastRunOptions);
     return task;
   }
 
-  async sendInput(agentId: string, input: string, provider: ProviderProfile): Promise<AgentTaskRecord> {
+  async sendInput(
+    agentId: string,
+    input: string,
+    options: AgentTaskRunOptions,
+  ): Promise<AgentTaskRecord> {
     const live = this.requireTask(agentId);
-    live.messages.push({
-      role: "user",
-      content: input,
-    });
-    live.task = this.database.updateAgentTask({
+    live.lastRunOptions = options;
+    live.task = this.persistTask({
       ...live.task,
       status: "running",
       updatedAt: new Date().toISOString(),
     });
-    this.onUpdate(live.task);
-    live.currentRun = this.runTask(live, provider);
+    live.currentRun = this.runTask(live, input, options);
     return live.currentRun;
+  }
+
+  async resumeAfterApproval(
+    params: {
+      approval: PendingApproval;
+      turn: TurnRecord;
+      thread: ThreadRecord;
+      workspace: WorkspaceProfile;
+      provider: ProviderProfile;
+    },
+    response: ApprovalResponseParams,
+  ): Promise<AgentTaskRecord | null> {
+    const task = this.database.getAgentTaskByChildThreadId(params.thread.id);
+
+    if (!task) {
+      return null;
+    }
+
+    const updatedTurn = await this.runner.resumeAfterApproval(params, response);
+    return this.syncTaskForHiddenThread(params.thread.id, updatedTurn.id);
   }
 
   async wait(agentId: string, timeoutMs = 30_000): Promise<AgentTaskRecord> {
     const live = this.requireTask(agentId);
 
     if (!live.currentRun) {
-      return live.task;
+      return this.database.getAgentTask(agentId) ?? live.task;
     }
 
     return Promise.race([
       live.currentRun,
       new Promise<AgentTaskRecord>((resolve) => {
-        const timer = setTimeout(() => resolve(live.task), timeoutMs);
+        const timer = setTimeout(() => resolve(this.database.getAgentTask(agentId) ?? live.task), timeoutMs);
         timer.unref?.();
       }),
     ]);
@@ -121,7 +193,11 @@ export class AgentTaskManager {
 
   close(agentId: string): AgentTaskRecord {
     const live = this.requireTask(agentId);
-    live.controller.abort();
+
+    if (live.task.lastTurnId) {
+      this.runner.interruptTurn(live.task.lastTurnId);
+    }
+
     if (live.worktree) {
       try {
         this.worktreeManager.remove(live.worktree.id);
@@ -129,12 +205,12 @@ export class AgentTaskManager {
         // best effort cleanup
       }
     }
-    live.task = this.database.updateAgentTask({
+
+    live.task = this.persistTask({
       ...live.task,
       status: live.task.status === "completed" ? "completed" : "cancelled",
       updatedAt: new Date().toISOString(),
     });
-    this.onUpdate(live.task);
     return live.task;
   }
 
@@ -142,44 +218,103 @@ export class AgentTaskManager {
     return this.database.getAgentTask(agentId);
   }
 
+  syncTaskForHiddenThread(threadId: string, turnId?: string): AgentTaskRecord | null {
+    const task = this.database.getAgentTaskByChildThreadId(threadId);
+
+    if (!task) {
+      return null;
+    }
+
+    const live = this.tasks.get(task.id);
+    const turns = this.database.listTurns(threadId);
+    const relevantTurn =
+      (turnId ? turns.find((entry) => entry.id === turnId) : undefined) ??
+      turns
+        .slice()
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+        .at(0);
+
+    if (!relevantTurn) {
+      return task;
+    }
+
+    const summary = summarizeAgentThread(this.database, threadId, relevantTurn.id);
+    const nextStatus = mapTaskStatus(relevantTurn.status);
+    const nextTask = this.persistTask({
+      ...task,
+      status: nextStatus,
+      lastTurnId: relevantTurn.id,
+      finalOutput: summary.finalMessage ?? task.finalOutput,
+      summary,
+      updatedAt: new Date().toISOString(),
+    });
+
+    if (live) {
+      live.task = nextTask;
+    }
+
+    return nextTask;
+  }
+
   dispose(): void {
     for (const live of this.tasks.values()) {
-      live.controller.abort();
+      if (live.task.lastTurnId) {
+        this.runner.interruptTurn(live.task.lastTurnId);
+      }
     }
     this.tasks.clear();
   }
 
-  private async runTask(live: LiveAgentTask, provider: ProviderProfile): Promise<AgentTaskRecord> {
+  private async runTask(live: LiveAgentTask, input: string, options: AgentTaskRunOptions): Promise<AgentTaskRecord> {
+    const now = new Date().toISOString();
+    const turn: TurnRecord = {
+      id: createId("turn"),
+      threadId: live.childThread.id,
+      status: "running",
+      input,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.database.createTurn(turn);
+    live.task = this.persistTask({
+      ...live.task,
+      status: "running",
+      lastTurnId: turn.id,
+      updatedAt: now,
+    });
+
     try {
-      const message = await this.providerService.complete({
-        provider,
-        messages: live.messages,
-        tools: [],
-        abortSignal: live.controller.signal,
+      const finalTurn = await this.runner.runTurn({
+        provider: options.provider,
+        workspace: live.workspace,
+        thread: live.childThread,
+        turn,
+        discoveredSkills: options.discoveredSkills ?? [],
+        selectedSkills: options.selectedSkills ?? [],
+        userInput: input,
+        userAttachments: [],
+        globalInstructions: options.globalInstructions ?? "",
+        runtimeRunMode: options.runtimeRunMode,
+        mcpContext: options.mcpContext,
       });
-      const content = message.content ?? "";
-      live.messages.push({
-        role: "assistant",
-        content,
-      });
-      live.task = this.database.updateAgentTask({
-        ...live.task,
-        status: "completed",
-        finalOutput: content,
-        updatedAt: new Date().toISOString(),
-      });
-      this.onUpdate(live.task);
-      return live.task;
+      const synced = this.syncTaskForHiddenThread(live.childThread.id, finalTurn.id);
+      return synced ?? live.task;
     } catch (error) {
-      live.task = this.database.updateAgentTask({
+      live.task = this.persistTask({
         ...live.task,
-        status: live.controller.signal.aborted ? "cancelled" : "failed",
+        status: "failed",
+        lastTurnId: turn.id,
         finalOutput: normalizeAgentTaskError(error),
         updatedAt: new Date().toISOString(),
       });
-      this.onUpdate(live.task);
       return live.task;
     }
+  }
+
+  private persistTask(task: AgentTaskRecord): AgentTaskRecord {
+    const updated = this.database.updateAgentTask(task);
+    this.onUpdate(updated);
+    return updated;
   }
 
   private requireTask(agentId: string): LiveAgentTask {
@@ -193,8 +328,53 @@ export class AgentTaskManager {
   }
 }
 
+function buildDelegatedWorkspace(workspace: WorkspaceProfile, project: ProjectRecord, worktree?: WorktreeRecord): WorkspaceProfile {
+  return {
+    id: project.id,
+    name: project.name,
+    rootPath: worktree?.path ?? project.rootPath,
+    shell: project.shell,
+    sandboxMode: workspace.sandboxMode,
+    approvalPolicy: project.approvalPolicy,
+  };
+}
+
 function canCreateWorktree(project: ProjectRecord): boolean {
   return Boolean(project.rootPath);
+}
+
+function mapTaskStatus(turnStatus: TurnRecord["status"]): AgentTaskRecord["status"] {
+  switch (turnStatus) {
+    case "awaiting_approval":
+      return "awaiting_approval";
+    case "completed":
+      return "completed";
+    case "cancelled":
+      return "cancelled";
+    case "failed":
+      return "failed";
+    default:
+      return "running";
+  }
+}
+
+function summarizeAgentThread(database: HarnessDatabase, threadId: string, turnId: string): NonNullable<AgentTaskRecord["summary"]> {
+  const items = database.listItems(threadId).filter((item) => item.turnId === turnId);
+  const changedPaths = [...new Set(items.map((item) => (typeof item.metadata?.path === "string" ? item.metadata.path : null)).filter((value): value is string => Boolean(value)))];
+  const finalMessage = items
+    .filter((item) => item.kind === "agentMessage")
+    .slice()
+    .reverse()
+    .at(0)?.body;
+
+  return {
+    finalMessage,
+    toolCallCount: items.filter((item) => item.kind === "toolCall" || item.kind === "toolResult").length,
+    fileChangeCount: items.filter((item) => item.kind === "fileChange").length,
+    commandCount: items.filter((item) => item.kind === "commandExecution").length,
+    approvalRequestCount: items.filter((item) => item.kind === "approvalRequest").length,
+    changedPaths,
+  };
 }
 
 function normalizeAgentTaskError(error: unknown): string {
