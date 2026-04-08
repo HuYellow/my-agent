@@ -214,6 +214,7 @@ export interface InitializeResult {
   executionContexts?: ExecutionContextRecord[];
   terminals?: TerminalSessionRecord[];
   terminalCapabilities?: TerminalBackendCapability[];
+  terminalOutputArchives?: TerminalOutputArchiveRecord[];
   reviews?: ReviewRecord[];
 }
 
@@ -437,6 +438,15 @@ export interface TerminalSessionRecord {
   pid?: number;
   exitCode?: number;
   failureReason?: string;
+  lastCommand?: string;
+  lastCommandRisk?: TerminalCommandRisk;
+  lastCommandApprovalState?: TerminalCommandApprovalState;
+  lastCommandRequiresApproval?: boolean;
+  lastCommandReason?: string;
+  lastCommandAt?: string;
+  pendingApprovalMode?: "preflight" | "deferred";
+  pendingApprovalCommand?: string;
+  pendingApprovalReason?: string;
   startedAt: string;
   lastActiveAt: string;
   closedAt?: string;
@@ -444,17 +454,54 @@ export interface TerminalSessionRecord {
   updatedAt: string;
 }
 
+export type TerminalCommandRisk = "safe_read" | "write" | "interactive" | "network" | "privileged";
+export type TerminalCommandApprovalState = "not_required" | "required" | "deferred" | "blocked";
+
 export interface TerminalBackendCapability {
   kind: TerminalSessionRecord["backend"];
   available: boolean;
   interactive: boolean;
+  supportsInteractiveCommands: boolean;
   supportsResize: boolean;
+  approvalModes: Array<"preflight" | "deferred" | "session">;
+  defaultApprovalMode: "preflight" | "deferred" | "session";
   reason?: string;
 }
 
 export interface TerminalReadResult {
   session: TerminalSessionRecord;
   output: string;
+}
+
+export interface TerminalOutputEvent {
+  sessionId: string;
+  threadId?: string;
+  delta: string;
+  timestamp: string;
+}
+
+export interface TerminalOutputArchiveRecord {
+  id: string;
+  sessionId: string;
+  threadId?: string;
+  reason: "auto_truncate" | "manual_archive" | "manual_clear";
+  output: string;
+  createdAt: string;
+}
+
+export interface TerminalApprovalResponseParams {
+  sessionId: string;
+  decision: "approve" | "reject";
+  scope?: "once" | "session";
+}
+
+export interface TerminalArchiveParams {
+  sessionId: string;
+  reason?: "manual_archive" | "manual_clear";
+}
+
+export interface TerminalClearBufferParams {
+  sessionId: string;
 }
 
 export interface ExecutionContextRecord {
@@ -633,6 +680,9 @@ export type HarnessEvent =
   | EventEnvelope<"config/changed", { config: AppConfig }>
   | EventEnvelope<"skills/changed", { skills: SkillDescriptor[] }>
   | EventEnvelope<"terminal/updated", { session: TerminalSessionRecord }>
+  | EventEnvelope<"terminal/output", TerminalOutputEvent>
+  | EventEnvelope<"terminal/outputArchived", { archive: TerminalOutputArchiveRecord }>
+  | EventEnvelope<"terminal/outputCleared", { sessionId: string; threadId?: string; timestamp: string }>
   | EventEnvelope<"agent/updated", { task: AgentTaskRecord }>
   | EventEnvelope<"worktree/updated", { worktree: WorktreeRecord }>
   | EventEnvelope<"environment/updated", { environment: EnvironmentRecord }>

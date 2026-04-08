@@ -12,6 +12,7 @@ import {
   type ReviewRecord,
   type SkillDescriptor,
   type TerminalBackendCapability,
+  type TerminalOutputArchiveRecord,
   type TerminalSessionRecord,
   type TurnInputAttachment,
   type ThreadRecord,
@@ -38,6 +39,8 @@ interface AppState {
   threadSessions: Record<string, ThreadSessionState>;
   reviews: ReviewRecord[];
   terminals: TerminalSessionRecord[];
+  terminalOutputs: Record<string, string>;
+  terminalOutputArchives: TerminalOutputArchiveRecord[];
   terminalCapabilities: TerminalBackendCapability[];
   skills: SkillDescriptor[];
   activeProjectId?: string;
@@ -75,6 +78,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   threadSessions: {},
   reviews: [],
   terminals: [],
+  terminalOutputs: {},
+  terminalOutputArchives: [],
   terminalCapabilities: [],
   skills: [],
   providerModels: [],
@@ -106,6 +111,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           threadSessions: Object.fromEntries(initial.threads.map((thread) => [thread.id, createEmptyThreadSession()])),
           reviews: initial.reviews ?? [],
           terminals: initial.terminals ?? [],
+          terminalOutputArchives: initial.terminalOutputArchives ?? [],
           terminalCapabilities: initial.terminalCapabilities ?? [],
           skills: initial.skills,
           config: initial.config,
@@ -489,6 +495,27 @@ export const useAppStore = create<AppState>((set, get) => ({
           terminals: upsertTerminal(state.terminals, event.payload.session),
         }));
         break;
+      case "terminal/output":
+        set((state) => ({
+          terminalOutputs: {
+            ...state.terminalOutputs,
+            [event.payload.sessionId]: `${state.terminalOutputs[event.payload.sessionId] ?? ""}${event.payload.delta}`.slice(-24_000),
+          },
+        }));
+        break;
+      case "terminal/outputArchived":
+        set((state) => ({
+          terminalOutputArchives: upsertTerminalArchive(state.terminalOutputArchives, event.payload.archive),
+        }));
+        break;
+      case "terminal/outputCleared":
+        set((state) => ({
+          terminalOutputs: {
+            ...state.terminalOutputs,
+            [event.payload.sessionId]: "",
+          },
+        }));
+        break;
       case "config/changed":
         set((state) => ({
           config: event.payload.config,
@@ -519,6 +546,13 @@ function upsertReview(reviews: ReviewRecord[], review: ReviewRecord): ReviewReco
 
 function upsertTerminal(terminals: TerminalSessionRecord[], terminal: TerminalSessionRecord): TerminalSessionRecord[] {
   return [...terminals.filter((entry) => entry.id !== terminal.id), terminal].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+}
+
+function upsertTerminalArchive(
+  archives: TerminalOutputArchiveRecord[],
+  archive: TerminalOutputArchiveRecord,
+): TerminalOutputArchiveRecord[] {
+  return [...archives.filter((entry) => entry.id !== archive.id), archive].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
 }
 
 function upsertItem(items: ItemRecord[], item: ItemRecord): ItemRecord[] {

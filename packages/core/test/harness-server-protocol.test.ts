@@ -27,9 +27,37 @@ describe("HarnessServer protocol compatibility", () => {
           input: "Pause and summarize.",
         },
       });
+      const terminalApproval = await kernel.server.handle({
+        jsonrpc: "2.0",
+        id: "terminal-approval",
+        method: "terminal/approval/respond",
+        params: {
+          sessionId: "missing-terminal",
+          decision: "reject",
+        },
+      });
+      const terminalArchive = await kernel.server.handle({
+        jsonrpc: "2.0",
+        id: "terminal-archive",
+        method: "terminal/archive",
+        params: {
+          sessionId: "missing-terminal",
+        },
+      });
+      const terminalClear = await kernel.server.handle({
+        jsonrpc: "2.0",
+        id: "terminal-clear",
+        method: "terminal/clear",
+        params: {
+          sessionId: "missing-terminal",
+        },
+      });
 
       expect("result" in reviewList && Array.isArray((reviewList as any).result.reviews)).toBe(true);
       expect("error" in steer && steer.error.message).toContain("Turn not found");
+      expect("error" in terminalApproval && terminalApproval.error.message).toContain("Terminal session not found");
+      expect("error" in terminalArchive && terminalArchive.error.message).toContain("Terminal session not found");
+      expect("error" in terminalClear && terminalClear.error.message).toContain("Terminal session not found");
     } finally {
       kernel.dispose();
     }

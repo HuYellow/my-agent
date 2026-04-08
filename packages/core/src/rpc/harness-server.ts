@@ -31,7 +31,10 @@ import {
   type ReviewStartResult,
   type ResumeThreadParams,
   type ResumeThreadResult,
+  type TerminalArchiveParams,
   type TerminalCloseParams,
+  type TerminalApprovalResponseParams,
+  type TerminalClearBufferParams,
   type TerminalCreateParams,
   type TerminalReadParams,
   type TerminalResizeParams,
@@ -111,6 +114,21 @@ export class HarnessServer {
           session,
         },
       }),
+      (output) =>
+        this.emit({
+          type: "terminal/output",
+          payload: output,
+        }),
+      (archive) =>
+        this.emit({
+          type: "terminal/outputArchived",
+          payload: { archive },
+        }),
+      (event) =>
+        this.emit({
+          type: "terminal/outputCleared",
+          payload: event,
+        }),
     );
     this.worktreeManager = new WorktreeManager(this.database, (worktree) =>
       this.emit({
@@ -275,10 +293,16 @@ export class HarnessServer {
         return this.writeTerminal(message.params as TerminalWriteParams);
       case "terminal/read":
         return this.readTerminal(message.params as TerminalReadParams);
+      case "terminal/archive":
+        return this.archiveTerminalOutput(message.params as TerminalArchiveParams);
+      case "terminal/clear":
+        return this.clearTerminalOutput(message.params as TerminalClearBufferParams);
       case "terminal/resize":
         return this.resizeTerminal(message.params as TerminalResizeParams);
       case "terminal/close":
         return this.closeTerminal(message.params as TerminalCloseParams);
+      case "terminal/approval/respond":
+        return this.respondTerminalApproval(message.params as TerminalApprovalResponseParams);
       case "agent/spawn":
         return this.spawnAgent(message.params as AgentSpawnParams);
       case "agent/send_input":
@@ -348,6 +372,7 @@ export class HarnessServer {
       executionContexts: this.database.listExecutionContexts(config.selectedProjectId),
       terminals: this.database.listTerminalSessions(),
       terminalCapabilities: this.terminalManager.listCapabilities(),
+      terminalOutputArchives: this.database.listTerminalOutputArchives(),
       reviews: this.reviewManager.list(config.selectedProjectId),
     };
   }
@@ -840,26 +865,139 @@ export class HarnessServer {
       threadId: session.threadId,
     });
 
+    const command = params.input.trim() || "echo";
     const plan = toolService.planExecution("run_shell", {
-      command: params.input.trim() || "echo",
+      command,
       cwd: session.cwd,
     });
+    const backendCapability = this.terminalManager.getCapability(session.backend);
 
-    if (!plan.permission.allowed) {
-      throw new Error(plan.permission.denialReason ?? "Terminal input is blocked by the current sandbox policy.");
+    if (plan.descriptor.interactive && backendCapability && !backendCapability.supportsInteractiveCommands) {
+      this.terminalManager.recordCommandAssessment(params.sessionId, {
+        command,
+        risk: "interactive",
+        approvalState: "blocked",
+        requiresApproval: false,
+        reason: `${session.backend.toUpperCase()} backend does not support interactive commands. Use a PTY-backed terminal session.`,
+      });
+      throw new Error(`${session.backend.toUpperCase()} backend does not support interactive commands. Use a PTY-backed terminal session.`);
     }
 
-    if (plan.permission.approvalMode !== "none") {
-      throw new Error(plan.permission.approvalReason ?? "Terminal input requires approval and cannot run unattended.");
+    const sessionApproved = plan.permission.approvalKey
+      ? this.database.hasTerminalApprovalRule(params.sessionId, plan.permission.approvalKey)
+      : false;
+    const effectivePermission = sessionApproved
+      ? {
+          ...plan.permission,
+          requiresApproval: false,
+          approvalMode: "none" as const,
+          sessionApproved: true,
+        }
+      : plan.permission;
+
+    this.terminalManager.recordCommandAssessment(params.sessionId, {
+      command,
+      risk: plan.descriptor.riskLevel ?? "write",
+      approvalState: !effectivePermission.allowed
+        ? "blocked"
+        : effectivePermission.approvalMode === "deferred"
+          ? "deferred"
+          : effectivePermission.requiresApproval
+            ? "required"
+            : "not_required",
+      requiresApproval: effectivePermission.requiresApproval,
+      reason: effectivePermission.denialReason ?? effectivePermission.approvalReason,
+    });
+
+    if (!effectivePermission.allowed) {
+      throw new Error(effectivePermission.denialReason ?? "Terminal input is blocked by the current sandbox policy.");
+    }
+
+    if (effectivePermission.approvalMode !== "none") {
+      const updated = this.terminalManager.setPendingApproval(params.sessionId, {
+        mode: effectivePermission.approvalMode,
+        command,
+        reason: effectivePermission.approvalReason,
+      });
+      return { session: updated };
     }
 
     return {
-      session: this.terminalManager.writeInput(params.sessionId, params.input),
+      session: this.terminalManager.writeInput(this.terminalManager.clearPendingApproval(params.sessionId).id, params.input),
+    };
+  }
+
+  private respondTerminalApproval(params: TerminalApprovalResponseParams) {
+    const session = this.database.getTerminalSession(params.sessionId);
+
+    if (!session) {
+      throw new Error(`Terminal session not found: ${params.sessionId}`);
+    }
+
+    const command = session.pendingApprovalCommand?.trim();
+
+    if (!command) {
+      throw new Error("Terminal session has no pending approval command.");
+    }
+
+    if (params.decision === "reject") {
+      this.terminalManager.recordCommandAssessment(params.sessionId, {
+        command,
+        risk: session.lastCommandRisk ?? "write",
+        approvalState: "blocked",
+        requiresApproval: false,
+        reason: "User rejected the pending terminal command.",
+      });
+      return { session: this.terminalManager.clearPendingApproval(params.sessionId) };
+    }
+
+    const workspace = this.resolveWorkspace(session.threadId);
+    const toolService = new ToolService(workspace, {
+      database: this.database,
+      threadId: session.threadId,
+    });
+    const plan = toolService.planExecution("run_shell", {
+      command,
+      cwd: session.cwd,
+    });
+
+    if (params.scope === "session" && plan.permission.approvalKey) {
+      this.database.upsertTerminalApprovalRule({
+        sessionId: params.sessionId,
+        approvalKey: plan.permission.approvalKey,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
+    this.terminalManager.recordCommandAssessment(params.sessionId, {
+      command,
+      risk: plan.descriptor.riskLevel ?? "write",
+      approvalState: "not_required",
+      requiresApproval: false,
+      reason: params.scope === "session" ? "Approved for the remainder of this terminal session." : "Approved once.",
+    });
+    const cleared = this.terminalManager.clearPendingApproval(params.sessionId);
+
+    return {
+      session: this.terminalManager.writeInput(cleared.id, `${command}${command.endsWith("\n") ? "" : "\n"}`),
     };
   }
 
   private readTerminal(params: TerminalReadParams) {
     return this.terminalManager.readOutput(params.sessionId);
+  }
+
+  private archiveTerminalOutput(params: TerminalArchiveParams) {
+    return {
+      session: this.terminalManager.archiveOutputBuffer(params.sessionId),
+    };
+  }
+
+  private clearTerminalOutput(params: TerminalClearBufferParams) {
+    return {
+      session: this.terminalManager.clearOutputBuffer(params.sessionId),
+    };
   }
 
   private resizeTerminal(params: TerminalResizeParams) {

@@ -149,11 +149,37 @@ export class HarnessDatabase {
         pid INTEGER,
         exit_code INTEGER,
         failure_reason TEXT,
+        last_command TEXT,
+        last_command_risk TEXT,
+        last_command_approval_state TEXT,
+        last_command_requires_approval INTEGER,
+        last_command_reason TEXT,
+        last_command_at TEXT,
+        pending_approval_mode TEXT,
+        pending_approval_command TEXT,
+        pending_approval_reason TEXT,
         started_at TEXT,
         last_active_at TEXT,
         closed_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS terminal_approval_rules (
+        session_id TEXT NOT NULL,
+        approval_key TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (session_id, approval_key)
+      );
+
+      CREATE TABLE IF NOT EXISTS terminal_output_archives (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        thread_id TEXT,
+        reason TEXT NOT NULL,
+        output TEXT NOT NULL,
+        created_at TEXT NOT NULL
       );
 
       CREATE TABLE IF NOT EXISTS agent_tasks (
@@ -681,8 +707,8 @@ export class HarnessDatabase {
     this.db
       .prepare(
         `INSERT INTO terminal_sessions(
-          id, thread_id, workspace_id, cwd, shell, backend, status, cols, rows, pid, exit_code, failure_reason, started_at, last_active_at, closed_at, created_at, updated_at
-        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
+          id, thread_id, workspace_id, cwd, shell, backend, status, cols, rows, pid, exit_code, failure_reason, last_command, last_command_risk, last_command_approval_state, last_command_requires_approval, last_command_reason, last_command_at, pending_approval_mode, pending_approval_command, pending_approval_reason, started_at, last_active_at, closed_at, created_at, updated_at
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
       )
       .run(
         session.id,
@@ -697,6 +723,15 @@ export class HarnessDatabase {
         session.pid ?? null,
         session.exitCode ?? null,
         session.failureReason ?? null,
+        session.lastCommand ?? null,
+        session.lastCommandRisk ?? null,
+        session.lastCommandApprovalState ?? null,
+        typeof session.lastCommandRequiresApproval === "boolean" ? (session.lastCommandRequiresApproval ? 1 : 0) : null,
+        session.lastCommandReason ?? null,
+        session.lastCommandAt ?? null,
+        session.pendingApprovalMode ?? null,
+        session.pendingApprovalCommand ?? null,
+        session.pendingApprovalReason ?? null,
         session.startedAt,
         session.lastActiveAt,
         session.closedAt ?? null,
@@ -710,7 +745,7 @@ export class HarnessDatabase {
     this.db
       .prepare(
         `UPDATE terminal_sessions
-         SET thread_id = ?, workspace_id = ?, cwd = ?, shell = ?, backend = ?, status = ?, cols = ?, rows = ?, pid = ?, exit_code = ?, failure_reason = ?, started_at = ?, last_active_at = ?, closed_at = ?, updated_at = ?
+         SET thread_id = ?, workspace_id = ?, cwd = ?, shell = ?, backend = ?, status = ?, cols = ?, rows = ?, pid = ?, exit_code = ?, failure_reason = ?, last_command = ?, last_command_risk = ?, last_command_approval_state = ?, last_command_requires_approval = ?, last_command_reason = ?, last_command_at = ?, pending_approval_mode = ?, pending_approval_command = ?, pending_approval_reason = ?, started_at = ?, last_active_at = ?, closed_at = ?, updated_at = ?
          WHERE id = ?`,
       )
       .run(
@@ -725,6 +760,15 @@ export class HarnessDatabase {
         session.pid ?? null,
         session.exitCode ?? null,
         session.failureReason ?? null,
+        session.lastCommand ?? null,
+        session.lastCommandRisk ?? null,
+        session.lastCommandApprovalState ?? null,
+        typeof session.lastCommandRequiresApproval === "boolean" ? (session.lastCommandRequiresApproval ? 1 : 0) : null,
+        session.lastCommandReason ?? null,
+        session.lastCommandAt ?? null,
+        session.pendingApprovalMode ?? null,
+        session.pendingApprovalCommand ?? null,
+        session.pendingApprovalReason ?? null,
         session.startedAt,
         session.lastActiveAt,
         session.closedAt ?? null,
@@ -739,6 +783,45 @@ export class HarnessDatabase {
       ? (this.db.prepare("SELECT * FROM terminal_sessions WHERE thread_id = ? ORDER BY created_at ASC").all(threadId) as Record<string, unknown>[])
       : (this.db.prepare("SELECT * FROM terminal_sessions ORDER BY created_at ASC").all() as Record<string, unknown>[]);
     return rows.map((row) => this.mapTerminalSession(row));
+  }
+
+  hasTerminalApprovalRule(sessionId: string, approvalKey: string): boolean {
+    const row = this.db
+      .prepare("SELECT 1 AS present FROM terminal_approval_rules WHERE session_id = ? AND approval_key = ? LIMIT 1")
+      .get(sessionId, approvalKey) as { present?: number } | undefined;
+    return row?.present === 1;
+  }
+
+  upsertTerminalApprovalRule(rule: { sessionId: string; approvalKey: string; createdAt: string; updatedAt: string }): void {
+    this.db
+      .prepare(
+        `
+          INSERT INTO terminal_approval_rules(session_id, approval_key, created_at, updated_at)
+          VALUES(?, ?, ?, ?)
+          ON CONFLICT(session_id, approval_key) DO UPDATE SET updated_at = excluded.updated_at
+        `,
+      )
+      .run(rule.sessionId, rule.approvalKey, rule.createdAt, rule.updatedAt);
+  }
+
+  clearTerminalApprovalRules(sessionId: string): void {
+    this.db.prepare("DELETE FROM terminal_approval_rules WHERE session_id = ?").run(sessionId);
+  }
+
+  createTerminalOutputArchive(archive: import("@my-agent/protocol").TerminalOutputArchiveRecord): import("@my-agent/protocol").TerminalOutputArchiveRecord {
+    this.db
+      .prepare(
+        "INSERT INTO terminal_output_archives(id, session_id, thread_id, reason, output, created_at) VALUES(?, ?, ?, ?, ?, ?)",
+      )
+      .run(archive.id, archive.sessionId, archive.threadId ?? null, archive.reason, archive.output, archive.createdAt);
+    return archive;
+  }
+
+  listTerminalOutputArchives(sessionId?: string): import("@my-agent/protocol").TerminalOutputArchiveRecord[] {
+    const rows = sessionId
+      ? (this.db.prepare("SELECT * FROM terminal_output_archives WHERE session_id = ? ORDER BY created_at DESC").all(sessionId) as Record<string, unknown>[])
+      : (this.db.prepare("SELECT * FROM terminal_output_archives ORDER BY created_at DESC").all() as Record<string, unknown>[]);
+    return rows.map((row) => this.mapTerminalOutputArchive(row));
   }
 
   createAgentTask(task: AgentTaskRecord): AgentTaskRecord {
@@ -1242,11 +1325,34 @@ export class HarnessDatabase {
       pid: typeof row.pid === "number" ? row.pid : row.pid != null ? Number(row.pid) : undefined,
       exitCode: typeof row.exit_code === "number" ? row.exit_code : row.exit_code != null ? Number(row.exit_code) : undefined,
       failureReason: row.failure_reason ? String(row.failure_reason) : undefined,
+      lastCommand: row.last_command ? String(row.last_command) : undefined,
+      lastCommandRisk: row.last_command_risk ? (String(row.last_command_risk) as TerminalSessionRecord["lastCommandRisk"]) : undefined,
+      lastCommandApprovalState: row.last_command_approval_state
+        ? (String(row.last_command_approval_state) as TerminalSessionRecord["lastCommandApprovalState"])
+        : undefined,
+      lastCommandRequiresApproval:
+        row.last_command_requires_approval == null ? undefined : Number(row.last_command_requires_approval) === 1,
+      lastCommandReason: row.last_command_reason ? String(row.last_command_reason) : undefined,
+      lastCommandAt: row.last_command_at ? String(row.last_command_at) : undefined,
+      pendingApprovalMode: row.pending_approval_mode ? (String(row.pending_approval_mode) as TerminalSessionRecord["pendingApprovalMode"]) : undefined,
+      pendingApprovalCommand: row.pending_approval_command ? String(row.pending_approval_command) : undefined,
+      pendingApprovalReason: row.pending_approval_reason ? String(row.pending_approval_reason) : undefined,
       startedAt: row.started_at ? String(row.started_at) : String(row.created_at),
       lastActiveAt: row.last_active_at ? String(row.last_active_at) : String(row.updated_at),
       closedAt: row.closed_at ? String(row.closed_at) : undefined,
       createdAt: String(row.created_at),
       updatedAt: String(row.updated_at),
+    };
+  }
+
+  private mapTerminalOutputArchive(row: Record<string, unknown>): import("@my-agent/protocol").TerminalOutputArchiveRecord {
+    return {
+      id: String(row.id),
+      sessionId: String(row.session_id),
+      threadId: row.thread_id ? String(row.thread_id) : undefined,
+      reason: String(row.reason) as import("@my-agent/protocol").TerminalOutputArchiveRecord["reason"],
+      output: String(row.output),
+      createdAt: String(row.created_at),
     };
   }
 
@@ -1535,6 +1641,67 @@ export class HarnessDatabase {
 
     if (!this.columnExists("terminal_sessions", "failure_reason")) {
       this.db.exec("ALTER TABLE terminal_sessions ADD COLUMN failure_reason TEXT");
+    }
+
+    if (!this.columnExists("terminal_sessions", "last_command")) {
+      this.db.exec("ALTER TABLE terminal_sessions ADD COLUMN last_command TEXT");
+    }
+
+    if (!this.columnExists("terminal_sessions", "last_command_risk")) {
+      this.db.exec("ALTER TABLE terminal_sessions ADD COLUMN last_command_risk TEXT");
+    }
+
+    if (!this.columnExists("terminal_sessions", "last_command_approval_state")) {
+      this.db.exec("ALTER TABLE terminal_sessions ADD COLUMN last_command_approval_state TEXT");
+    }
+
+    if (!this.columnExists("terminal_sessions", "last_command_requires_approval")) {
+      this.db.exec("ALTER TABLE terminal_sessions ADD COLUMN last_command_requires_approval INTEGER");
+    }
+
+    if (!this.columnExists("terminal_sessions", "last_command_reason")) {
+      this.db.exec("ALTER TABLE terminal_sessions ADD COLUMN last_command_reason TEXT");
+    }
+
+    if (!this.columnExists("terminal_sessions", "last_command_at")) {
+      this.db.exec("ALTER TABLE terminal_sessions ADD COLUMN last_command_at TEXT");
+    }
+
+    if (!this.columnExists("terminal_sessions", "pending_approval_mode")) {
+      this.db.exec("ALTER TABLE terminal_sessions ADD COLUMN pending_approval_mode TEXT");
+    }
+
+    if (!this.columnExists("terminal_sessions", "pending_approval_command")) {
+      this.db.exec("ALTER TABLE terminal_sessions ADD COLUMN pending_approval_command TEXT");
+    }
+
+    if (!this.columnExists("terminal_sessions", "pending_approval_reason")) {
+      this.db.exec("ALTER TABLE terminal_sessions ADD COLUMN pending_approval_reason TEXT");
+    }
+
+    if (!this.tableExists("terminal_approval_rules")) {
+      this.db.exec(`
+        CREATE TABLE terminal_approval_rules (
+          session_id TEXT NOT NULL,
+          approval_key TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (session_id, approval_key)
+        )
+      `);
+    }
+
+    if (!this.tableExists("terminal_output_archives")) {
+      this.db.exec(`
+        CREATE TABLE terminal_output_archives (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          thread_id TEXT,
+          reason TEXT NOT NULL,
+          output TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        )
+      `);
     }
 
     if (!this.columnExists("terminal_sessions", "started_at")) {

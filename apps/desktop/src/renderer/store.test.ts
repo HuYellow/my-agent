@@ -15,7 +15,9 @@ afterEach(() => {
   useAppStore.setState({
     reviews: [],
     terminals: [],
+    terminalOutputArchives: [],
     terminalCapabilities: [],
+    terminalOutputs: {},
     threadSessions: {},
   } as never);
 });
@@ -24,6 +26,7 @@ describe("desktop thread smoke", () => {
   it("binds steer and review events into UI state", () => {
     useAppStore.setState({
       reviews: [],
+      terminalOutputs: {},
       threadSessions: {
         "thread-1": { ...initialSession },
       },
@@ -119,6 +122,49 @@ describe("desktop thread smoke", () => {
         exitCode: 1,
       },
     ]);
+
+    useAppStore.getState().handleEvent({
+      type: "terminal/output",
+      payload: {
+        sessionId: "terminal-1",
+        threadId: "thread-1",
+        delta: "hello from terminal\n",
+        timestamp: new Date().toISOString(),
+      },
+    });
+
+    expect(useAppStore.getState().terminalOutputs["terminal-1"]).toContain("hello from terminal");
+
+    useAppStore.getState().handleEvent({
+      type: "terminal/outputArchived",
+      payload: {
+        archive: {
+          id: "archive-1",
+          sessionId: "terminal-1",
+          threadId: "thread-1",
+          reason: "manual_archive",
+          output: "older output",
+          createdAt: new Date().toISOString(),
+        },
+      },
+    });
+    expect(useAppStore.getState().terminalOutputArchives).toMatchObject([
+      {
+        id: "archive-1",
+        sessionId: "terminal-1",
+        reason: "manual_archive",
+      },
+    ]);
+
+    useAppStore.getState().handleEvent({
+      type: "terminal/outputCleared",
+      payload: {
+        sessionId: "terminal-1",
+        threadId: "thread-1",
+        timestamp: new Date().toISOString(),
+      },
+    });
+    expect(useAppStore.getState().terminalOutputs["terminal-1"]).toBe("");
   });
 
   it("renders review and steer entrypoints in the thread view source", () => {
@@ -126,10 +172,20 @@ describe("desktop thread smoke", () => {
 
     expect(source).toContain("ReviewSummaryCard");
     expect(source).toContain("SteerCard");
+    expect(source).toContain("TerminalCard");
+    expect(source).toContain("threadTerminals");
+    expect(source).toContain("selectedTerminalId");
     expect(source).toContain("reviewMenuOpen");
     expect(source).toContain("triggerReview");
     expect(source).toContain("terminalSessions");
     expect(source).toContain("terminalCapabilities");
+    expect(source).toContain("createTerminalSession");
+    expect(source).toContain("sendTerminalInput");
+    expect(source).toContain("respondTerminalApproval");
+    expect(source).toContain("archiveTerminal");
+    expect(source).toContain("clearTerminal");
+    expect(source).toContain("Archived output");
+    expect(source).not.toContain('window.setInterval(() => {\n      void readOutput();');
   });
 
   it("keeps desktop bridge methods in sync for turn/steer and review APIs", () => {
@@ -143,8 +199,29 @@ describe("desktop thread smoke", () => {
     expect(preloadSource).toContain("steerTurn");
     expect(preloadSource).toContain("startReview");
     expect(preloadSource).toContain("listReviews");
+    expect(preloadSource).toContain("respondTerminalApproval");
+    expect(preloadSource).toContain("createTerminal");
+    expect(preloadSource).toContain("writeTerminal");
+    expect(preloadSource).toContain("readTerminal");
+    expect(preloadSource).toContain("closeTerminal");
+    expect(preloadSource).toContain("archiveTerminal");
+    expect(preloadSource).toContain("clearTerminal");
     expect(envSource).toContain("steerTurn");
     expect(envSource).toContain("startReview");
     expect(envSource).toContain("listReviews");
+    expect(envSource).toContain("respondTerminalApproval");
+    expect(envSource).toContain("createTerminal");
+    expect(envSource).toContain("writeTerminal");
+    expect(envSource).toContain("readTerminal");
+    expect(envSource).toContain("closeTerminal");
+    expect(envSource).toContain("archiveTerminal");
+    expect(envSource).toContain("clearTerminal");
+    expect(mainSource).toContain('"terminal:approval:respond"');
+    expect(mainSource).toContain('"terminal:create"');
+    expect(mainSource).toContain('"terminal:write"');
+    expect(mainSource).toContain('"terminal:read"');
+    expect(mainSource).toContain('"terminal:close"');
+    expect(mainSource).toContain('"terminal:archive"');
+    expect(mainSource).toContain('"terminal:clear"');
   });
 });

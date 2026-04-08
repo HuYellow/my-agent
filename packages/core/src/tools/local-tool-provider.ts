@@ -475,6 +475,8 @@ function buildShellDescriptor(workspace: WorkspaceProfile, args: Record<string, 
     scopeKey: `${cwd}::${analysis.scopeKey}`,
     paths: [cwd, ...analysis.paths],
     risky: true,
+    interactive: analysis.interactive,
+    riskLevel: analysis.riskLevel,
     writes: analysis.writes,
     network: analysis.network,
     approvalReason: analysis.privileged

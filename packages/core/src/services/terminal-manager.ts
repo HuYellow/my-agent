@@ -1,8 +1,14 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { type TerminalBackendCapability, type TerminalSessionRecord, type WorkspaceProfile } from "@my-agent/protocol";
 import { HarnessDatabase } from "../store/database.js";
 import { createId } from "../utils/ids.js";
+
+type NodePtyModule = typeof import("node-pty");
+
+const require = createRequire(import.meta.url);
+const MAX_TERMINAL_BUFFER_CHARS = 24_000;
 
 interface TerminalBackendHandle {
   readonly pid?: number;
@@ -33,13 +39,18 @@ interface LiveTerminalSession {
 
 export class TerminalManager {
   private readonly sessions = new Map<string, LiveTerminalSession>();
-  private readonly backends: TerminalBackend[] = [new BufferedShellTerminalBackend(), new PtyTerminalBackend()];
-  private readonly defaultBackend: TerminalBackend = this.backends[0]!;
+  private readonly backends: TerminalBackend[] = [new PtyTerminalBackend(), new BufferedShellTerminalBackend()];
+  private readonly defaultBackend: TerminalBackend;
 
   constructor(
     private readonly database: HarnessDatabase,
     private readonly onUpdate: (session: TerminalSessionRecord) => void,
-  ) {}
+    private readonly onOutput: (event: { sessionId: string; threadId?: string; delta: string; timestamp: string }) => void,
+    private readonly onArchived: (archive: import("@my-agent/protocol").TerminalOutputArchiveRecord) => void,
+    private readonly onCleared: (event: { sessionId: string; threadId?: string; timestamp: string }) => void,
+  ) {
+    this.defaultBackend = this.resolvePreferredBackend();
+  }
 
   createSession(workspace: WorkspaceProfile, options: { threadId?: string; cwd?: string; shell?: string; cols?: number; rows?: number }): TerminalSessionRecord {
     const shell = options.shell ?? workspace.shell;
@@ -77,6 +88,17 @@ export class TerminalManager {
 
     handle.onData((chunk) => {
       live.buffer += chunk;
+      if (live.buffer.length > MAX_TERMINAL_BUFFER_CHARS) {
+        const overflow = live.buffer.slice(0, live.buffer.length - MAX_TERMINAL_BUFFER_CHARS);
+        live.buffer = live.buffer.slice(-MAX_TERMINAL_BUFFER_CHARS);
+        this.archiveOutput(live.record, overflow, "auto_truncate");
+      }
+      this.onOutput({
+        sessionId: live.record.id,
+        threadId: live.record.threadId,
+        delta: chunk,
+        timestamp: new Date().toISOString(),
+      });
       live.record = this.patchSession(live.record, {
         lastActiveAt: new Date().toISOString(),
       });
@@ -119,6 +141,44 @@ export class TerminalManager {
     };
   }
 
+  clearOutputBuffer(sessionId: string): TerminalSessionRecord {
+    const live = this.requireSession(sessionId);
+
+    if (live.buffer.length > 0) {
+      this.archiveOutput(live.record, live.buffer, "manual_clear");
+      live.buffer = "";
+    }
+
+    const updated = this.patchSession(live.record, {
+      lastActiveAt: new Date().toISOString(),
+    });
+    this.onCleared({
+      sessionId: updated.id,
+      threadId: updated.threadId,
+      timestamp: new Date().toISOString(),
+    });
+    return updated;
+  }
+
+  archiveOutputBuffer(sessionId: string): TerminalSessionRecord {
+    const live = this.requireSession(sessionId);
+
+    if (live.buffer.length > 0) {
+      this.archiveOutput(live.record, live.buffer, "manual_archive");
+      live.buffer = "";
+    }
+
+    const updated = this.patchSession(live.record, {
+      lastActiveAt: new Date().toISOString(),
+    });
+    this.onCleared({
+      sessionId: updated.id,
+      threadId: updated.threadId,
+      timestamp: new Date().toISOString(),
+    });
+    return updated;
+  }
+
   resizeSession(sessionId: string, cols?: number, rows?: number): TerminalSessionRecord {
     const live = this.requireSession(sessionId);
 
@@ -149,7 +209,11 @@ export class TerminalManager {
       });
       live.handle.kill();
       this.sessions.delete(sessionId);
+      this.database.clearTerminalApprovalRules(sessionId);
+      return this.database.getTerminalSession(sessionId) ?? live.record;
     }
+
+    this.database.clearTerminalApprovalRules(sessionId);
 
     const closed = this.database.updateTerminalSession({
       ...stored,
@@ -180,6 +244,116 @@ export class TerminalManager {
     return this.backends.map((backend) => backend.describe());
   }
 
+  getCapability(kind: TerminalSessionRecord["backend"]): TerminalBackendCapability | undefined {
+    return this.backends.find((backend) => backend.kind === kind)?.describe();
+  }
+
+  recordCommandAssessment(
+    sessionId: string,
+    assessment: {
+      command: string;
+      risk: TerminalSessionRecord["lastCommandRisk"];
+      approvalState: TerminalSessionRecord["lastCommandApprovalState"];
+      requiresApproval: boolean;
+      reason?: string;
+    },
+  ): TerminalSessionRecord {
+    const session = this.database.getTerminalSession(sessionId);
+
+    if (!session) {
+      throw new Error(`Terminal session not found: ${sessionId}`);
+    }
+
+    return this.patchSession(session, {
+      lastCommand: assessment.command,
+      lastCommandRisk: assessment.risk,
+      lastCommandApprovalState: assessment.approvalState,
+      lastCommandRequiresApproval: assessment.requiresApproval,
+      lastCommandReason: assessment.reason,
+      lastCommandAt: new Date().toISOString(),
+      lastActiveAt: new Date().toISOString(),
+    });
+  }
+
+  setPendingApproval(sessionId: string, pending: {
+    mode: "preflight" | "deferred";
+    command: string;
+    reason?: string;
+  }): TerminalSessionRecord {
+    const session = this.database.getTerminalSession(sessionId);
+
+    if (!session) {
+      throw new Error(`Terminal session not found: ${sessionId}`);
+    }
+
+    return this.patchSession(session, {
+      pendingApprovalMode: pending.mode,
+      pendingApprovalCommand: pending.command,
+      pendingApprovalReason: pending.reason,
+    });
+  }
+
+  clearPendingApproval(sessionId: string): TerminalSessionRecord {
+    const session = this.database.getTerminalSession(sessionId);
+
+    if (!session) {
+      throw new Error(`Terminal session not found: ${sessionId}`);
+    }
+
+    return this.patchSession(session, {
+      pendingApprovalMode: undefined,
+      pendingApprovalCommand: undefined,
+      pendingApprovalReason: undefined,
+    });
+  }
+
+  annotateCommandAssessment(
+    sessionId: string,
+    assessment: Pick<
+      TerminalSessionRecord,
+      | "lastCommand"
+      | "lastCommandRisk"
+      | "lastCommandApprovalState"
+      | "lastCommandRequiresApproval"
+      | "lastCommandReason"
+      | "lastCommandAt"
+    >,
+  ): TerminalSessionRecord {
+    const stored = this.database.getTerminalSession(sessionId);
+
+    if (!stored) {
+      throw new Error(`Terminal session not found: ${sessionId}`);
+    }
+
+    const updated = this.database.updateTerminalSession({
+      ...stored,
+      ...assessment,
+      updatedAt: new Date().toISOString(),
+    });
+    this.onUpdate(updated);
+
+    const live = this.sessions.get(sessionId);
+    if (live) {
+      live.record = updated;
+    }
+
+    return updated;
+  }
+
+  private resolvePreferredBackend(): TerminalBackend {
+    const preferred = (process.env.MY_AGENT_TERMINAL_BACKEND ?? "auto").toLowerCase();
+
+    if (preferred === "pipe") {
+      return this.backends.find((backend) => backend.kind === "pipe") ?? this.backends[0]!;
+    }
+
+    if (preferred === "pty") {
+      return this.backends.find((backend) => backend.kind === "pty") ?? this.backends[0]!;
+    }
+
+    return this.backends.find((backend) => backend.describe().available) ?? this.backends[this.backends.length - 1]!;
+  }
+
   private requireSession(sessionId: string): LiveTerminalSession {
     const live = this.sessions.get(sessionId);
 
@@ -199,6 +373,23 @@ export class TerminalManager {
     this.onUpdate(updated);
     return updated;
   }
+
+  private archiveOutput(
+    session: TerminalSessionRecord,
+    output: string,
+    reason: import("@my-agent/protocol").TerminalOutputArchiveRecord["reason"],
+  ): import("@my-agent/protocol").TerminalOutputArchiveRecord {
+    const archive = this.database.createTerminalOutputArchive({
+      id: createId("termarch"),
+      sessionId: session.id,
+      threadId: session.threadId,
+      reason,
+      output,
+      createdAt: new Date().toISOString(),
+    });
+    this.onArchived(archive);
+    return archive;
+  }
 }
 
 class BufferedShellTerminalBackend implements TerminalBackend {
@@ -208,8 +399,11 @@ class BufferedShellTerminalBackend implements TerminalBackend {
     return {
       kind: this.kind,
       available: true,
-      interactive: true,
+      interactive: false,
+      supportsInteractiveCommands: false,
       supportsResize: false,
+      approvalModes: ["preflight", "session"],
+      defaultApprovalMode: "preflight",
       reason: "Buffered stdio shell backend",
     };
   }
@@ -222,19 +416,65 @@ class BufferedShellTerminalBackend implements TerminalBackend {
 
 class PtyTerminalBackend implements TerminalBackend {
   readonly kind = "pty" as const;
+  private readonly nodePty = loadNodePtyModule();
 
   describe(): TerminalBackendCapability {
     return {
       kind: this.kind,
-      available: false,
+      available: Boolean(this.nodePty),
       interactive: true,
+      supportsInteractiveCommands: Boolean(this.nodePty),
       supportsResize: true,
-      reason: "PTY backend is planned but not wired yet.",
+      approvalModes: ["preflight", "deferred", "session"],
+      defaultApprovalMode: "preflight",
+      reason: this.nodePty ? "node-pty backend" : "node-pty is unavailable; falling back to buffered pipe backend.",
     };
   }
 
-  start(): TerminalBackendHandle {
-    throw new Error("PTY backend is not available yet.");
+  start(params: { shell: string; cwd: string; cols?: number; rows?: number }): TerminalBackendHandle {
+    if (!this.nodePty) {
+      throw new Error("PTY backend is not available yet.");
+    }
+
+    const pty = this.nodePty.spawn(params.shell, buildShellArgs(params.shell), {
+      name: process.env.TERM ?? "xterm-256color",
+      cols: params.cols ?? 120,
+      rows: params.rows ?? 30,
+      cwd: params.cwd,
+      env: process.env as Record<string, string>,
+    });
+
+    return new PtyTerminalHandle(pty);
+  }
+}
+
+class PtyTerminalHandle implements TerminalBackendHandle {
+  constructor(private readonly pty: import("node-pty").IPty) {}
+
+  get pid(): number | undefined {
+    return this.pty.pid;
+  }
+
+  write(input: string): void {
+    this.pty.write(input);
+  }
+
+  resize(cols: number, rows: number): void {
+    this.pty.resize(cols, rows);
+  }
+
+  kill(): void {
+    this.pty.kill();
+  }
+
+  onData(listener: (chunk: string) => void): void {
+    this.pty.onData(listener);
+  }
+
+  onExit(listener: (result: { exitCode?: number; failureReason?: string }) => void): void {
+    this.pty.onExit(({ exitCode }) => {
+      listener({ exitCode });
+    });
   }
 }
 
@@ -294,4 +534,26 @@ function spawnShell(shell: string, cwd: string): ChildProcessWithoutNullStreams 
     env: process.env,
     windowsHide: true,
   });
+}
+
+function buildShellArgs(shell: string): string[] {
+  const normalized = shell.toLowerCase();
+
+  if (normalized.includes("powershell")) {
+    return ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass"];
+  }
+
+  if (normalized.includes("bash")) {
+    return ["-i"];
+  }
+
+  return [];
+}
+
+function loadNodePtyModule(): NodePtyModule | null {
+  try {
+    return require("node-pty") as NodePtyModule;
+  } catch {
+    return null;
+  }
 }

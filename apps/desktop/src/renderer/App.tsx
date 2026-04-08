@@ -197,6 +197,8 @@ export function App() {
     threadSessions,
     reviews,
     terminals,
+    terminalOutputs,
+    terminalOutputArchives,
     terminalCapabilities,
     skills,
     activeProjectId,
@@ -255,6 +257,8 @@ export function App() {
   const [reviewBaseBranch, setReviewBaseBranch] = useState("main");
   const [reviewCommit, setReviewCommit] = useState("");
   const [steerInput, setSteerInput] = useState("");
+  const [selectedTerminalId, setSelectedTerminalId] = useState<string | null>(null);
+  const [terminalInput, setTerminalInput] = useState("");
   const [branchSummary, setBranchSummary] = useState<BranchSummary>({
     isGitRepo: false,
     currentBranch: null,
@@ -500,6 +504,27 @@ export function App() {
 
     return true;
   }, [activeProjectId, reviewBaseBranch, reviewCommit, reviewRunning, reviewSourceKind]);
+  const threadTerminals = useMemo(() => {
+    if (!activeThreadId) {
+      return [] as TerminalSessionRecord[];
+    }
+
+    return [...terminals]
+      .filter((terminal) => terminal.threadId === activeThreadId)
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  }, [activeThreadId, terminals]);
+  const activeTerminal = useMemo(() => {
+    if (threadTerminals.length === 0) {
+      return null;
+    }
+
+    return threadTerminals.find((terminal) => terminal.id === selectedTerminalId) ?? threadTerminals[0] ?? null;
+  }, [selectedTerminalId, threadTerminals]);
+  const activeTerminalOutput = activeTerminal ? (terminalOutputs[activeTerminal.id] ?? "") : "";
+  const activeTerminalArchives = useMemo(
+    () => (activeTerminal ? terminalOutputArchives.filter((archive) => archive.sessionId === activeTerminal.id) : []),
+    [activeTerminal, terminalOutputArchives],
+  );
   const enabledSkills = useMemo(() => skills.filter((skill) => skill.enabled), [skills]);
   const currentSkillDetail = useMemo(
     () => skills.find((skill) => skill.id === skillDetailId) ?? null,
@@ -569,6 +594,16 @@ export function App() {
       }
     };
   }, [activeThreadId, orderedItems.length, pendingApproval?.id]);
+  useEffect(() => {
+    if (threadTerminals.length === 0) {
+      setSelectedTerminalId(null);
+      return;
+    }
+
+    if (!selectedTerminalId || !threadTerminals.some((terminal) => terminal.id === selectedTerminalId)) {
+      setSelectedTerminalId(threadTerminals[0]?.id ?? null);
+    }
+  }, [selectedTerminalId, threadTerminals]);
   const contextSummary = useMemo(
     () =>
       estimateContextUsage({
@@ -976,6 +1011,41 @@ export function App() {
     setReviewMenuOpen(false);
   };
 
+  const createTerminalSession = async () => {
+    if (!activeThreadId) {
+      return;
+    }
+
+    const result = await window.myAgent.createTerminal({
+      threadId: activeThreadId,
+      cols: 120,
+      rows: 30,
+    });
+    setSelectedTerminalId(result.session.id);
+  };
+
+  const sendTerminalInput = async () => {
+    const command = terminalInput.trim();
+
+    if (!activeTerminal || !command) {
+      return;
+    }
+
+    await window.myAgent.writeTerminal({
+      sessionId: activeTerminal.id,
+      input: `${command}${command.endsWith("\n") ? "" : "\n"}`,
+    });
+    setTerminalInput("");
+  };
+
+  const closeTerminalSession = async () => {
+    if (!activeTerminal) {
+      return;
+    }
+
+    await window.myAgent.closeTerminal({ sessionId: activeTerminal.id });
+  };
+
   const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (currentThreadBusy) {
       return;
@@ -1266,6 +1336,27 @@ export function App() {
               />
             )}
 
+            {activeThreadId && (
+              <TerminalCard
+                sessions={threadTerminals}
+                session={activeTerminal}
+                selectedSessionId={activeTerminal?.id ?? null}
+                archives={activeTerminalArchives}
+                output={activeTerminalOutput}
+                input={terminalInput}
+                onInputChange={setTerminalInput}
+                onSelectSession={setSelectedTerminalId}
+                onOpen={() => void createTerminalSession()}
+                onSend={() => void sendTerminalInput()}
+                onClose={() => void closeTerminalSession()}
+                onArchive={(sessionId) => void window.myAgent.archiveTerminal({ sessionId, reason: "manual_archive" })}
+                onClear={(sessionId) => void window.myAgent.clearTerminal({ sessionId })}
+                onApproveOnce={(sessionId) => void window.myAgent.respondTerminalApproval({ sessionId, decision: "approve", scope: "once" })}
+                onApproveSession={(sessionId) => void window.myAgent.respondTerminalApproval({ sessionId, decision: "approve", scope: "session" })}
+                onReject={(sessionId) => void window.myAgent.respondTerminalApproval({ sessionId, decision: "reject" })}
+              />
+            )}
+
             {/* 闂傚倸鍊风粈浣革耿闁秴鍌ㄧ憸鏃堝箖濞差亜惟闁靛鍟浠嬪箖閵忋倖鍋傞幖杈剧秶缁辩敻姊虹拠鎻掝劉缂佸甯熼幗顐ょ磽閸屾氨孝婵炲樊鍙冨濠氭偄閻撳海鐣鹃悷婊冪Ч瀵櫕娼忛埞鎯т壕婵炲牆鐏濋弸鐔封攽閻愯韬€?*/}
             <ComposerBar
               input={input}
@@ -1370,6 +1461,9 @@ export function App() {
             terminalSessions={terminals}
             terminalCapabilities={terminalCapabilities}
             activeProjectId={activeProjectId}
+            onRespondTerminalApproval={(sessionId, decision, scope) =>
+              window.myAgent.respondTerminalApproval({ sessionId, decision, scope })
+            }
             onRefreshMount={(mountId) =>
               window.myAgent.refreshMcpMount(mountId).then(() =>
                 window.myAgent.listMcpSessions().then((result) => setRuntimeMcpSessions(result.sessions)),
@@ -1880,6 +1974,7 @@ function RuntimePluginsPanel({
   terminalSessions,
   terminalCapabilities,
   activeProjectId,
+  onRespondTerminalApproval,
   onRefreshMount,
 }: {
   plugins: PluginRecord[];
@@ -1888,6 +1983,7 @@ function RuntimePluginsPanel({
   terminalSessions: TerminalSessionRecord[];
   terminalCapabilities: TerminalBackendCapability[];
   activeProjectId?: string;
+  onRespondTerminalApproval: (sessionId: string, decision: "approve" | "reject", scope?: "once" | "session") => Promise<unknown>;
   onRefreshMount: (mountId: string) => Promise<unknown>;
 }) {
   const visibleTerminalSessions = activeProjectId
@@ -1915,7 +2011,13 @@ function RuntimePluginsPanel({
               </span>
             </div>
             <p>{capability.reason ?? "No detail available."}</p>
-            <pre>interactive={String(capability.interactive)} resize={String(capability.supportsResize)}</pre>
+            <pre>
+              backendInteractive={String(capability.interactive)}
+              {`\n`}supportsInteractiveCommands={String(capability.supportsInteractiveCommands)}
+              {`\n`}supportsResize={String(capability.supportsResize)}
+              {`\n`}approvalModes={capability.approvalModes.join(", ")}
+              {`\n`}defaultApprovalMode={capability.defaultApprovalMode}
+            </pre>
           </div>
         ))}
         {visibleTerminalSessions.map((session) => (
@@ -1934,6 +2036,32 @@ function RuntimePluginsPanel({
               pid={session.pid ?? "-"} exit={session.exitCode ?? "-"} size={session.cols ?? "?"}x{session.rows ?? "?"}
               {session.failureReason ? `\nreason=${session.failureReason}` : ""}
             </pre>
+            {session.lastCommand && (
+              <div className="runtime-terminal-meta">
+                <div className="runtime-terminal-meta__row">
+                  <span className={`runtime-terminal-pill runtime-terminal-pill--${session.lastCommandRisk ?? "write"}`}>
+                    {session.lastCommandRisk ?? "write"}
+                  </span>
+                  <span className={`runtime-terminal-pill runtime-terminal-pill--approval-${session.lastCommandApprovalState ?? "not_required"}`}>
+                    {session.lastCommandApprovalState ?? "not_required"}
+                  </span>
+                </div>
+                <code className="runtime-terminal-meta__command">{session.lastCommand}</code>
+                {session.lastCommandReason && <small>{session.lastCommandReason}</small>}
+              </div>
+            )}
+            {session.pendingApprovalCommand && session.pendingApprovalMode && (
+              <div className="runtime-terminal-approval">
+                <strong>{session.pendingApprovalMode === "preflight" ? "Preflight approval required" : "Deferred approval required"}</strong>
+                <code className="runtime-terminal-meta__command">{session.pendingApprovalCommand}</code>
+                {session.pendingApprovalReason && <small>{session.pendingApprovalReason}</small>}
+                <div className="runtime-terminal-approval__actions">
+                  <button className="button" onClick={() => void onRespondTerminalApproval(session.id, "approve", "once")}>Approve once</button>
+                  <button className="button" onClick={() => void onRespondTerminalApproval(session.id, "approve", "session")}>Approve session</button>
+                  <button className="button button--ghost" onClick={() => void onRespondTerminalApproval(session.id, "reject")}>Reject</button>
+                </div>
+              </div>
+            )}
           </div>
         ))}
         {plugins.map((plugin) => (
@@ -2919,6 +3047,146 @@ function SteerCard({
           Steer
         </button>
       </div>
+    </section>
+  );
+}
+
+function TerminalCard({
+  sessions,
+  session,
+  selectedSessionId,
+  archives,
+  output,
+  input,
+  onInputChange,
+  onSelectSession,
+  onOpen,
+  onSend,
+  onClose,
+  onArchive,
+  onClear,
+  onApproveOnce,
+  onApproveSession,
+  onReject,
+}: {
+  sessions: TerminalSessionRecord[];
+  session: TerminalSessionRecord | null;
+  selectedSessionId: string | null;
+  archives: import("@my-agent/protocol").TerminalOutputArchiveRecord[];
+  output: string;
+  input: string;
+  onInputChange: (value: string) => void;
+  onSelectSession: (sessionId: string) => void;
+  onOpen: () => void;
+  onSend: () => void;
+  onClose: () => void;
+  onArchive: (sessionId: string) => void;
+  onClear: (sessionId: string) => void;
+  onApproveOnce: (sessionId: string) => void;
+  onApproveSession: (sessionId: string) => void;
+  onReject: (sessionId: string) => void;
+}) {
+  return (
+    <section className="terminal-card">
+      <div className="terminal-card__header">
+        <div>
+          <strong>Terminal</strong>
+          <span>{session ? `${session.backend.toUpperCase()} · ${session.status}` : "No active terminal session"}</span>
+        </div>
+        <div className="terminal-card__header-actions">
+          {session && (
+            <button type="button" className="button button--ghost" onClick={onClose}>
+              Close
+            </button>
+          )}
+          {session && (
+            <button type="button" className="button button--ghost" onClick={() => onArchive(session.id)}>
+              Archive
+            </button>
+          )}
+          {session && (
+            <button type="button" className="button button--ghost" onClick={() => onClear(session.id)}>
+              Clear
+            </button>
+          )}
+          <button type="button" className="button" onClick={onOpen}>
+            New session
+          </button>
+        </div>
+      </div>
+
+      {sessions.length > 0 && (
+        <div className="terminal-card__sessions">
+          {sessions.map((entry) => (
+            <button
+              key={entry.id}
+              type="button"
+              className={`terminal-card__session-tab ${entry.id === selectedSessionId ? "terminal-card__session-tab--active" : ""}`}
+              onClick={() => onSelectSession(entry.id)}
+            >
+              <span>{entry.id.slice(-6)}</span>
+              <small>{entry.status}</small>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {session && (
+        <>
+          <pre className="terminal-card__output">{output || "Terminal is open. Waiting for output…"}</pre>
+          {archives.length > 0 && (
+            <div className="terminal-card__archives">
+              <strong>Archived output</strong>
+              <div className="terminal-card__archive-list">
+                {archives.slice(0, 5).map((archive) => (
+                  <details key={archive.id} className="terminal-card__archive-item">
+                    <summary>
+                      <span>{archive.reason}</span>
+                      <small>{new Date(archive.createdAt).toLocaleString()}</small>
+                    </summary>
+                    <pre>{archive.output}</pre>
+                  </details>
+                ))}
+              </div>
+            </div>
+          )}
+          {session.pendingApprovalCommand && session.pendingApprovalMode && (
+            <div className="terminal-card__approval">
+              <strong>{session.pendingApprovalMode === "preflight" ? "Approval required before run" : "Approval required to retry"}</strong>
+              <code>{session.pendingApprovalCommand}</code>
+              {session.pendingApprovalReason && <small>{session.pendingApprovalReason}</small>}
+              <div className="terminal-card__actions">
+                <button type="button" className="button" onClick={() => onApproveOnce(session.id)}>
+                  Approve once
+                </button>
+                <button type="button" className="button" onClick={() => onApproveSession(session.id)}>
+                  Approve session
+                </button>
+                <button type="button" className="button button--ghost" onClick={() => onReject(session.id)}>
+                  Reject
+                </button>
+              </div>
+            </div>
+          )}
+          <div className="terminal-card__composer">
+            <input
+              type="text"
+              value={input}
+              onChange={(event) => onInputChange(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  onSend();
+                }
+              }}
+              placeholder="Run a command in the active terminal session"
+            />
+            <button type="button" className="button" onClick={onSend} disabled={!input.trim()}>
+              Send
+            </button>
+          </div>
+        </>
+      )}
     </section>
   );
 }

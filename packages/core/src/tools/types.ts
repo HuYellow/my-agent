@@ -28,6 +28,8 @@ export interface ToolActionDescriptor {
   scopeKey: string;
   source: RuntimeToolSource;
   risky?: boolean;
+  interactive?: boolean;
+  riskLevel?: "safe_read" | "write" | "interactive" | "network" | "privileged";
   writes?: boolean;
   network?: boolean;
   paths?: string[];

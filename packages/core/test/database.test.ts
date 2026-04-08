@@ -158,5 +158,16 @@ describe("HarnessDatabase projects", () => {
       startedAt: now,
       lastActiveAt: now,
     });
+
+    database.upsertTerminalApprovalRule({
+      sessionId: "terminal-1",
+      approvalKey: "run_shell:key",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    expect(database.hasTerminalApprovalRule("terminal-1", "run_shell:key")).toBe(true);
+    database.clearTerminalApprovalRules("terminal-1");
+    expect(database.hasTerminalApprovalRule("terminal-1", "run_shell:key")).toBe(false);
   });
 });

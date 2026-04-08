@@ -20,6 +20,14 @@ import {
   type ReviewStartParams,
   type StartThreadParams,
   type StartTurnParams,
+  type TerminalArchiveParams,
+  type TerminalApprovalResponseParams,
+  type TerminalClearBufferParams,
+  type TerminalCloseParams,
+  type TerminalCreateParams,
+  type TerminalReadParams,
+  type TerminalResizeParams,
+  type TerminalWriteParams,
   type TurnInputAttachment,
   type TurnSteerParams,
   type WorkflowRunParams,
@@ -385,6 +393,16 @@ ipcMain.handle("turn:steer", (_event, params: TurnSteerParams) => harness.reques
 ipcMain.handle("turn:interrupt", (_event, params: InterruptTurnParams) => harness.request("turn/interrupt", params));
 ipcMain.handle("review:start", (_event, params: ReviewStartParams) => harness.request("review/start", params));
 ipcMain.handle("review:list", (_event, params: { projectId?: string; threadId?: string }) => harness.request("review/list", params));
+ipcMain.handle("terminal:create", (_event, params: TerminalCreateParams) => harness.request("terminal/create", params));
+ipcMain.handle("terminal:write", (_event, params: TerminalWriteParams) => harness.request("terminal/write", params));
+ipcMain.handle("terminal:read", (_event, params: TerminalReadParams) => harness.request("terminal/read", params));
+ipcMain.handle("terminal:archive", (_event, params: TerminalArchiveParams) => harness.request("terminal/archive", params));
+ipcMain.handle("terminal:clear", (_event, params: TerminalClearBufferParams) => harness.request("terminal/clear", params));
+ipcMain.handle("terminal:resize", (_event, params: TerminalResizeParams) => harness.request("terminal/resize", params));
+ipcMain.handle("terminal:close", (_event, params: TerminalCloseParams) => harness.request("terminal/close", params));
+ipcMain.handle("terminal:approval:respond", (_event, params: TerminalApprovalResponseParams) =>
+  harness.request("terminal/approval/respond", params),
+);
 ipcMain.handle("command:exec", (_event, params: CommandExecParams) => harness.request("command/exec", params));
   ipcMain.handle("approval:respond", (_event, params: ApprovalResponseParams) => harness.request("approval/respond", params));
   ipcMain.handle("skills:list", () => harness.request("skills/list"));

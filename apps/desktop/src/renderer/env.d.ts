@@ -19,6 +19,15 @@ import {
   type SkillDescriptor,
   type StartThreadParams,
   type StartTurnParams,
+  type TerminalArchiveParams,
+  type TerminalApprovalResponseParams,
+  type TerminalClearBufferParams,
+  type TerminalCloseParams,
+  type TerminalCreateParams,
+  type TerminalReadParams,
+  type TerminalResizeParams,
+  type TerminalSessionRecord,
+  type TerminalWriteParams,
   type WorktreeRecord,
   type EnvironmentRecord,
   type WorkflowRecord,
@@ -46,6 +55,14 @@ declare global {
       interruptTurn: (params: InterruptTurnParams) => Promise<{ turn: TurnRecord }>;
       startReview: (params: ReviewStartParams) => Promise<{ review: ReviewRecord }>;
       listReviews: (params?: { projectId?: string; threadId?: string }) => Promise<{ reviews: ReviewRecord[] }>;
+      createTerminal: (params: TerminalCreateParams) => Promise<{ session: TerminalSessionRecord }>;
+      writeTerminal: (params: TerminalWriteParams) => Promise<{ session: TerminalSessionRecord }>;
+      readTerminal: (params: TerminalReadParams) => Promise<{ session: TerminalSessionRecord; output: string }>;
+      archiveTerminal: (params: TerminalArchiveParams) => Promise<{ session: TerminalSessionRecord }>;
+      clearTerminal: (params: TerminalClearBufferParams) => Promise<{ session: TerminalSessionRecord }>;
+      resizeTerminal: (params: TerminalResizeParams) => Promise<{ session: TerminalSessionRecord }>;
+      closeTerminal: (params: TerminalCloseParams) => Promise<{ session: TerminalSessionRecord }>;
+      respondTerminalApproval: (params: TerminalApprovalResponseParams) => Promise<{ session: TerminalSessionRecord }>;
       respondApproval: (params: ApprovalResponseParams) => Promise<{ turn: TurnRecord }>;
       listSkills: () => Promise<{ skills: SkillDescriptor[] }>;
       writeSkillConfig: (disabledSkillIds: string[]) => Promise<{ skills: SkillDescriptor[] }>;

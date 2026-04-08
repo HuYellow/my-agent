@@ -38,14 +38,42 @@ const WRITE_COMMANDS = new Set([
 ]);
 const NETWORK_COMMANDS = new Set(["curl", "wget", "invoke-webrequest", "iwr", "irm", "scp", "ssh", "ftp"]);
 const PRIVILEGED_COMMANDS = new Set(["sudo", "doas", "runas"]);
+const INTERACTIVE_COMMANDS = new Set([
+  "vim",
+  "vi",
+  "nvim",
+  "nano",
+  "less",
+  "more",
+  "top",
+  "htop",
+  "watch",
+  "man",
+  "ssh",
+  "sftp",
+  "ftp",
+  "telnet",
+  "mysql",
+  "psql",
+  "sqlite3",
+  "bash",
+  "sh",
+  "zsh",
+  "fish",
+  "cmd",
+  "powershell",
+  "pwsh",
+]);
 
 export function buildShellAnalysis(command: string, cwd: string, workspaceRoot: string): {
   scopeKey: string;
   paths: string[];
   network: boolean;
   writes: boolean;
+  interactive: boolean;
   privileged: boolean;
   safeReadOnly: boolean;
+  riskLevel: "safe_read" | "write" | "interactive" | "network" | "privileged";
 } {
   const tokens = tokenizeCommand(command);
   const lowered = tokens.map((token) => token.toLowerCase());
@@ -61,6 +89,10 @@ export function buildShellAnalysis(command: string, cwd: string, workspaceRoot: 
     PRIVILEGED_COMMANDS.has(first) ||
     (/start-process/i.test(command) && /-verb\s+runas/i.test(command)) ||
     lowered.includes("set-executionpolicy");
+  const interactive =
+    INTERACTIVE_COMMANDS.has(first) ||
+    (first === "python" && (tokens.length === 1 || (tokens[1] ?? "").startsWith("-i"))) ||
+    (first === "node" && tokens.length === 1);
   const writes =
     privileged ||
     hasRedirection ||
@@ -78,6 +110,7 @@ export function buildShellAnalysis(command: string, cwd: string, workspaceRoot: 
   const safeReadOnly =
     !writes &&
     !network &&
+    !interactive &&
     !privileged &&
     ((first === "git" && READ_ONLY_GIT_SUBCOMMANDS.has(second)) || READ_ONLY_COMMANDS.has(first));
   const paths = lowered
@@ -87,13 +120,17 @@ export function buildShellAnalysis(command: string, cwd: string, workspaceRoot: 
     .filter((path, index, values) => values.indexOf(path) === index)
     .filter((path) => path === workspaceRoot || path.startsWith(workspaceRoot));
 
+  const riskLevel = privileged ? "privileged" : network ? "network" : interactive ? "interactive" : writes ? "write" : "safe_read";
+
   return {
     scopeKey: normalizeCommandScope(command),
     paths,
     network,
     writes,
+    interactive,
     privileged,
     safeReadOnly,
+    riskLevel,
   };
 }
 
