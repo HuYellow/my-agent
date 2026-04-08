@@ -165,10 +165,19 @@ export class HarnessServer {
         });
       },
     );
+    this.reviewManager = new ReviewManager(
+      this.database,
+      this.providerService,
+      this.environmentManager,
+      this.executionContextManager,
+      (event) => this.emit(event),
+    );
     this.workflowManager = new WorkflowManager(
       this.database,
       this.worktreeManager,
       this.environmentManager,
+      this.executionContextManager,
+      this.reviewManager,
       this.agentTaskManager,
       (workflow) =>
         this.emit({
@@ -199,13 +208,6 @@ export class HarnessServer {
           type: "mcp/session",
           payload: { session },
         }),
-    );
-    this.reviewManager = new ReviewManager(
-      this.database,
-      this.providerService,
-      this.environmentManager,
-      this.executionContextManager,
-      (event) => this.emit(event),
     );
     void this.mcpManager.refreshAll();
     this.skillService.startWatching(activeProject.rootPath, config.disabledSkillIds);

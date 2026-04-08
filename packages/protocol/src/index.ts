@@ -546,12 +546,25 @@ export interface AgentTaskRecord {
   updatedAt: string;
 }
 
+export interface ExecutionUnitResult {
+  status: "pending" | "running" | "paused" | "completed" | "failed" | "skipped";
+  output?: string;
+  artifactSummary?: string;
+  worktreeId?: string;
+  environmentId?: string;
+  executionContextId?: string;
+  agentId?: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+
 export interface WorkflowStep {
   id: string;
-  type: "command" | "agent" | "approval";
+  type: "command" | "agent" | "approval" | "review";
   title: string;
   command?: string;
   prompt?: string;
+  reviewSource?: ReviewSource;
   approvalMessage?: string;
   worktreeStrategy?: "inherit" | "new";
   dependsOn?: string[];
@@ -576,16 +589,14 @@ export interface WorkflowRecord {
   updatedAt: string;
 }
 
-export interface WorkflowRunStepRecord {
+export interface WorkflowRunStepRecord extends ExecutionUnitResult {
   stepId: string;
-  status: "pending" | "running" | "paused" | "completed" | "failed" | "skipped";
-  output?: string;
-  worktreeId?: string;
-  environmentId?: string;
-  agentId?: string;
-  startedAt?: string;
-  completedAt?: string;
   attempts: number;
+}
+
+export interface WorkflowFinishedStepResult extends ExecutionUnitResult {
+  stepId: string;
+  status: "completed" | "failed" | "skipped";
 }
 
 export interface WorkflowRunRecord {
@@ -838,14 +849,7 @@ export interface WorkflowRunParams {
 export interface WorkflowRunResult {
   workflow: WorkflowRecord;
   run: WorkflowRunRecord;
-  stepsRun: Array<{
-    stepId: string;
-    status: "completed" | "failed" | "skipped";
-    output?: string;
-    worktreeId?: string;
-    environmentId?: string;
-    agentId?: string;
-  }>;
+  stepsRun: WorkflowFinishedStepResult[];
 }
 
 export interface PluginListResult {

@@ -5707,6 +5707,62 @@ html[data-theme="dark"] .runtime-stat__indicator {
   flex-wrap: wrap;
 }
 
+.workflow-run-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+}
+
+.workflow-run-card__header,
+.workflow-step-row__title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.workflow-run-card__steps {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.workflow-step-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-elevated) 75%, transparent);
+}
+
+.workflow-step-row__title strong {
+  color: var(--text);
+}
+
+.workflow-step-row__title span,
+.workflow-step-row__meta small {
+  color: var(--muted);
+}
+
+.workflow-step-row__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.workflow-step-row__meta code {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 86%, transparent);
+  color: var(--text);
+}
+
 .review-card,
 .steer-card {
   width: min(980px, 100%);

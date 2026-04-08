@@ -18,24 +18,22 @@ import { ToolService } from "../tools/tool-service.js";
 import { findGitRoot } from "../utils/path-utils.js";
 import { AgentTaskManager } from "./agent-task-manager.js";
 import { EnvironmentManager } from "./environment-manager.js";
+import { ExecutionContextManager } from "./execution-context-manager.js";
+import { ReviewManager } from "./review-manager.js";
+import {
+  ExecutionUnitRunner,
+  type ExecutionUnitContext as WorkflowExecutionContext,
+} from "./execution-unit.js";
+import { approvePausedWorkflowRun, executeWorkflowGraph } from "./workflow-graph-runner.js";
 import { WorktreeManager } from "./worktree-manager.js";
-
-interface WorkflowExecutionContext {
-  workflow: WorkflowRecord;
-  project: ProjectRecord;
-  provider: ProviderProfile;
-  workspace: WorkspaceProfile;
-  threadId?: string;
-  nonInteractive?: boolean;
-  toolService: ToolService;
-  run: WorkflowRunRecord;
-}
 
 export class WorkflowManager {
   constructor(
     private readonly database: HarnessDatabase,
     private readonly worktreeManager: WorktreeManager,
     private readonly environmentManager: EnvironmentManager,
+    private readonly executionContextManager: ExecutionContextManager,
+    private readonly reviewManager: ReviewManager,
     private readonly agentTaskManager: AgentTaskManager,
     private readonly emit: (workflow: WorkflowRecord) => void,
     private readonly emitRun?: (run: WorkflowRunRecord) => void,
@@ -77,6 +75,7 @@ export class WorkflowManager {
     }
 
     const context: WorkflowExecutionContext = {
+      workflowId: workflow.id,
       workflow,
       project: params.project,
       provider: params.provider,
@@ -90,7 +89,19 @@ export class WorkflowManager {
       run: initialRun,
     };
 
-    return executeWorkflowGraph(context, this.database, this.worktreeManager, this.environmentManager, this.agentTaskManager, this.emitRun);
+    return executeWorkflowGraph(
+      context,
+      this.database,
+      new ExecutionUnitRunner(
+        this.worktreeManager,
+        this.environmentManager,
+        this.executionContextManager,
+        this.agentTaskManager,
+        this.reviewManager,
+        this.database,
+      ),
+      this.emitRun,
+    );
   }
 
   async resume(params: {
@@ -152,9 +163,19 @@ async function executeWorkflowGraph(
   database: HarnessDatabase,
   worktreeManager: WorktreeManager,
   environmentManager: EnvironmentManager,
+  executionContextManager: ExecutionContextManager,
+  reviewManager: ReviewManager,
   agentTaskManager: AgentTaskManager,
   emitRun?: (run: WorkflowRunRecord) => void,
 ): Promise<WorkflowRunResult> {
+  const executionUnitRunner = new ExecutionUnitRunner(
+    worktreeManager,
+    environmentManager,
+    executionContextManager,
+    agentTaskManager,
+    reviewManager,
+    database,
+  );
   const stepsById = new Map(context.workflow.steps.map((step) => [step.id, step]));
   let run: WorkflowRunRecord =
     context.run.status === "running" || context.run.status === "paused"
@@ -201,8 +222,8 @@ async function executeWorkflowGraph(
 
     const batchResults = await Promise.all(
       readySteps.map(async (step) => {
-        const resources = prepareStepResources(step, context.project, context.threadId, worktreeManager, environmentManager);
-        return executeWorkflowStep(step, context, resources, agentTaskManager);
+        const resources = executionUnitRunner.prepareResources(step, context.project, context.threadId);
+        return executionUnitRunner.run(step, context, resources);
       }),
     );
 
@@ -234,8 +255,10 @@ async function executeWorkflowGraph(
         stepId: step.stepId,
         status: step.status,
         output: step.output,
+        artifactSummary: step.artifactSummary,
         worktreeId: step.worktreeId,
         environmentId: step.environmentId,
+        executionContextId: step.executionContextId,
         agentId: step.agentId,
       })),
   };
@@ -292,136 +315,6 @@ function areDependenciesSatisfied(step: WorkflowStep, run: WorkflowRunRecord): b
   return dependencies.every((dependency) => getRunStep(run, dependency).status === "completed");
 }
 
-function prepareStepResources(
-  step: WorkflowStep,
-  project: ProjectRecord,
-  threadId: string | undefined,
-  worktreeManager: WorktreeManager,
-  environmentManager: EnvironmentManager,
-) {
-  const worktree =
-    step.worktreeStrategy === "new"
-      ? worktreeManager.create({
-          project,
-          threadId,
-          branch: `workflow/${step.id}`,
-        })
-      : undefined;
-  const environment = environmentManager.detect({
-    project,
-    threadId,
-    worktreeId: worktree?.id,
-    cwd: worktree?.path ?? project.rootPath,
-  });
-
-  return { worktree, environment };
-}
-
-async function executeWorkflowStep(
-  step: WorkflowStep,
-  context: WorkflowExecutionContext,
-  resources: ReturnType<typeof prepareStepResources>,
-  agentTaskManager: AgentTaskManager,
-): Promise<WorkflowRunStepRecord> {
-  const startedAt = new Date().toISOString();
-
-  if (step.type === "approval") {
-    if (context.nonInteractive) {
-      return {
-        stepId: step.id,
-        status: "failed",
-        output: step.approvalMessage ?? "Non-interactive mode rejected an approval step.",
-        worktreeId: resources.worktree?.id,
-        environmentId: resources.environment.id,
-        startedAt,
-        completedAt: new Date().toISOString(),
-        attempts: 1,
-      };
-    }
-
-    return {
-      stepId: step.id,
-      status: "paused",
-      output: step.approvalMessage ?? "Workflow paused awaiting approval.",
-      worktreeId: resources.worktree?.id,
-      environmentId: resources.environment.id,
-      startedAt,
-      completedAt: undefined,
-      attempts: 1,
-    };
-  }
-
-  if (step.type === "command" && step.command) {
-    try {
-      const output = await context.toolService.executeTool(
-        "run_shell",
-        {
-          command: step.command,
-          cwd: resources.worktree?.path ?? context.project.rootPath,
-        },
-        {
-          workspace: context.project,
-          emitCommandDelta: () => undefined,
-        },
-      );
-      return {
-        stepId: step.id,
-        status: "completed",
-        output,
-        worktreeId: resources.worktree?.id,
-        environmentId: resources.environment.id,
-        startedAt,
-        completedAt: new Date().toISOString(),
-        attempts: 1,
-      };
-    } catch (error) {
-      return {
-        stepId: step.id,
-        status: "failed",
-        output: error instanceof Error ? error.message : String(error),
-        worktreeId: resources.worktree?.id,
-        environmentId: resources.environment.id,
-        startedAt,
-        completedAt: new Date().toISOString(),
-        attempts: 1,
-      };
-    }
-  }
-
-  if (step.type === "agent" && step.prompt) {
-    const task = agentTaskManager.spawn({
-      provider: context.provider,
-      workspace: context.workspace,
-      project: context.project,
-      parentThreadId: context.threadId ?? createId("workflow_thread"),
-      title: step.title,
-      input: step.prompt,
-    });
-    const finalTask = await agentTaskManager.wait(task.id, 120_000);
-
-    return {
-      stepId: step.id,
-      status: finalTask.status === "completed" ? "completed" : "failed",
-      output: finalTask.finalOutput,
-      worktreeId: finalTask.worktreeId ?? resources.worktree?.id,
-      environmentId: finalTask.environmentId ?? resources.environment.id,
-      agentId: finalTask.id,
-      startedAt,
-      completedAt: new Date().toISOString(),
-      attempts: 1,
-    };
-  }
-
-  return {
-    stepId: step.id,
-    status: "skipped",
-    worktreeId: resources.worktree?.id,
-    environmentId: resources.environment.id,
-    startedAt,
-    completedAt: new Date().toISOString(),
-    attempts: 1,
-  };
-}
 
 function applyStepResult(run: WorkflowRunRecord, result: WorkflowRunStepRecord, step?: WorkflowStep): WorkflowRunRecord {
   const nextPending = new Set(run.pendingStepIds);
@@ -507,6 +400,7 @@ function approvePausedWorkflowRun(run: WorkflowRunRecord): WorkflowRunRecord {
       ...step,
       status: "completed" as const,
       output: step.output ?? "Approval gate resumed.",
+      artifactSummary: step.artifactSummary ?? summarizeExecutionUnitOutput(step.output ?? "Approval gate resumed."),
       completedAt: approvedAt,
       attempts: step.attempts + 1,
     };
@@ -577,7 +471,7 @@ function parseWorkflowFile(filePath: string, source: WorkflowRecord["source"]): 
 
 function normalizeWorkflowStep(step: unknown, index: number): WorkflowStep {
   const record = typeof step === "object" && step !== null ? (step as Record<string, unknown>) : {};
-  const type = record.type === "approval" || record.type === "agent" ? record.type : "command";
+  const type = record.type === "approval" || record.type === "agent" || record.type === "review" ? record.type : "command";
 
   return {
     id: typeof record.id === "string" ? record.id : `step-${index + 1}`,
@@ -585,6 +479,7 @@ function normalizeWorkflowStep(step: unknown, index: number): WorkflowStep {
     title: typeof record.title === "string" ? record.title : `Step ${index + 1}`,
     command: typeof record.command === "string" ? record.command : undefined,
     prompt: typeof record.prompt === "string" ? record.prompt : undefined,
+    reviewSource: normalizeWorkflowReviewSource(record),
     approvalMessage: typeof record.approvalMessage === "string" ? record.approvalMessage : undefined,
     worktreeStrategy: record.worktreeStrategy === "new" ? "new" : "inherit",
     dependsOn: Array.isArray(record.dependsOn) ? record.dependsOn.map((entry) => String(entry)) : undefined,
@@ -600,6 +495,37 @@ function normalizeWorkflowStep(step: unknown, index: number): WorkflowStep {
         })
       : undefined,
   };
+}
+
+function normalizeWorkflowReviewSource(record: Record<string, unknown>) {
+  const source = record.reviewSource;
+
+  if (source && typeof source === "object") {
+    const reviewSource = source as Record<string, unknown>;
+    const kind = String(reviewSource.kind ?? "workspace");
+    if (kind === "base_branch") {
+      return { kind, baseBranch: typeof reviewSource.baseBranch === "string" ? reviewSource.baseBranch : undefined } as const;
+    }
+    if (kind === "commit") {
+      return { kind, commit: typeof reviewSource.commit === "string" ? reviewSource.commit : undefined } as const;
+    }
+    if (kind === "staged" || kind === "workspace") {
+      return { kind } as const;
+    }
+  }
+
+  const kind = typeof record.reviewSourceKind === "string" ? record.reviewSourceKind : undefined;
+  if (kind === "base_branch") {
+    return { kind, baseBranch: typeof record.reviewBaseBranch === "string" ? record.reviewBaseBranch : undefined } as const;
+  }
+  if (kind === "commit") {
+    return { kind, commit: typeof record.reviewCommit === "string" ? record.reviewCommit : undefined } as const;
+  }
+  if (kind === "staged" || kind === "workspace") {
+    return { kind } as const;
+  }
+
+  return undefined;
 }
 
 function createIdFromPath(filePath: string): string {

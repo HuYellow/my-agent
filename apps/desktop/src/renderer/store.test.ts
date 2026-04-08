@@ -185,6 +185,8 @@ describe("desktop thread smoke", () => {
     expect(source).toContain("archiveTerminal");
     expect(source).toContain("clearTerminal");
     expect(source).toContain("Archived output");
+    expect(source).toContain("artifactSummary");
+    expect(source).toContain("executionContextId");
     expect(source).not.toContain('window.setInterval(() => {\n      void readOutput();');
   });
 

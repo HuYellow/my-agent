@@ -2140,13 +2140,35 @@ function RuntimeAutomationPanel({
               .filter((run) => run.workflowId === workflow.id)
               .slice(0, 2)
               .map((run) => (
-                <div key={run.id} className="settings-panel__message">
-                  {run.status} · {run.id}
-                  {run.status === "running" || run.status === "failed" ? (
-                    <button className="button button--small" onClick={() => void onResumeWorkflow(run.id)}>
-                      Resume
-                    </button>
-                  ) : null}
+                <div key={run.id} className="workflow-run-card">
+                  <div className="workflow-run-card__header">
+                    <span>
+                      {run.status} · {run.id}
+                    </span>
+                    {run.status === "running" || run.status === "failed" ? (
+                      <button className="button button--small" onClick={() => void onResumeWorkflow(run.id)}>
+                        Resume
+                      </button>
+                    ) : null}
+                  </div>
+                  <div className="workflow-run-card__steps">
+                    {run.steps
+                      .filter((step) => step.status !== "pending")
+                      .slice(0, 4)
+                      .map((step) => (
+                        <div key={`${run.id}:${step.stepId}`} className="workflow-step-row">
+                          <div className="workflow-step-row__title">
+                            <strong>{step.stepId}</strong>
+                            <span>{step.status}</span>
+                          </div>
+                          <div className="workflow-step-row__meta">
+                            {step.artifactSummary && <small>{step.artifactSummary}</small>}
+                            {step.executionContextId && <code>{step.executionContextId}</code>}
+                            {step.environmentId && <code>{step.environmentId}</code>}
+                          </div>
+                        </div>
+                      ))}
+                  </div>
                 </div>
               ))}
           </div>
