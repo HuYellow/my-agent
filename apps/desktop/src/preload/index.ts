@@ -79,7 +79,8 @@ const api = {
   runWorkflow: (params: { workflowId: string; projectId: string; threadId?: string; nonInteractive?: boolean }) =>
     ipcRenderer.invoke("workflow:run", params),
   listWorkflowRuns: (workflowId?: string) => ipcRenderer.invoke("workflow:runs", { workflowId }) as Promise<{ runs: WorkflowRunRecord[] }>,
-  resumeWorkflow: (runId: string) => ipcRenderer.invoke("workflow:resume", { runId }),
+  resumeWorkflow: (params: { runId: string; approvePausedSteps?: boolean; retryFailedStepIds?: string[] }) =>
+    ipcRenderer.invoke("workflow:resume", params),
   listPlugins: () => ipcRenderer.invoke("plugin:list") as Promise<{ plugins: PluginRecord[] }>,
   listMcpMounts: () => ipcRenderer.invoke("mcp:list") as Promise<{ mounts: McpMountRecord[] }>,
   listMcpSessions: () => ipcRenderer.invoke("mcp:sessions") as Promise<{ sessions: McpSessionRecord[] }>,

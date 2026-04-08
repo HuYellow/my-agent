@@ -592,11 +592,26 @@ export interface WorkflowRecord {
 export interface WorkflowRunStepRecord extends ExecutionUnitResult {
   stepId: string;
   attempts: number;
+  retainedFailures?: WorkflowStepFailureArtifact[];
 }
 
 export interface WorkflowFinishedStepResult extends ExecutionUnitResult {
   stepId: string;
   status: "completed" | "failed" | "skipped";
+  retainedFailures?: WorkflowStepFailureArtifact[];
+}
+
+export interface WorkflowStepFailureArtifact {
+  attempt: number;
+  output?: string;
+  artifactSummary?: string;
+  worktreeId?: string;
+  environmentId?: string;
+  executionContextId?: string;
+  agentId?: string;
+  startedAt?: string;
+  completedAt?: string;
+  retainedAt: string;
 }
 
 export interface WorkflowRunRecord {
@@ -863,6 +878,7 @@ export interface McpListResult {
 export interface WorkflowResumeParams {
   runId: string;
   approvePausedSteps?: boolean;
+  retryFailedStepIds?: string[];
 }
 
 export interface WorkflowRunsResult {

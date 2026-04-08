@@ -187,6 +187,9 @@ describe("desktop thread smoke", () => {
     expect(source).toContain("Archived output");
     expect(source).toContain("artifactSummary");
     expect(source).toContain("executionContextId");
+    expect(source).toContain("Failure artifacts");
+    expect(source).toContain("Retry step");
+    expect(source).toContain("retainedFailures");
     expect(source).not.toContain('window.setInterval(() => {\n      void readOutput();');
   });
 
@@ -208,6 +211,7 @@ describe("desktop thread smoke", () => {
     expect(preloadSource).toContain("closeTerminal");
     expect(preloadSource).toContain("archiveTerminal");
     expect(preloadSource).toContain("clearTerminal");
+    expect(preloadSource).toContain("retryFailedStepIds");
     expect(envSource).toContain("steerTurn");
     expect(envSource).toContain("startReview");
     expect(envSource).toContain("listReviews");
@@ -218,6 +222,7 @@ describe("desktop thread smoke", () => {
     expect(envSource).toContain("closeTerminal");
     expect(envSource).toContain("archiveTerminal");
     expect(envSource).toContain("clearTerminal");
+    expect(envSource).toContain("retryFailedStepIds");
     expect(mainSource).toContain('"terminal:approval:respond"');
     expect(mainSource).toContain('"terminal:create"');
     expect(mainSource).toContain('"terminal:write"');
@@ -225,5 +230,7 @@ describe("desktop thread smoke", () => {
     expect(mainSource).toContain('"terminal:close"');
     expect(mainSource).toContain('"terminal:archive"');
     expect(mainSource).toContain('"terminal:clear"');
+    expect(mainSource).toContain('"workflow:resume"');
+    expect(mainSource).toContain("retryFailedStepIds");
   });
 });

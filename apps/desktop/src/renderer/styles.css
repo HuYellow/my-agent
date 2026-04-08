@@ -5726,6 +5726,17 @@ html[data-theme="dark"] .runtime-stat__indicator {
   gap: 8px;
 }
 
+.workflow-run-card__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.workflow-run-card__hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .workflow-run-card__steps {
   display: flex;
   flex-direction: column;
@@ -5761,6 +5772,61 @@ html[data-theme="dark"] .runtime-stat__indicator {
   border-radius: 999px;
   background: color-mix(in srgb, var(--surface) 86%, transparent);
   color: var(--text);
+}
+
+.workflow-step-row__details {
+  border-top: 1px dashed var(--line);
+  padding-top: 8px;
+}
+
+.workflow-step-row__details summary {
+  cursor: pointer;
+  color: var(--accent-strong);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.workflow-step-row__failure {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+}
+
+.workflow-step-row__failure strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.workflow-step-row__failure small {
+  color: var(--muted);
+}
+
+.workflow-step-row__failure pre {
+  margin: 0;
+  padding: 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-elevated) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+}
+
+.workflow-step-row__actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.workflow-panel__message {
+  margin-bottom: 16px;
 }
 
 .review-card,

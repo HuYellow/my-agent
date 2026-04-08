@@ -1,5 +1,5 @@
 import {
-  type WorkflowRecord,
+  type WorkflowStepFailureArtifact,
   type WorkflowRunRecord,
   type WorkflowRunResult,
   type WorkflowRunStepRecord,
@@ -66,7 +66,11 @@ export async function executeWorkflowGraph(
     const batchResults = await Promise.all(
       readySteps.map(async (step) => {
         const resources = executionUnitRunner.prepareResources(step, context.project, context.threadId);
-        return executionUnitRunner.run(step, context, resources);
+        const result = await executionUnitRunner.run(step, context, resources);
+        return {
+          ...result,
+          attempts: getRunStep(run, step.id).attempts + 1,
+        };
       }),
     );
 
@@ -103,6 +107,7 @@ export async function executeWorkflowGraph(
         environmentId: step.environmentId,
         executionContextId: step.executionContextId,
         agentId: step.agentId,
+        retainedFailures: step.retainedFailures,
       })),
   };
 }
@@ -139,6 +144,76 @@ export function approvePausedWorkflowRun(run: WorkflowRunRecord): WorkflowRunRec
     pauseReason: undefined,
     steps: updatedSteps,
     updatedAt: approvedAt,
+  };
+}
+
+export function retryWorkflowRunSteps(
+  run: WorkflowRunRecord,
+  workflowSteps: WorkflowStep[],
+  stepIds: string[],
+): WorkflowRunRecord {
+  const uniqueStepIds = [...new Set(stepIds.map((stepId) => stepId.trim()).filter(Boolean))];
+
+  if (uniqueStepIds.length === 0) {
+    return run;
+  }
+
+  const knownStepIds = new Set(workflowSteps.map((step) => step.id));
+  const invalidStepId = uniqueStepIds.find((stepId) => !knownStepIds.has(stepId));
+
+  if (invalidStepId) {
+    throw new Error(`Workflow step not found: ${invalidStepId}`);
+  }
+
+  const retryTargets = new Set(uniqueStepIds);
+  for (const stepId of retryTargets) {
+    const stepRecord = getRunStep(run, stepId);
+
+    if (stepRecord.status !== "failed") {
+      throw new Error(`Workflow step ${stepId} is not in a failed state and cannot be retried.`);
+    }
+  }
+
+  const affectedStepIds = collectRetryAffectedStepIds(workflowSteps, retryTargets);
+  const nextPending = new Set(run.pendingStepIds);
+  const nextPaused = new Set(run.pausedStepIds);
+  const nextCompleted = new Set(run.completedStepIds);
+  const nextFailed = new Set(run.failedStepIds);
+
+  for (const stepId of affectedStepIds) {
+    nextPending.add(stepId);
+    nextPaused.delete(stepId);
+    nextCompleted.delete(stepId);
+    nextFailed.delete(stepId);
+  }
+
+  return {
+    ...run,
+    status: "running",
+    pendingStepIds: [...nextPending],
+    pausedStepIds: [...nextPaused],
+    completedStepIds: [...nextCompleted],
+    failedStepIds: [...nextFailed],
+    pauseReason: nextPaused.size > 0 ? run.pauseReason : undefined,
+    steps: run.steps.map((step) =>
+      affectedStepIds.has(step.stepId)
+      ? {
+          ...step,
+          retainedFailures:
+            step.status === "failed" ? appendRetainedFailure(step.retainedFailures, retainFailureArtifact(step)) : step.retainedFailures,
+          status: "pending",
+          output: undefined,
+          artifactSummary: undefined,
+          worktreeId: undefined,
+          environmentId: undefined,
+          executionContextId: undefined,
+          agentId: undefined,
+          startedAt: undefined,
+          completedAt: undefined,
+        }
+        : step,
+    ),
+    updatedAt: new Date().toISOString(),
   };
 }
 
@@ -194,6 +269,7 @@ function areDependenciesSatisfied(step: WorkflowStep, run: WorkflowRunRecord): b
 }
 
 function applyStepResult(run: WorkflowRunRecord, result: WorkflowRunStepRecord, step?: WorkflowStep): WorkflowRunRecord {
+  const existing = getRunStep(run, result.stepId);
   const nextPending = new Set(run.pendingStepIds);
   nextPending.delete(result.stepId);
   const paused = new Set(run.pausedStepIds);
@@ -226,13 +302,27 @@ function applyStepResult(run: WorkflowRunRecord, result: WorkflowRunStepRecord, 
     completedStepIds: [...completed],
     failedStepIds: [...failed],
     pauseReason: paused.size > 0 ? result.output : undefined,
-    steps: run.steps.map((entry) => (entry.stepId === result.stepId ? result : entry)),
+    steps: run.steps.map((entry) =>
+      entry.stepId === result.stepId
+        ? {
+            ...result,
+            retainedFailures:
+              existing.status === "failed" && result.status !== "failed"
+                ? appendRetainedFailure(existing.retainedFailures, retainFailureArtifact(existing))
+                : existing.retainedFailures,
+          }
+        : entry,
+    ),
   };
 }
 
 function deriveRunStatus(run: WorkflowRunRecord, workflowSteps: WorkflowStep[]): WorkflowRunRecord["status"] {
   if (run.pausedStepIds.length > 0) {
     return "paused";
+  }
+
+  if (run.failedStepIds.length > 0 && getReadySteps(workflowSteps, run).length === 0) {
+    return "failed";
   }
 
   const unfinished = workflowSteps.some((step) => {
@@ -244,7 +334,7 @@ function deriveRunStatus(run: WorkflowRunRecord, workflowSteps: WorkflowStep[]):
     return "running";
   }
 
-  return run.failedStepIds.length > 0 ? "failed" : "completed";
+  return "completed";
 }
 
 function getRunStep(run: WorkflowRunRecord, stepId: string): WorkflowRunStepRecord {
@@ -253,4 +343,52 @@ function getRunStep(run: WorkflowRunRecord, stepId: string): WorkflowRunStepReco
     status: "pending",
     attempts: 0,
   };
+}
+
+function collectRetryAffectedStepIds(workflowSteps: WorkflowStep[], retryTargets: Set<string>): Set<string> {
+  const affected = new Set(retryTargets);
+  const queue = [...retryTargets];
+
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    for (const step of workflowSteps) {
+      if (affected.has(step.id)) {
+        continue;
+      }
+
+      const dependsOnCurrent = step.dependsOn?.includes(current) ?? false;
+      const runIfDependsOnCurrent = step.runIf?.some((condition) => condition.stepId === current) ?? false;
+
+      if (!dependsOnCurrent && !runIfDependsOnCurrent) {
+        continue;
+      }
+
+      affected.add(step.id);
+      queue.push(step.id);
+    }
+  }
+
+  return affected;
+}
+
+function retainFailureArtifact(step: WorkflowRunStepRecord): WorkflowStepFailureArtifact {
+  return {
+    attempt: step.attempts,
+    output: step.output,
+    artifactSummary: step.artifactSummary,
+    worktreeId: step.worktreeId,
+    environmentId: step.environmentId,
+    executionContextId: step.executionContextId,
+    agentId: step.agentId,
+    startedAt: step.startedAt,
+    completedAt: step.completedAt,
+    retainedAt: new Date().toISOString(),
+  };
+}
+
+function appendRetainedFailure(
+  retainedFailures: WorkflowStepFailureArtifact[] | undefined,
+  failure: WorkflowStepFailureArtifact,
+): WorkflowStepFailureArtifact[] {
+  return [...(retainedFailures ?? []), failure];
 }

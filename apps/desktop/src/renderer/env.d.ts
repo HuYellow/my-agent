@@ -79,7 +79,7 @@ declare global {
       listWorkflows: (projectId?: string) => Promise<{ workflows: WorkflowRecord[] }>;
       runWorkflow: (params: { workflowId: string; projectId: string; threadId?: string; nonInteractive?: boolean }) => Promise<unknown>;
       listWorkflowRuns: (workflowId?: string) => Promise<{ runs: WorkflowRunRecord[] }>;
-      resumeWorkflow: (runId: string) => Promise<unknown>;
+      resumeWorkflow: (params: { runId: string; approvePausedSteps?: boolean; retryFailedStepIds?: string[] }) => Promise<unknown>;
       listPlugins: () => Promise<{ plugins: PluginRecord[] }>;
       listMcpMounts: () => Promise<{ mounts: McpMountRecord[] }>;
       listMcpSessions: () => Promise<{ sessions: McpSessionRecord[] }>;

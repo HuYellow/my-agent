@@ -1195,6 +1195,7 @@ export class HarnessServer {
       provider: this.database.getConfig().provider,
       workspace: project,
       approvePausedSteps: params.approvePausedSteps,
+      retryFailedStepIds: params.retryFailedStepIds,
     });
   }
 

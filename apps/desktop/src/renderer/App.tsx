@@ -1482,8 +1482,8 @@ export function App() {
                   )
                 : Promise.resolve(null)
             }
-            onResumeWorkflow={(runId) =>
-              window.myAgent.resumeWorkflow(runId).then(() =>
+            onResumeWorkflow={(params) =>
+              window.myAgent.resumeWorkflow(params).then(() =>
                 window.myAgent.listWorkflowRuns().then((result) => setRuntimeWorkflowRuns(result.runs)),
               )
             }
@@ -2111,14 +2111,37 @@ function RuntimeAutomationPanel({
   workflows: WorkflowRecord[];
   runs: WorkflowRunRecord[];
   onRunWorkflow: (workflowId: string) => Promise<unknown>;
-  onResumeWorkflow: (runId: string) => Promise<unknown>;
+  onResumeWorkflow: (params: { runId: string; approvePausedSteps?: boolean; retryFailedStepIds?: string[] }) => Promise<unknown>;
 }) {
+  const [pendingActionKey, setPendingActionKey] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  async function handleResumeWorkflow(params: { runId: string; approvePausedSteps?: boolean; retryFailedStepIds?: string[] }) {
+    const actionKey = [
+      params.runId,
+      params.approvePausedSteps ? "paused" : "resume",
+      params.retryFailedStepIds?.join(",") ?? "",
+    ].join(":");
+
+    setPendingActionKey(actionKey);
+    setActionError(null);
+
+    try {
+      await onResumeWorkflow(params);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPendingActionKey(null);
+    }
+  }
+
   return (
     <div className="skills-page">
       <div className="skills-page__header">
         <h2 className="skills-page__title">Workflows</h2>
         <span className="skills-page__count">{workflows.length} available</span>
       </div>
+      {actionError ? <div className="settings-panel__message workflow-panel__message">{actionError}</div> : null}
       <div className="skills-grid">
         {workflows.map((workflow) => (
           <div key={workflow.id} className="skill-card">
@@ -2139,38 +2162,91 @@ function RuntimeAutomationPanel({
             {runs
               .filter((run) => run.workflowId === workflow.id)
               .slice(0, 2)
-              .map((run) => (
-                <div key={run.id} className="workflow-run-card">
-                  <div className="workflow-run-card__header">
-                    <span>
-                      {run.status} · {run.id}
-                    </span>
-                    {run.status === "running" || run.status === "failed" ? (
-                      <button className="button button--small" onClick={() => void onResumeWorkflow(run.id)}>
-                        Resume
-                      </button>
-                    ) : null}
-                  </div>
-                  <div className="workflow-run-card__steps">
-                    {run.steps
-                      .filter((step) => step.status !== "pending")
-                      .slice(0, 4)
-                      .map((step) => (
-                        <div key={`${run.id}:${step.stepId}`} className="workflow-step-row">
-                          <div className="workflow-step-row__title">
-                            <strong>{step.stepId}</strong>
-                            <span>{step.status}</span>
+              .map((run) => {
+                const visibleSteps = run.steps.filter((step) => step.status !== "pending").slice(0, 4);
+                const failedSteps = run.steps.filter((step) => step.status === "failed");
+                const pausedActionKey = `${run.id}:paused:`;
+
+                return (
+                  <div key={run.id} className="workflow-run-card">
+                    <div className="workflow-run-card__header">
+                      <span>
+                        {run.status} · {run.id}
+                      </span>
+                      <div className="workflow-run-card__actions">
+                        {run.status === "paused" ? (
+                          <button
+                            className="button button--small"
+                            disabled={pendingActionKey === pausedActionKey}
+                            onClick={() => void handleResumeWorkflow({ runId: run.id, approvePausedSteps: true })}
+                          >
+                            Resume approvals
+                          </button>
+                        ) : null}
+                        {run.status === "failed" && failedSteps.length > 0 ? (
+                          <span className="workflow-run-card__hint">Retry a failed step below.</span>
+                        ) : null}
+                      </div>
+                    </div>
+                    <div className="workflow-run-card__steps">
+                      {visibleSteps.map((step) => {
+                        const retryActionKey = `${run.id}:resume:${step.stepId}`;
+
+                        return (
+                          <div key={`${run.id}:${step.stepId}`} className="workflow-step-row">
+                            <div className="workflow-step-row__title">
+                              <strong>{step.stepId}</strong>
+                              <span>{step.status}</span>
+                            </div>
+                            <div className="workflow-step-row__meta">
+                              {step.artifactSummary && <small>{step.artifactSummary}</small>}
+                              {step.executionContextId && <code>{step.executionContextId}</code>}
+                              {step.environmentId && <code>{step.environmentId}</code>}
+                              <small>Attempt {step.attempts}</small>
+                            </div>
+                            {(step.status === "failed" || (step.retainedFailures?.length ?? 0) > 0) && (
+                              <details className="workflow-step-row__details">
+                                <summary>Failure artifacts</summary>
+                                {step.status === "failed" ? (
+                                  <div className="workflow-step-row__failure">
+                                    <strong>Current failure</strong>
+                                    {step.output ? <pre>{step.output}</pre> : <small>No failure output captured.</small>}
+                                  </div>
+                                ) : null}
+                                {step.retainedFailures?.map((failure, index) => (
+                                  <div key={`${run.id}:${step.stepId}:failure:${index}`} className="workflow-step-row__failure">
+                                    <strong>
+                                      Attempt {failure.attempt} retained {formatRelativeTime(failure.retainedAt)}
+                                    </strong>
+                                    {failure.artifactSummary ? <small>{failure.artifactSummary}</small> : null}
+                                    {failure.output ? <pre>{failure.output}</pre> : <small>No failure output captured.</small>}
+                                  </div>
+                                ))}
+                              </details>
+                            )}
+                            {step.status === "failed" ? (
+                              <div className="workflow-step-row__actions">
+                                <button
+                                  className="button button--small"
+                                  disabled={pendingActionKey === retryActionKey}
+                                  onClick={() =>
+                                    void handleResumeWorkflow({
+                                      runId: run.id,
+                                      retryFailedStepIds: [step.stepId],
+                                    })
+                                  }
+                                >
+                                  Retry step
+                                </button>
+                              </div>
+                            ) : null}
                           </div>
-                          <div className="workflow-step-row__meta">
-                            {step.artifactSummary && <small>{step.artifactSummary}</small>}
-                            {step.executionContextId && <code>{step.executionContextId}</code>}
-                            {step.environmentId && <code>{step.environmentId}</code>}
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
           </div>
         ))}
       </div>

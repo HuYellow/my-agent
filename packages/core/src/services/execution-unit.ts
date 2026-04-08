@@ -126,7 +126,7 @@ async function executeExecutionUnitInternal(
           cwd: resources.worktree?.path ?? context.project.rootPath,
         },
         {
-          workspace: context.project,
+          workspace: context.workspace,
           emitCommandDelta: () => undefined,
         },
       );
