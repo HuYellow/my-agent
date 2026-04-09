@@ -6249,6 +6249,7 @@ html[data-theme="dark"] .review-popover__cancel {
 }
 
 .review-card,
+.run-context-card,
 .diff-panel,
 .steer-card {
   width: min(980px, 100%);
@@ -6258,6 +6259,74 @@ html[data-theme="dark"] .review-popover__cancel {
   border-radius: 18px;
   background: color-mix(in srgb, var(--surface-elevated) 92%, transparent);
   box-shadow: var(--shadow-edge);
+}
+
+.run-context-card[open] {
+  box-shadow: var(--shadow-edge), 0 16px 30px rgba(8, 145, 178, 0.08);
+}
+
+.run-context-card__summary,
+.run-context-card__meta,
+.run-context-card__section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.run-context-card__summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.run-context-card__summary::-webkit-details-marker {
+  display: none;
+}
+
+.run-context-card__summary strong,
+.run-context-card__section-head strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.run-context-card__summary span,
+.run-context-card__meta,
+.run-context-card__section-head span,
+.run-context-card__section p {
+  color: var(--muted);
+}
+
+.run-context-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.run-context-card__section {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--line) 88%, transparent);
+}
+
+.run-context-card__section--muted {
+  opacity: 0.7;
+}
+
+.run-context-card__section p,
+.run-context-card__section pre {
+  margin: 8px 0 0;
+}
+
+.run-context-card__section pre {
+  max-height: 160px;
+  overflow: auto;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-strong) 84%, transparent);
+  color: var(--text-soft);
+  white-space: pre-wrap;
 }
 
 .diff-panel {

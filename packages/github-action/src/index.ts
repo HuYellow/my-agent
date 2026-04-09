@@ -9,9 +9,29 @@ async function main() {
   });
 
   try {
+    const automationId = process.env.MY_AGENT_AUTOMATION_ID;
     const workflowId = process.env.MY_AGENT_WORKFLOW_ID;
     const projectId = process.env.MY_AGENT_PROJECT_ID ?? runtime.database.getConfig().selectedProjectId;
     const prompt = process.env.MY_AGENT_PROMPT;
+
+    if (automationId) {
+      const response = await runtime.server.handle({
+        jsonrpc: "2.0",
+        id: "automation-run",
+        method: "automation/run",
+        params: {
+          automationId,
+        },
+      });
+      writeGithubOutputs({
+        mode: "automation",
+        automation_id: automationId,
+        success: "result" in response ? "true" : "false",
+      });
+      writeGithubSummary("automation", response);
+      process.stdout.write(`${JSON.stringify(response, null, 2)}\n`);
+      return;
+    }
 
     if (workflowId && projectId) {
       const response = await runtime.server.handle({

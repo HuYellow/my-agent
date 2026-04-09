@@ -10,6 +10,7 @@ import {
   type CommandExecParams,
   type ConfigWriteParams,
   type CreateProjectParams,
+  type CreateAutomationParams,
   type EnvironmentDetectParams,
   type HarnessEvent,
   type InterruptTurnParams,
@@ -35,7 +36,9 @@ import {
   type TerminalWriteParams,
   type TurnInputAttachment,
   type TurnSteerParams,
+  type RunAutomationParams,
   type UpdateRequirementParams,
+  type UpdateAutomationParams,
   type WorkflowRunParams,
   type WorktreeCreateParams,
   type WorktreeListParams,
@@ -397,6 +400,11 @@ function registerIpc(): void {
   ipcMain.handle("requirement:unassign-thread", (_event, params: RequirementUnassignThreadParams) =>
     harness.request("requirement/unassignThread", params),
   );
+  ipcMain.handle("automation:list", (_event, params: { projectId?: string }) => harness.request("automation/list", params));
+  ipcMain.handle("automation:create", (_event, params: CreateAutomationParams) => harness.request("automation/create", params));
+  ipcMain.handle("automation:update", (_event, params: UpdateAutomationParams) => harness.request("automation/update", params));
+  ipcMain.handle("automation:run", (_event, params: RunAutomationParams) => harness.request("automation/run", params));
+  ipcMain.handle("automation:runs", (_event, params: { automationId?: string; projectId?: string }) => harness.request("automation/runs", params));
   ipcMain.handle("project:path:reveal", async (_event, params: { projectPath: string }) => {
     const error = await shell.openPath(params.projectPath);
     return { ok: error.length === 0, error: error || undefined };

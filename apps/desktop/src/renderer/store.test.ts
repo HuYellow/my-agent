@@ -297,6 +297,10 @@ describe("desktop thread smoke", () => {
     expect(source).toContain("activeRequirementId");
     expect(source).toContain("Requirement Memory");
     expect(source).toContain("Unassigned Threads");
+    expect(source).toContain("RunContextCard");
+    expect(source).toContain("Create Automation");
+    expect(source).toContain("Run Automation");
+    expect(source).toContain("visibleAutomations");
     expect(source).toContain("Execution Context Lineage");
     expect(source).toContain("executionContexts");
     expect(source).toContain("agentTasks");
@@ -311,9 +315,14 @@ describe("desktop thread smoke", () => {
     expect(mainSource).toContain('"turn:steer"');
     expect(mainSource).toContain('"review:start"');
     expect(mainSource).toContain('"review:list"');
+    expect(mainSource).toContain('"automation:create"');
+    expect(mainSource).toContain('"automation:run"');
     expect(preloadSource).toContain("steerTurn");
     expect(preloadSource).toContain("startReview");
     expect(preloadSource).toContain("listReviews");
+    expect(preloadSource).toContain("createAutomation");
+    expect(preloadSource).toContain("runAutomation");
+    expect(preloadSource).toContain("listAutomationRuns");
     expect(preloadSource).toContain("respondTerminalApproval");
     expect(preloadSource).toContain("createTerminal");
     expect(preloadSource).toContain("writeTerminal");
@@ -327,6 +336,9 @@ describe("desktop thread smoke", () => {
     expect(envSource).toContain("steerTurn");
     expect(envSource).toContain("startReview");
     expect(envSource).toContain("listReviews");
+    expect(envSource).toContain("createAutomation");
+    expect(envSource).toContain("runAutomation");
+    expect(envSource).toContain("listAutomationRuns");
     expect(envSource).toContain("respondTerminalApproval");
     expect(envSource).toContain("createTerminal");
     expect(envSource).toContain("writeTerminal");

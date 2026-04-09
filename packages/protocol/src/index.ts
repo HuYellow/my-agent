@@ -41,6 +41,9 @@ export type ModelReasoningEffort = "none" | "minimal" | "low" | "medium" | "high
 export type SkillScope = "SYSTEM" | "USER" | "REPO" | "ADMIN";
 export type RuntimeRunMode = "no-tools" | "limited-tools" | "full-tools";
 export type RequirementStatus = "active" | "paused" | "completed" | "archived";
+export type AutomationStatus = "active" | "paused";
+export type AutomationKind = "workflow" | "prompt";
+export type AutomationScheduleType = "manual" | "interval";
 export type ItemKind =
   | "userMessage"
   | "agentMessage"
@@ -292,6 +295,8 @@ export interface InitializeResult {
   reviews?: ReviewRecord[];
   workflows?: WorkflowRecord[];
   workflowRuns?: WorkflowRunRecord[];
+  automations?: AutomationRecord[];
+  automationRuns?: AutomationRunRecord[];
   agentTasks?: AgentTaskRecord[];
 }
 
@@ -315,6 +320,7 @@ export interface ResumeThreadResult {
   thread: ThreadRecord;
   turns: TurnRecord[];
   items: ItemRecord[];
+  turnContexts?: TurnContextSnapshotRecord[];
   pendingApproval?: PendingApproval | null;
 }
 
@@ -566,6 +572,28 @@ export interface EventEnvelope<TType extends string, TPayload> {
   payload: TPayload;
 }
 
+export interface TurnContextSectionRecord {
+  key: string;
+  label: string;
+  summary: string;
+  detail?: string;
+  count?: number;
+  estimatedTokens?: number;
+  included: boolean;
+}
+
+export interface TurnContextSnapshotRecord {
+  turnId: string;
+  threadId: string;
+  summaryText: string;
+  historyMode: "full" | "compressed";
+  historyItemCount: number;
+  archivedHistoryItemCount: number;
+  sections: TurnContextSectionRecord[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface TerminalSessionRecord {
   id: string;
   threadId?: string;
@@ -773,6 +801,42 @@ export interface WorkflowRunRecord {
   updatedAt: string;
 }
 
+export interface AutomationRecord {
+  id: string;
+  name: string;
+  kind: AutomationKind;
+  projectId: string;
+  requirementId?: string;
+  workflowId?: string;
+  prompt?: string;
+  threadTitle?: string;
+  scheduleType: AutomationScheduleType;
+  intervalMinutes?: number;
+  status: AutomationStatus;
+  lastRunAt?: string;
+  nextRunAt?: string;
+  lastRunStatus?: "idle" | "running" | "completed" | "failed";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AutomationRunRecord {
+  id: string;
+  automationId: string;
+  kind: AutomationKind;
+  projectId: string;
+  requirementId?: string;
+  status: "running" | "completed" | "failed";
+  threadId?: string;
+  turnId?: string;
+  workflowRunId?: string;
+  summary?: string;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+}
+
 export interface PluginRecord {
   id: string;
   name: string;
@@ -836,6 +900,7 @@ export type HarnessEvent =
   | EventEnvelope<"requirement/updated", { requirement: RequirementRecord }>
   | EventEnvelope<"requirement/memoryUpdated", { memory: RequirementMemoryRecord }>
   | EventEnvelope<"turn/started", { turn: TurnRecord }>
+  | EventEnvelope<"turn/contextUpdated", { snapshot: TurnContextSnapshotRecord }>
   | EventEnvelope<"turn/steered", { steer: TurnSteerRecord }>
   | EventEnvelope<"item/started", { item: ItemRecord }>
   | EventEnvelope<"item/delta", { itemId: string; delta: string }>
@@ -859,6 +924,8 @@ export type HarnessEvent =
   | EventEnvelope<"environment/updated", { environment: EnvironmentRecord }>
   | EventEnvelope<"executionContext/updated", { executionContext: ExecutionContextRecord }>
   | EventEnvelope<"workflow/updated", { workflow: WorkflowRecord }>
+  | EventEnvelope<"automation/updated", { automation: AutomationRecord }>
+  | EventEnvelope<"automation/run", { run: AutomationRunRecord }>
   | EventEnvelope<"plugin/updated", { plugin: PluginRecord }>
   | EventEnvelope<"mcp/updated", { mount: McpMountRecord }>
   | EventEnvelope<"mcp/session", { session: McpSessionRecord }>
@@ -1032,6 +1099,63 @@ export interface WorkflowResumeParams {
 
 export interface WorkflowRunsResult {
   runs: WorkflowRunRecord[];
+}
+
+export interface AutomationListParams {
+  projectId?: string;
+}
+
+export interface AutomationListResult {
+  automations: AutomationRecord[];
+}
+
+export interface AutomationRunsParams {
+  automationId?: string;
+  projectId?: string;
+}
+
+export interface AutomationRunsResult {
+  runs: AutomationRunRecord[];
+}
+
+export interface CreateAutomationParams {
+  name: string;
+  kind: AutomationKind;
+  projectId: string;
+  requirementId?: string;
+  workflowId?: string;
+  prompt?: string;
+  threadTitle?: string;
+  scheduleType?: AutomationScheduleType;
+  intervalMinutes?: number;
+  status?: AutomationStatus;
+}
+
+export interface CreateAutomationResult {
+  automation: AutomationRecord;
+}
+
+export interface UpdateAutomationParams {
+  automationId: string;
+  patch: Partial<
+    Pick<
+      AutomationRecord,
+      "name" | "projectId" | "requirementId" | "workflowId" | "prompt" | "threadTitle" | "scheduleType" | "intervalMinutes" | "status"
+    >
+  >;
+}
+
+export interface UpdateAutomationResult {
+  automation: AutomationRecord;
+}
+
+export interface RunAutomationParams {
+  automationId: string;
+}
+
+export interface RunAutomationResult {
+  automation: AutomationRecord;
+  run: AutomationRunRecord;
 }
 
 export interface ExecutionContextListResult {

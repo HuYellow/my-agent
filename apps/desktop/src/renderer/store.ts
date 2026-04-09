@@ -2,6 +2,9 @@ import { create } from "zustand";
 import {
   type AgentTaskRecord,
   type AppConfig,
+  type AutomationRecord,
+  type AutomationRunRecord,
+  type CreateAutomationParams,
   type CreateProjectParams,
   type CreateRequirementParams,
   type EnvironmentRecord,
@@ -21,9 +24,11 @@ import {
   type TerminalOutputArchiveRecord,
   type TerminalSessionRecord,
   type TurnInputAttachment,
+  type TurnContextSnapshotRecord,
   type ThreadRecord,
   type TurnSteerRecord,
   type TurnRecord,
+  type UpdateAutomationParams,
   type UpdateRequirementParams,
   type WorkflowRecord,
   type WorkflowRunRecord,
@@ -36,6 +41,7 @@ let detachEventListener: (() => void) | null = null;
 export interface ThreadSessionState {
   turns: TurnRecord[];
   items: ItemRecord[];
+  turnContexts: TurnContextSnapshotRecord[];
   pendingApproval?: PendingApproval | null;
   submitting: boolean;
 }
@@ -50,6 +56,8 @@ interface AppState {
   threads: ThreadRecord[];
   threadSessions: Record<string, ThreadSessionState>;
   reviews: ReviewRecord[];
+  automations: AutomationRecord[];
+  automationRuns: AutomationRunRecord[];
   worktrees: WorktreeRecord[];
   environments: EnvironmentRecord[];
   executionContexts: ExecutionContextRecord[];
@@ -71,6 +79,9 @@ interface AppState {
   providerModelsError?: string;
   bootstrap: () => Promise<void>;
   createProject: (params: CreateProjectParams) => Promise<void>;
+  createAutomation: (params: CreateAutomationParams) => Promise<void>;
+  updateAutomation: (automationId: string, patch: UpdateAutomationParams["patch"]) => Promise<void>;
+  runAutomation: (automationId: string) => Promise<void>;
   createRequirement: (params: CreateRequirementParams) => Promise<void>;
   updateRequirement: (requirementId: string, patch: UpdateRequirementParams["patch"]) => Promise<void>;
   updateProject: (projectId: string, patch: Partial<Pick<ProjectRecord, "name" | "rootPath" | "shell" | "sandboxMode" | "approvalPolicy">>) => Promise<void>;
@@ -104,6 +115,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   threads: [],
   threadSessions: {},
   reviews: [],
+  automations: [],
+  automationRuns: [],
   worktrees: [],
   environments: [],
   executionContexts: [],
@@ -149,6 +162,8 @@ export const useAppStore = create<AppState>((set, get) => ({
           threads: initial.threads,
           threadSessions: Object.fromEntries(initial.threads.map((thread) => [thread.id, createEmptyThreadSession()])),
           reviews: initial.reviews ?? [],
+          automations: initial.automations ?? [],
+          automationRuns: initial.automationRuns ?? [],
           worktrees: initial.worktrees ?? [],
           environments: initial.environments ?? [],
           executionContexts: initial.executionContexts ?? [],
@@ -197,6 +212,25 @@ export const useAppStore = create<AppState>((set, get) => ({
       activeThreadId: undefined,
     }));
     await get().refreshRuntimeProjectState(result.project.id);
+  },
+  createAutomation: async (params) => {
+    const result = (await window.myAgent.createAutomation(params)) as { automation: AutomationRecord };
+    set((state) => ({
+      automations: upsertAutomation(state.automations, result.automation),
+    }));
+  },
+  updateAutomation: async (automationId, patch) => {
+    const result = (await window.myAgent.updateAutomation({ automationId, patch })) as { automation: AutomationRecord };
+    set((state) => ({
+      automations: upsertAutomation(state.automations, result.automation),
+    }));
+  },
+  runAutomation: async (automationId) => {
+    const result = (await window.myAgent.runAutomation({ automationId })) as { automation: AutomationRecord; run: AutomationRunRecord };
+    set((state) => ({
+      automations: upsertAutomation(state.automations, result.automation),
+      automationRuns: upsertAutomationRun(state.automationRuns, result.run),
+    }));
   },
   createRequirement: async (params) => {
     const result = (await window.myAgent.createRequirement(params)) as { requirement: RequirementRecord; memory: RequirementMemoryRecord };
@@ -379,6 +413,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       thread: ThreadRecord;
       turns: TurnRecord[];
       items: ItemRecord[];
+      turnContexts?: TurnContextSnapshotRecord[];
       pendingApproval?: PendingApproval | null;
     };
     set((state) => ({
@@ -389,6 +424,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...session,
         turns: result.turns,
         items: result.items,
+        turnContexts: result.turnContexts ?? [],
         pendingApproval: result.pendingApproval ?? null,
         submitting: false,
       })),
@@ -573,6 +609,8 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     if (!activeProjectId) {
       set({
+        automations: [],
+        automationRuns: [],
         worktrees: [],
         environments: [],
         executionContexts: [],
@@ -583,7 +621,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       return;
     }
 
-    const [worktrees, environments, executionContexts, workflows, workflowRuns, agentTasks] = await Promise.all([
+    const [automations, automationRuns, worktrees, environments, executionContexts, workflows, workflowRuns, agentTasks] = await Promise.all([
+      window.myAgent.listAutomations({ projectId: activeProjectId }).then((result) => result.automations),
+      window.myAgent.listAutomationRuns({ projectId: activeProjectId }).then((result) => result.runs),
       window.myAgent.listWorktrees(activeProjectId).then((result) => result.worktrees),
       window.myAgent.listEnvironments(activeProjectId).then((result) => result.environments),
       window.myAgent.listExecutionContexts(activeProjectId).then((result) => result.executionContexts),
@@ -593,6 +633,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     ]);
 
     set({
+      automations,
+      automationRuns,
       worktrees,
       environments,
       executionContexts,
@@ -712,6 +754,24 @@ export const useAppStore = create<AppState>((set, get) => ({
           reviews: upsertReview(state.reviews, event.payload.review),
         }));
         break;
+      case "turn/contextUpdated":
+        set((state) => ({
+          threadSessions: updateThreadSession(state.threadSessions, event.payload.snapshot.threadId, (session) => ({
+            ...session,
+            turnContexts: upsertTurnContext(session.turnContexts, event.payload.snapshot),
+          })),
+        }));
+        break;
+      case "automation/updated":
+        set((state) => ({
+          automations: upsertAutomation(state.automations, event.payload.automation),
+        }));
+        break;
+      case "automation/run":
+        set((state) => ({
+          automationRuns: upsertAutomationRun(state.automationRuns, event.payload.run),
+        }));
+        break;
       case "agent/updated":
         set((state) => ({
           agentTasks: upsertAgentTask(state.agentTasks, event.payload.task),
@@ -805,8 +865,29 @@ function upsertRequirementMemory(
   );
 }
 
+function upsertAutomation(automations: AutomationRecord[], automation: AutomationRecord): AutomationRecord[] {
+  return [...automations.filter((entry) => entry.id !== automation.id), automation].sort((left, right) =>
+    right.updatedAt.localeCompare(left.updatedAt),
+  );
+}
+
+function upsertAutomationRun(runs: AutomationRunRecord[], run: AutomationRunRecord): AutomationRunRecord[] {
+  return [...runs.filter((entry) => entry.id !== run.id), run].sort((left, right) =>
+    right.createdAt.localeCompare(left.createdAt),
+  );
+}
+
 function upsertTurn(turns: TurnRecord[], turn: TurnRecord): TurnRecord[] {
   return [...turns.filter((entry) => entry.id !== turn.id), turn].sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+}
+
+function upsertTurnContext(
+  snapshots: TurnContextSnapshotRecord[],
+  snapshot: TurnContextSnapshotRecord,
+): TurnContextSnapshotRecord[] {
+  return [...snapshots.filter((entry) => entry.turnId !== snapshot.turnId), snapshot].sort((left, right) =>
+    left.createdAt.localeCompare(right.createdAt),
+  );
 }
 
 function upsertReview(reviews: ReviewRecord[], review: ReviewRecord): ReviewRecord[] {
@@ -861,6 +942,7 @@ function createEmptyThreadSession(): ThreadSessionState {
   return {
     turns: [],
     items: [],
+    turnContexts: [],
     pendingApproval: null,
     submitting: false,
   };

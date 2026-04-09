@@ -201,6 +201,52 @@ describe("HarnessDatabase projects", () => {
     });
   });
 
+  it("stores automations and run history", () => {
+    const root = mkdtempSync(join(tmpdir(), "my-agent-db-"));
+    const database = new HarnessDatabase(join(root, "app.db"));
+    const project = database.listProjects()[0]!;
+    const now = new Date().toISOString();
+
+    database.createAutomation({
+      id: "automation-1",
+      name: "Nightly review",
+      kind: "workflow",
+      projectId: project.id,
+      workflowId: "workflow-1",
+      scheduleType: "interval",
+      intervalMinutes: 60,
+      status: "active",
+      lastRunStatus: "idle",
+      nextRunAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+    database.createAutomationRun({
+      id: "automation-run-1",
+      automationId: "automation-1",
+      kind: "workflow",
+      projectId: project.id,
+      status: "completed",
+      workflowRunId: "workflow-run-1",
+      summary: "Completed successfully.",
+      createdAt: now,
+      updatedAt: now,
+      completedAt: now,
+    });
+
+    expect(database.getAutomation("automation-1")).toMatchObject({
+      kind: "workflow",
+      intervalMinutes: 60,
+    });
+    expect(database.listAutomationRuns({ projectId: project.id })).toMatchObject([
+      {
+        id: "automation-run-1",
+        automationId: "automation-1",
+        workflowRunId: "workflow-run-1",
+      },
+    ]);
+  });
+
   it("persists extended terminal session state for future PTY backends", () => {
     const root = mkdtempSync(join(tmpdir(), "my-agent-db-"));
     const database = new HarnessDatabase(join(root, "app.db"));

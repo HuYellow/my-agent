@@ -1,6 +1,9 @@
 name: "my-agent Runtime"
-description: "Run a my-agent workflow or non-interactive prompt in GitHub Actions."
+description: "Run a my-agent automation, workflow, or non-interactive prompt in GitHub Actions."
 inputs:
+  automation_id:
+    description: "Automation id to run."
+    required: false
   workflow_id:
     description: "Workflow id to run."
     required: false

@@ -3,6 +3,8 @@ import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { type AgentInputItem } from "@openai/agents";
 import {
+  type AutomationRecord,
+  type AutomationRunRecord,
   type EnvironmentRecord,
   type AgentTaskRecord,
   type AppConfig,
@@ -23,6 +25,7 @@ import {
   type ReviewRecord,
   type TerminalSessionRecord,
   type ThreadRecord,
+  type TurnContextSnapshotRecord,
   type TurnRecord,
   type WorktreeRecord,
   type WorkspaceProfile,
@@ -321,6 +324,54 @@ export class HarnessDatabase {
         pause_reason TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS turn_context_snapshots (
+        turn_id TEXT PRIMARY KEY,
+        thread_id TEXT NOT NULL,
+        summary_text TEXT NOT NULL,
+        history_mode TEXT NOT NULL,
+        history_item_count INTEGER NOT NULL,
+        archived_history_item_count INTEGER NOT NULL,
+        sections_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS automations (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        requirement_id TEXT,
+        workflow_id TEXT,
+        prompt TEXT,
+        thread_title TEXT,
+        schedule_type TEXT NOT NULL,
+        interval_minutes INTEGER,
+        status TEXT NOT NULL,
+        last_run_at TEXT,
+        next_run_at TEXT,
+        last_run_status TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS automation_runs (
+        id TEXT PRIMARY KEY,
+        automation_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        requirement_id TEXT,
+        status TEXT NOT NULL,
+        thread_id TEXT,
+        turn_id TEXT,
+        workflow_run_id TEXT,
+        summary TEXT,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT
       );
 
       CREATE TABLE IF NOT EXISTS plugins (
@@ -658,6 +709,52 @@ export class HarnessDatabase {
       .prepare("SELECT * FROM items WHERE thread_id = ? ORDER BY created_at ASC")
       .all(threadId)
       .map((row) => this.mapItem(row as Record<string, unknown>));
+  }
+
+  upsertTurnContextSnapshot(snapshot: TurnContextSnapshotRecord): TurnContextSnapshotRecord {
+    this.db
+      .prepare(
+        `
+          INSERT INTO turn_context_snapshots(
+            turn_id,
+            thread_id,
+            summary_text,
+            history_mode,
+            history_item_count,
+            archived_history_item_count,
+            sections_json,
+            created_at,
+            updated_at
+          ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(turn_id) DO UPDATE SET
+            thread_id = excluded.thread_id,
+            summary_text = excluded.summary_text,
+            history_mode = excluded.history_mode,
+            history_item_count = excluded.history_item_count,
+            archived_history_item_count = excluded.archived_history_item_count,
+            sections_json = excluded.sections_json,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run(
+        snapshot.turnId,
+        snapshot.threadId,
+        snapshot.summaryText,
+        snapshot.historyMode,
+        snapshot.historyItemCount,
+        snapshot.archivedHistoryItemCount,
+        JSON.stringify(snapshot.sections),
+        snapshot.createdAt,
+        snapshot.updatedAt,
+      );
+    return snapshot;
+  }
+
+  listTurnContextSnapshots(threadId: string): TurnContextSnapshotRecord[] {
+    return (this.db
+      .prepare("SELECT * FROM turn_context_snapshots WHERE thread_id = ? ORDER BY created_at ASC")
+      .all(threadId) as Record<string, unknown>[])
+      .map((row) => this.mapTurnContextSnapshot(row));
   }
 
   createReview(review: ReviewRecord): ReviewRecord {
@@ -1273,6 +1370,138 @@ export class HarnessDatabase {
     return rows.map((row) => this.mapWorkflowRun(row));
   }
 
+  createAutomation(automation: AutomationRecord): AutomationRecord {
+    this.db
+      .prepare(
+        `INSERT INTO automations(
+          id, name, kind, project_id, requirement_id, workflow_id, prompt, thread_title, schedule_type, interval_minutes, status, last_run_at, next_run_at, last_run_status, created_at, updated_at
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        automation.id,
+        automation.name,
+        automation.kind,
+        automation.projectId,
+        automation.requirementId ?? null,
+        automation.workflowId ?? null,
+        automation.prompt ?? null,
+        automation.threadTitle ?? null,
+        automation.scheduleType,
+        automation.intervalMinutes ?? null,
+        automation.status,
+        automation.lastRunAt ?? null,
+        automation.nextRunAt ?? null,
+        automation.lastRunStatus ?? null,
+        automation.createdAt,
+        automation.updatedAt,
+      );
+    return automation;
+  }
+
+  updateAutomation(automation: AutomationRecord): AutomationRecord {
+    this.db
+      .prepare(
+        `UPDATE automations
+         SET name = ?, kind = ?, project_id = ?, requirement_id = ?, workflow_id = ?, prompt = ?, thread_title = ?, schedule_type = ?, interval_minutes = ?, status = ?, last_run_at = ?, next_run_at = ?, last_run_status = ?, updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(
+        automation.name,
+        automation.kind,
+        automation.projectId,
+        automation.requirementId ?? null,
+        automation.workflowId ?? null,
+        automation.prompt ?? null,
+        automation.threadTitle ?? null,
+        automation.scheduleType,
+        automation.intervalMinutes ?? null,
+        automation.status,
+        automation.lastRunAt ?? null,
+        automation.nextRunAt ?? null,
+        automation.lastRunStatus ?? null,
+        automation.updatedAt,
+        automation.id,
+      );
+    return automation;
+  }
+
+  getAutomation(automationId: string): AutomationRecord | null {
+    const row = this.db.prepare("SELECT * FROM automations WHERE id = ?").get(automationId) as Record<string, unknown> | undefined;
+    return row ? this.mapAutomation(row) : null;
+  }
+
+  listAutomations(projectId?: string): AutomationRecord[] {
+    const rows = projectId
+      ? (this.db.prepare("SELECT * FROM automations WHERE project_id = ? ORDER BY updated_at DESC").all(projectId) as Record<string, unknown>[])
+      : (this.db.prepare("SELECT * FROM automations ORDER BY updated_at DESC").all() as Record<string, unknown>[]);
+    return rows.map((row) => this.mapAutomation(row));
+  }
+
+  createAutomationRun(run: AutomationRunRecord): AutomationRunRecord {
+    this.db
+      .prepare(
+        `INSERT INTO automation_runs(
+          id, automation_id, kind, project_id, requirement_id, status, thread_id, turn_id, workflow_run_id, summary, error, created_at, updated_at, completed_at
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        run.id,
+        run.automationId,
+        run.kind,
+        run.projectId,
+        run.requirementId ?? null,
+        run.status,
+        run.threadId ?? null,
+        run.turnId ?? null,
+        run.workflowRunId ?? null,
+        run.summary ?? null,
+        run.error ?? null,
+        run.createdAt,
+        run.updatedAt,
+        run.completedAt ?? null,
+      );
+    return run;
+  }
+
+  updateAutomationRun(run: AutomationRunRecord): AutomationRunRecord {
+    this.db
+      .prepare(
+        `UPDATE automation_runs
+         SET status = ?, thread_id = ?, turn_id = ?, workflow_run_id = ?, summary = ?, error = ?, updated_at = ?, completed_at = ?
+         WHERE id = ?`,
+      )
+      .run(
+        run.status,
+        run.threadId ?? null,
+        run.turnId ?? null,
+        run.workflowRunId ?? null,
+        run.summary ?? null,
+        run.error ?? null,
+        run.updatedAt,
+        run.completedAt ?? null,
+        run.id,
+      );
+    return run;
+  }
+
+  listAutomationRuns(params: { automationId?: string; projectId?: string } = {}): AutomationRunRecord[] {
+    let rows: Record<string, unknown>[];
+
+    if (params.automationId) {
+      rows = this.db
+        .prepare("SELECT * FROM automation_runs WHERE automation_id = ? ORDER BY created_at DESC")
+        .all(params.automationId) as Record<string, unknown>[];
+    } else if (params.projectId) {
+      rows = this.db
+        .prepare("SELECT * FROM automation_runs WHERE project_id = ? ORDER BY created_at DESC")
+        .all(params.projectId) as Record<string, unknown>[];
+    } else {
+      rows = this.db.prepare("SELECT * FROM automation_runs ORDER BY created_at DESC").all() as Record<string, unknown>[];
+    }
+
+    return rows.map((row) => this.mapAutomationRun(row));
+  }
+
   upsertPlugin(plugin: PluginRecord): PluginRecord {
     this.db
       .prepare(
@@ -1650,6 +1879,60 @@ export class HarnessDatabase {
     };
   }
 
+  private mapTurnContextSnapshot(row: Record<string, unknown>): TurnContextSnapshotRecord {
+    return {
+      turnId: String(row.turn_id),
+      threadId: String(row.thread_id),
+      summaryText: String(row.summary_text),
+      historyMode: String(row.history_mode) as TurnContextSnapshotRecord["historyMode"],
+      historyItemCount: Number(row.history_item_count ?? 0),
+      archivedHistoryItemCount: Number(row.archived_history_item_count ?? 0),
+      sections: row.sections_json ? (JSON.parse(String(row.sections_json)) as TurnContextSnapshotRecord["sections"]) : [],
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+    };
+  }
+
+  private mapAutomation(row: Record<string, unknown>): AutomationRecord {
+    return {
+      id: String(row.id),
+      name: String(row.name),
+      kind: row.kind as AutomationRecord["kind"],
+      projectId: String(row.project_id),
+      requirementId: row.requirement_id ? String(row.requirement_id) : undefined,
+      workflowId: row.workflow_id ? String(row.workflow_id) : undefined,
+      prompt: row.prompt ? String(row.prompt) : undefined,
+      threadTitle: row.thread_title ? String(row.thread_title) : undefined,
+      scheduleType: row.schedule_type as AutomationRecord["scheduleType"],
+      intervalMinutes: typeof row.interval_minutes === "number" ? row.interval_minutes : row.interval_minutes != null ? Number(row.interval_minutes) : undefined,
+      status: row.status as AutomationRecord["status"],
+      lastRunAt: row.last_run_at ? String(row.last_run_at) : undefined,
+      nextRunAt: row.next_run_at ? String(row.next_run_at) : undefined,
+      lastRunStatus: row.last_run_status ? (String(row.last_run_status) as AutomationRecord["lastRunStatus"]) : undefined,
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+    };
+  }
+
+  private mapAutomationRun(row: Record<string, unknown>): AutomationRunRecord {
+    return {
+      id: String(row.id),
+      automationId: String(row.automation_id),
+      kind: row.kind as AutomationRunRecord["kind"],
+      projectId: String(row.project_id),
+      requirementId: row.requirement_id ? String(row.requirement_id) : undefined,
+      status: row.status as AutomationRunRecord["status"],
+      threadId: row.thread_id ? String(row.thread_id) : undefined,
+      turnId: row.turn_id ? String(row.turn_id) : undefined,
+      workflowRunId: row.workflow_run_id ? String(row.workflow_run_id) : undefined,
+      summary: row.summary ? String(row.summary) : undefined,
+      error: row.error ? String(row.error) : undefined,
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+      completedAt: row.completed_at ? String(row.completed_at) : undefined,
+    };
+  }
+
   private mapRequirementMemory(row: Record<string, unknown>): RequirementMemoryRecord {
     return {
       requirementId: String(row.requirement_id),
@@ -1765,6 +2048,22 @@ export class HarnessDatabase {
           derived_json TEXT NOT NULL,
           updated_at TEXT NOT NULL,
           last_rebuilt_at TEXT
+        )
+      `);
+    }
+
+    if (!this.tableExists("turn_context_snapshots")) {
+      this.db.exec(`
+        CREATE TABLE turn_context_snapshots (
+          turn_id TEXT PRIMARY KEY,
+          thread_id TEXT NOT NULL,
+          summary_text TEXT NOT NULL,
+          history_mode TEXT NOT NULL,
+          history_item_count INTEGER NOT NULL,
+          archived_history_item_count INTEGER NOT NULL,
+          sections_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
         )
       `);
     }
@@ -1909,6 +2208,50 @@ export class HarnessDatabase {
 
     if (!this.columnExists("workflow_runs", "requirement_id")) {
       this.db.exec("ALTER TABLE workflow_runs ADD COLUMN requirement_id TEXT");
+    }
+
+    if (!this.tableExists("automations")) {
+      this.db.exec(`
+        CREATE TABLE automations (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          project_id TEXT NOT NULL,
+          requirement_id TEXT,
+          workflow_id TEXT,
+          prompt TEXT,
+          thread_title TEXT,
+          schedule_type TEXT NOT NULL,
+          interval_minutes INTEGER,
+          status TEXT NOT NULL,
+          last_run_at TEXT,
+          next_run_at TEXT,
+          last_run_status TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )
+      `);
+    }
+
+    if (!this.tableExists("automation_runs")) {
+      this.db.exec(`
+        CREATE TABLE automation_runs (
+          id TEXT PRIMARY KEY,
+          automation_id TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          project_id TEXT NOT NULL,
+          requirement_id TEXT,
+          status TEXT NOT NULL,
+          thread_id TEXT,
+          turn_id TEXT,
+          workflow_run_id TEXT,
+          summary TEXT,
+          error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          completed_at TEXT
+        )
+      `);
     }
 
     if (!this.columnExists("terminal_sessions", "backend")) {

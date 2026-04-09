@@ -27,6 +27,8 @@ import {
   type SkillDescriptor,
   type ThreadRecord,
   type TurnInputAttachment,
+  type TurnContextSectionRecord,
+  type TurnContextSnapshotRecord,
   type TurnSteerRecord,
   type TurnRecord,
   type WorkspaceProfile,
@@ -148,6 +150,7 @@ export class OpenAiCompatibleRunner {
     });
 
     await this.ensureThreadSessionSeeded(context.thread.id);
+    this.recordTurnContextSnapshot(context.turn, context.thread.id, builtPrompt.contextSections);
 
     this.createItem({
       turn: context.turn,
@@ -527,6 +530,43 @@ export class OpenAiCompatibleRunner {
 
     const session = new SqliteSession(this.database, threadId);
     await session.addItems(seedItems);
+  }
+
+  private recordTurnContextSnapshot(
+    turn: TurnRecord,
+    threadId: string,
+    promptSections: TurnContextSectionRecord[],
+  ): void {
+    const sessionHistory = this.database.listSessionItems(threadId);
+    const historySummary = summarizeSessionHistory(sessionHistory);
+    const snapshot: TurnContextSnapshotRecord = {
+      turnId: turn.id,
+      threadId,
+      summaryText: historySummary.summaryText,
+      historyMode: historySummary.historyMode,
+      historyItemCount: historySummary.historyItemCount,
+      archivedHistoryItemCount: historySummary.archivedHistoryItemCount,
+      sections: [
+        ...promptSections,
+        {
+          key: "session_history",
+          label: "Session History",
+          summary: historySummary.summaryText,
+          detail: historySummary.detail,
+          count: historySummary.historyItemCount,
+          estimatedTokens: historySummary.estimatedTokens,
+          included: true,
+        },
+      ],
+      createdAt: turn.createdAt,
+      updatedAt: now(),
+    };
+
+    this.database.upsertTurnContextSnapshot(snapshot);
+    this.emit({
+      type: "turn/contextUpdated",
+      payload: { snapshot },
+    });
   }
 
   private async consumeStream(
@@ -1265,6 +1305,7 @@ function readCompatToolInput(input: unknown, toolName: string): string {
 function trimSessionHistory(historyItems: AgentInputItem[], newItems: AgentInputItem[]): AgentInputItem[] {
   const recentHistory = historyItems.length > 120 ? historyItems.slice(-120) : historyItems;
   const archivedHistory = historyItems.length > recentHistory.length ? historyItems.slice(0, historyItems.length - recentHistory.length) : [];
+  const historySummary = summarizeSessionHistory(historyItems);
   const summaryItem =
     archivedHistory.length > 0
       ? [
@@ -1274,7 +1315,7 @@ function trimSessionHistory(historyItems: AgentInputItem[], newItems: AgentInput
             content: [
               {
                 type: "output_text" as const,
-                text: `Earlier session summary: ${archivedHistory.length} historical items were omitted to stay within the context budget.`,
+                text: historySummary.detail,
               },
             ],
           },
@@ -1282,6 +1323,107 @@ function trimSessionHistory(historyItems: AgentInputItem[], newItems: AgentInput
       : [];
   const trimmedHistory = [...summaryItem, ...recentHistory];
   return [...trimmedHistory, ...newItems];
+}
+
+function summarizeSessionHistory(historyItems: AgentInputItem[]): {
+  summaryText: string;
+  detail: string;
+  historyMode: "full" | "compressed";
+  historyItemCount: number;
+  archivedHistoryItemCount: number;
+  estimatedTokens: number;
+} {
+  const recentHistory = historyItems.length > 120 ? historyItems.slice(-120) : historyItems;
+  const archivedHistory = historyItems.length > recentHistory.length ? historyItems.slice(0, historyItems.length - recentHistory.length) : [];
+
+  if (archivedHistory.length === 0) {
+    const summaryText = `${historyItems.length} session item${historyItems.length === 1 ? "" : "s"} retained in full.`;
+    return {
+      summaryText,
+      detail: summaryText,
+      historyMode: "full",
+      historyItemCount: historyItems.length,
+      archivedHistoryItemCount: 0,
+      estimatedTokens: Math.ceil(summaryText.length / 4),
+    };
+  }
+
+  const userPrompts = archivedHistory
+    .filter(isConversationHistoryItem)
+    .filter((item) => item.role === "user")
+    .map((item) => summarizeAgentHistoryContent(item.content))
+    .filter(Boolean)
+    .slice(-4);
+  const assistantOutputs = archivedHistory
+    .filter(isConversationHistoryItem)
+    .filter((item) => item.role === "assistant")
+    .map((item) => summarizeAgentHistoryContent(item.content))
+    .filter(Boolean)
+    .slice(-4);
+  const signalCounts = archivedHistory.reduce(
+    (counts, item) => {
+      const text = isConversationHistoryItem(item) ? summarizeAgentHistoryContent(item.content) : "";
+      if (text.includes("[fileChange]")) counts.fileChanges += 1;
+      if (text.includes("[commandExecution]")) counts.commands += 1;
+      if (text.includes("[error]")) counts.errors += 1;
+      if (text.includes("[approvalRequest]")) counts.approvals += 1;
+      return counts;
+    },
+    { fileChanges: 0, commands: 0, errors: 0, approvals: 0 },
+  );
+  const detail = [
+    `Earlier session summary: ${archivedHistory.length} historical item${archivedHistory.length === 1 ? "" : "s"} were compacted to stay within the context budget.`,
+    userPrompts.length > 0 ? `Recent archived user requests: ${userPrompts.join(" | ")}` : "Recent archived user requests: none",
+    assistantOutputs.length > 0 ? `Recent archived assistant outputs: ${assistantOutputs.join(" | ")}` : "Recent archived assistant outputs: none",
+    `Archived signals: ${signalCounts.fileChanges} file changes, ${signalCounts.commands} commands, ${signalCounts.approvals} approvals, ${signalCounts.errors} errors.`,
+  ].join("\n");
+
+  return {
+    summaryText: `Compressed ${archivedHistory.length} older history item${archivedHistory.length === 1 ? "" : "s"}; ${recentHistory.length} kept verbatim.`,
+    detail,
+    historyMode: "compressed",
+    historyItemCount: historyItems.length,
+    archivedHistoryItemCount: archivedHistory.length,
+    estimatedTokens: Math.ceil(detail.length / 4),
+  };
+}
+
+function summarizeAgentHistoryContent(content: unknown | string): string {
+  if (typeof content === "string") {
+    return compactHistorySummary(content);
+  }
+
+  if (!Array.isArray(content)) {
+    return "";
+  }
+
+  const text = content
+    .map((entry) => {
+      if (typeof entry === "string") {
+        return entry;
+      }
+
+      if (entry && typeof entry === "object" && "text" in entry && typeof entry.text === "string") {
+        return entry.text;
+      }
+
+      return "";
+    })
+    .filter(Boolean)
+    .join(" ");
+
+  return compactHistorySummary(text);
+}
+
+function isConversationHistoryItem(
+  item: AgentInputItem,
+): item is Extract<AgentInputItem, { role: "user" | "assistant" }> {
+  return typeof item === "object" && item !== null && "role" in item && "content" in item;
+}
+
+function compactHistorySummary(value: string): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+  return compact.length > 140 ? `${compact.slice(0, 137)}...` : compact;
 }
 
 function renderHistorySummaryItem(item: ItemRecord): string {

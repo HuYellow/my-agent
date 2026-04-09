@@ -3,6 +3,11 @@ import {
   type AgentSendInputParams,
   type AgentSpawnParams,
   type AgentWaitParams,
+  type AutomationListParams,
+  type CreateAutomationParams,
+  type UpdateAutomationParams,
+  type RunAutomationParams,
+  type AutomationRunRecord,
   type ApplyPatchParams,
   type ApprovalResponseParams,
   type ArchiveThreadParams,
@@ -373,6 +378,16 @@ export class HarnessServer {
         return this.resumeWorkflow(message.params as WorkflowResumeParams);
       case "workflow/runs":
         return this.listWorkflowRuns((message.params as { workflowId?: string } | undefined)?.workflowId);
+      case "automation/list":
+        return this.listAutomations((message.params ?? {}) as AutomationListParams);
+      case "automation/create":
+        return this.createAutomation(message.params as CreateAutomationParams);
+      case "automation/update":
+        return this.updateAutomation(message.params as UpdateAutomationParams);
+      case "automation/run":
+        return this.runAutomation(message.params as RunAutomationParams);
+      case "automation/runs":
+        return this.listAutomationRuns(message.params as { automationId?: string; projectId?: string } | undefined);
       case "plugin/list":
         return this.listPlugins();
       case "mcp/list":
@@ -422,6 +437,8 @@ export class HarnessServer {
       reviews: this.reviewManager.list(config.selectedProjectId),
       workflows: this.listWorkflows(config.selectedProjectId),
       workflowRuns: this.workflowManager.listRuns(),
+      automations: this.database.listAutomations(config.selectedProjectId),
+      automationRuns: this.database.listAutomationRuns({ projectId: config.selectedProjectId }),
       agentTasks: this.database.listAgentTasks(config.selectedProjectId),
     };
   }
@@ -638,6 +655,7 @@ export class HarnessServer {
       thread,
       turns: this.database.listTurns(thread.id),
       items: this.database.listItems(thread.id),
+      turnContexts: this.database.listTurnContextSnapshots(thread.id),
       pendingApproval: this.database.listTurns(thread.id)
         .map((turn) => this.database.getPendingApprovalForTurn(turn.id))
         .find(Boolean) ?? null,
@@ -1378,6 +1396,200 @@ export class HarnessServer {
     };
   }
 
+  private listAutomations(params?: AutomationListParams) {
+    return {
+      automations: this.database.listAutomations(params?.projectId),
+    };
+  }
+
+  private createAutomation(params: CreateAutomationParams) {
+    const project = this.requireProject(params.projectId);
+    const requirementId = params.requirementId ? this.requireRequirement(params.requirementId).id : undefined;
+    const now = new Date().toISOString();
+    const automation = this.database.createAutomation({
+      id: createId("automation"),
+      name: params.name.trim() || "New automation",
+      kind: params.kind,
+      projectId: project.id,
+      requirementId,
+      workflowId: params.workflowId,
+      prompt: params.prompt?.trim() || undefined,
+      threadTitle: params.threadTitle?.trim() || undefined,
+      scheduleType: params.scheduleType ?? "manual",
+      intervalMinutes: params.scheduleType === "interval" ? params.intervalMinutes ?? 60 : undefined,
+      status: params.status ?? "active",
+      lastRunStatus: "idle",
+      nextRunAt: computeNextAutomationRunAt(params.scheduleType ?? "manual", params.intervalMinutes),
+      createdAt: now,
+      updatedAt: now,
+    });
+    this.emit({ type: "automation/updated", payload: { automation } });
+    return { automation };
+  }
+
+  private updateAutomation(params: UpdateAutomationParams) {
+    const current = this.database.getAutomation(params.automationId);
+
+    if (!current) {
+      throw new Error(`Automation not found: ${params.automationId}`);
+    }
+
+    const projectId = params.patch.projectId ?? current.projectId;
+    this.requireProject(projectId);
+    const requirementId = params.patch.requirementId
+      ? this.requireRequirement(params.patch.requirementId).id
+      : params.patch.requirementId === undefined
+        ? current.requirementId
+        : undefined;
+    const scheduleType = params.patch.scheduleType ?? current.scheduleType;
+    const intervalMinutes = scheduleType === "interval" ? params.patch.intervalMinutes ?? current.intervalMinutes ?? 60 : undefined;
+    const automation = this.database.updateAutomation({
+      ...current,
+      ...params.patch,
+      projectId,
+      requirementId,
+      scheduleType,
+      intervalMinutes,
+      nextRunAt: computeNextAutomationRunAt(scheduleType, intervalMinutes, current.lastRunAt),
+      updatedAt: new Date().toISOString(),
+    });
+    this.emit({ type: "automation/updated", payload: { automation } });
+    return { automation };
+  }
+
+  private listAutomationRuns(params?: { automationId?: string; projectId?: string }) {
+    return {
+      runs: this.database.listAutomationRuns(params),
+    };
+  }
+
+  private async runAutomation(params: RunAutomationParams) {
+    const automation = this.database.getAutomation(params.automationId);
+
+    if (!automation) {
+      throw new Error(`Automation not found: ${params.automationId}`);
+    }
+
+    const startedAt = new Date().toISOString();
+    const runningAutomation = this.database.updateAutomation({
+      ...automation,
+      lastRunStatus: "running",
+      updatedAt: startedAt,
+    });
+    this.emit({ type: "automation/updated", payload: { automation: runningAutomation } });
+
+    const run = this.database.createAutomationRun({
+      id: createId("automation_run"),
+      automationId: automation.id,
+      kind: automation.kind,
+      projectId: automation.projectId,
+      requirementId: automation.requirementId,
+      status: "running",
+      createdAt: startedAt,
+      updatedAt: startedAt,
+    });
+    this.emit({ type: "automation/run", payload: { run } });
+
+    try {
+      const project = this.requireProject(automation.projectId);
+
+      if (automation.kind === "workflow") {
+        if (!automation.workflowId) {
+          throw new Error("Workflow automation is missing workflowId.");
+        }
+
+        const result = await this.workflowManager.run({
+          workflowId: automation.workflowId,
+          project,
+          provider: this.database.getConfig().provider,
+          workspace: project,
+          requirementId: automation.requirementId,
+          nonInteractive: true,
+        });
+
+        const completedRun = this.database.updateAutomationRun({
+          ...run,
+          status: "completed",
+          workflowRunId: result.run.id,
+          summary: result.stepsRun.map((step) => step.artifactSummary).filter(Boolean).join(" | ") || `${result.run.status}`,
+          updatedAt: new Date().toISOString(),
+          completedAt: new Date().toISOString(),
+        });
+        const completedAutomation = this.database.updateAutomation({
+          ...runningAutomation,
+          lastRunAt: completedRun.completedAt,
+          lastRunStatus: "completed",
+          nextRunAt: computeNextAutomationRunAt(runningAutomation.scheduleType, runningAutomation.intervalMinutes, completedRun.completedAt),
+          updatedAt: new Date().toISOString(),
+        });
+        this.emit({ type: "automation/run", payload: { run: completedRun } });
+        this.emit({ type: "automation/updated", payload: { automation: completedAutomation } });
+        return {
+          automation: completedAutomation,
+          run: completedRun,
+        };
+      }
+
+      if (!automation.prompt?.trim()) {
+        throw new Error("Prompt automation is missing prompt text.");
+      }
+
+      const threadResult = this.startThread({
+        projectId: automation.projectId,
+        requirementId: automation.requirementId,
+        title: automation.threadTitle?.trim() || `Automation: ${automation.name}`,
+      });
+      const turnResult = await this.startTurn({
+        threadId: threadResult.thread.id,
+        input: automation.prompt,
+        includeIdeContext: false,
+      });
+      const finalTurn = this.database.getTurn(turnResult.turn.id) ?? turnResult.turn;
+      const completedRun = this.database.updateAutomationRun({
+        ...run,
+        status: finalTurn.status === "completed" ? "completed" : "failed",
+        threadId: threadResult.thread.id,
+        turnId: finalTurn.id,
+        summary: `Prompt run finished with ${finalTurn.status}.`,
+        error: finalTurn.status === "failed" ? "Prompt automation turn failed." : undefined,
+        updatedAt: new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+      });
+      const completedAutomation = this.database.updateAutomation({
+        ...runningAutomation,
+        lastRunAt: completedRun.completedAt,
+        lastRunStatus: completedRun.status,
+        nextRunAt: computeNextAutomationRunAt(runningAutomation.scheduleType, runningAutomation.intervalMinutes, completedRun.completedAt),
+        updatedAt: new Date().toISOString(),
+      });
+      this.emit({ type: "automation/run", payload: { run: completedRun } });
+      this.emit({ type: "automation/updated", payload: { automation: completedAutomation } });
+      return {
+        automation: completedAutomation,
+        run: completedRun,
+      };
+    } catch (error) {
+      const failedAt = new Date().toISOString();
+      const failedRun: AutomationRunRecord = this.database.updateAutomationRun({
+        ...run,
+        status: "failed",
+        error: error instanceof Error ? error.message : String(error),
+        updatedAt: failedAt,
+        completedAt: failedAt,
+      });
+      const failedAutomation = this.database.updateAutomation({
+        ...runningAutomation,
+        lastRunAt: failedAt,
+        lastRunStatus: "failed",
+        nextRunAt: computeNextAutomationRunAt(runningAutomation.scheduleType, runningAutomation.intervalMinutes, failedAt),
+        updatedAt: failedAt,
+      });
+      this.emit({ type: "automation/run", payload: { run: failedRun } });
+      this.emit({ type: "automation/updated", payload: { automation: failedAutomation } });
+      throw error;
+    }
+  }
+
   private listPlugins(): PluginListResult {
     const project = this.requireProject(this.database.getConfig().selectedProjectId);
     return {
@@ -1737,4 +1949,18 @@ function scoreMcpEntry(haystack: string, normalizedInput: string): number {
     .filter((token) => token.length > 2);
 
   return tokens.reduce((score, token) => score + (normalizedInput.includes(token) ? 1 : 0), 0);
+}
+
+function computeNextAutomationRunAt(
+  scheduleType: "manual" | "interval",
+  intervalMinutes?: number,
+  baseTime?: string,
+): string | undefined {
+  if (scheduleType !== "interval") {
+    return undefined;
+  }
+
+  const minutes = Math.max(1, intervalMinutes ?? 60);
+  const base = baseTime ? new Date(baseTime).getTime() : Date.now();
+  return new Date(base + minutes * 60_000).toISOString();
 }

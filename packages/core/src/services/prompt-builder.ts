@@ -3,6 +3,7 @@ import {
   type McpPromptRecord,
   type McpResourceRecord,
   type SkillDescriptor,
+  type TurnContextSectionRecord,
   type TurnInputAttachment,
   type WorkspaceProfile,
 } from "@my-agent/protocol";
@@ -39,20 +40,39 @@ interface BuildPromptInput {
 export interface BuiltPrompt {
   systemPrompt: string;
   userMessage: string;
+  contextSections: TurnContextSectionRecord[];
 }
 
 export class PromptBuilder {
   constructor(private readonly skillService: SkillService) {}
 
   build(input: BuildPromptInput): BuiltPrompt {
-    const sections: string[] = [
-      renderPermissions(input.workspace),
-      renderRunCompletionRules(),
-      `# User Global Instructions\n${input.globalInstructions}`,
-      renderProjectDocuments(input.cwd),
-      renderSkillMetadata(input.discoveredSkills),
-      renderEnvironmentContext(input.cwd, input.workspace.shell),
-    ];
+    const sections: string[] = [];
+    const contextSections: TurnContextSectionRecord[] = [];
+    const permissions = renderPermissions(input.workspace);
+    const runRules = renderRunCompletionRules();
+    const globalInstructions = `# User Global Instructions\n${input.globalInstructions}`;
+    const projectDocs = renderProjectDocuments(input.cwd);
+    const skillMetadata = renderSkillMetadata(input.discoveredSkills);
+    const environmentContext = renderEnvironmentContext(input.cwd, input.workspace.shell);
+
+    sections.push(permissions, runRules, globalInstructions, projectDocs, skillMetadata, environmentContext);
+    contextSections.push(
+      makeContextSection("project_instructions", "Project Instructions", projectDocs, {
+        count: findAgentDocuments(input.cwd).length,
+        included: true,
+      }),
+      makeContextSection("requirement_context", "Requirement Context", input.requirementContext ?? "", {
+        included: Boolean(input.requirementContext),
+      }),
+      makeContextSection("skill_catalog", "Skills Metadata", skillMetadata, {
+        count: input.discoveredSkills.length,
+        included: true,
+      }),
+      makeContextSection("environment_context", "Environment Context", environmentContext, {
+        included: true,
+      }),
+    );
 
     if (input.requirementContext) {
       sections.push(input.requirementContext);
@@ -60,23 +80,58 @@ export class PromptBuilder {
 
     if (input.ideContext) {
       sections.push(renderIdeContext(input.ideContext));
+      contextSections.push(
+        makeContextSection("ide_context", "IDE Context", renderIdeContext(input.ideContext), {
+          included: true,
+        }),
+      );
+    } else {
+      contextSections.push(makeContextSection("ide_context", "IDE Context", "Disabled for this run.", { included: false }));
     }
 
     if (input.attachments.length > 0) {
-      sections.push(renderAttachmentContext(input.attachments));
+      const attachmentContext = renderAttachmentContext(input.attachments);
+      sections.push(attachmentContext);
+      contextSections.push(
+        makeContextSection("attachments", "Attachment Context", attachmentContext, {
+          count: input.attachments.length,
+          included: true,
+        }),
+      );
+    } else {
+      contextSections.push(makeContextSection("attachments", "Attachment Context", "No attachments included.", { included: false }));
     }
 
     if (input.mcpContext && input.mcpContext.length > 0) {
-      sections.push(renderMcpContext(input.mcpContext));
+      const mcpContext = renderMcpContext(input.mcpContext);
+      sections.push(mcpContext);
+      contextSections.push(
+        makeContextSection("mcp_context", "MCP Context", mcpContext, {
+          count: input.mcpContext.length,
+          included: true,
+        }),
+      );
+    } else {
+      contextSections.push(makeContextSection("mcp_context", "MCP Context", "No relevant MCP mounts included.", { included: false }));
     }
 
     if (input.selectedSkills.length > 0) {
-      sections.push(renderActivatedSkills(input.selectedSkills, this.skillService));
+      const activatedSkills = renderActivatedSkills(input.selectedSkills, this.skillService);
+      sections.push(activatedSkills);
+      contextSections.push(
+        makeContextSection("activated_skills", "Activated Skills", activatedSkills, {
+          count: input.selectedSkills.length,
+          included: true,
+        }),
+      );
+    } else {
+      contextSections.push(makeContextSection("activated_skills", "Activated Skills", "No activated skills for this run.", { included: false }));
     }
 
     return {
       systemPrompt: sections.filter(Boolean).join("\n\n"),
       userMessage: this.skillService.stripExplicitSkills(input.userInput),
+      contextSections,
     };
   }
 }
@@ -232,4 +287,28 @@ function truncatePromptSection(value: string, limit: number): string {
   }
 
   return `${value.slice(0, limit)}\n\n[truncated ${value.length - limit} chars]`;
+}
+
+function makeContextSection(
+  key: string,
+  label: string,
+  content: string,
+  options: { count?: number; included: boolean },
+): TurnContextSectionRecord {
+  const normalized = content.trim();
+  const summary = normalized
+    ? normalized.split(/\r?\n/).find((line) => line.trim().length > 0)?.trim() ?? normalized
+    : options.included
+      ? `${label} included`
+      : `${label} not included`;
+
+  return {
+    key,
+    label,
+    summary,
+    detail: normalized || undefined,
+    count: options.count,
+    estimatedTokens: normalized ? Math.ceil(normalized.length / 4) : 0,
+    included: options.included,
+  };
 }

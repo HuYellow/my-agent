@@ -2,8 +2,11 @@ import { contextBridge, ipcRenderer } from "electron";
 import {
   type ApprovalResponseParams,
   type AgentTaskRecord,
+  type AutomationRecord,
+  type AutomationRunRecord,
   type CommandExecParams,
   type ConfigWriteParams,
+  type CreateAutomationParams,
   type CreateProjectParams,
   type CreateRequirementParams,
   type ExecutionContextRecord,
@@ -36,6 +39,7 @@ import {
   type TurnInputAttachment,
   type TurnSteerParams,
   type TurnSteerRecord,
+  type UpdateAutomationParams,
   type UpdateRequirementParams,
   type UpdateThreadParams,
   type UpdateProjectParams,
@@ -45,6 +49,16 @@ const api = {
   initialize: () => ipcRenderer.invoke("harness:initialize"),
   createProject: (params: CreateProjectParams) => ipcRenderer.invoke("project:create", params),
   updateProject: (params: UpdateProjectParams) => ipcRenderer.invoke("project:update", params),
+  listAutomations: (params?: { projectId?: string }) =>
+    ipcRenderer.invoke("automation:list", params ?? {}) as Promise<{ automations: AutomationRecord[] }>,
+  createAutomation: (params: CreateAutomationParams) =>
+    ipcRenderer.invoke("automation:create", params) as Promise<{ automation: AutomationRecord }>,
+  updateAutomation: (params: UpdateAutomationParams) =>
+    ipcRenderer.invoke("automation:update", params) as Promise<{ automation: AutomationRecord }>,
+  runAutomation: (params: { automationId: string }) =>
+    ipcRenderer.invoke("automation:run", params) as Promise<{ automation: AutomationRecord; run: AutomationRunRecord }>,
+  listAutomationRuns: (params?: { automationId?: string; projectId?: string }) =>
+    ipcRenderer.invoke("automation:runs", params ?? {}) as Promise<{ runs: AutomationRunRecord[] }>,
   listRequirements: (params?: { projectId?: string }) =>
     ipcRenderer.invoke("requirement:list", params ?? {}) as Promise<{ requirements: RequirementRecord[]; memories: RequirementMemoryRecord[] }>,
   getRequirement: (requirementId: string) =>

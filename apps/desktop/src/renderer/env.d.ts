@@ -2,7 +2,10 @@ import {
   type ApprovalResponseParams,
   type AgentTaskRecord,
   type AppConfig,
+  type AutomationRecord,
+  type AutomationRunRecord,
   type ConfigWriteParams,
+  type CreateAutomationParams,
   type CreateProjectParams,
   type CreateRequirementParams,
   type ExecutionContextRecord,
@@ -37,10 +40,12 @@ import {
   type EnvironmentRecord,
   type WorkflowRecord,
   type WorkflowRunRecord,
+  type TurnContextSnapshotRecord,
   type TurnInputAttachment,
   type ThreadRecord,
   type TurnSteerParams,
   type TurnSteerRecord,
+  type UpdateAutomationParams,
   type TurnRecord,
   type UpdateRequirementParams,
   type UpdateThreadParams,
@@ -53,6 +58,11 @@ declare global {
       initialize: () => Promise<InitializeResult>;
       createProject: (params: CreateProjectParams) => Promise<{ project: ProjectRecord }>;
       updateProject: (params: UpdateProjectParams) => Promise<{ project: ProjectRecord }>;
+      listAutomations: (params?: { projectId?: string }) => Promise<{ automations: AutomationRecord[] }>;
+      createAutomation: (params: CreateAutomationParams) => Promise<{ automation: AutomationRecord }>;
+      updateAutomation: (params: UpdateAutomationParams) => Promise<{ automation: AutomationRecord }>;
+      runAutomation: (params: { automationId: string }) => Promise<{ automation: AutomationRecord; run: AutomationRunRecord }>;
+      listAutomationRuns: (params?: { automationId?: string; projectId?: string }) => Promise<{ runs: AutomationRunRecord[] }>;
       listRequirements: (params?: { projectId?: string }) => Promise<{ requirements: RequirementRecord[]; memories: RequirementMemoryRecord[] }>;
       getRequirement: (requirementId: string) => Promise<{ requirement: RequirementRecord; memory: RequirementMemoryRecord }>;
       createRequirement: (params: CreateRequirementParams) => Promise<{ requirement: RequirementRecord; memory: RequirementMemoryRecord }>;
@@ -61,7 +71,7 @@ declare global {
       unassignThreadFromRequirement: (params: { threadId: string }) => Promise<{ thread: ThreadRecord }>;
       updateThread: (params: UpdateThreadParams) => Promise<{ thread: ThreadRecord }>;
       startThread: (params: StartThreadParams) => Promise<{ thread: ThreadRecord }>;
-      resumeThread: (threadId: string) => Promise<{ thread: ThreadRecord; turns: TurnRecord[]; items: ItemRecord[]; pendingApproval?: PendingApproval | null }>;
+      resumeThread: (threadId: string) => Promise<{ thread: ThreadRecord; turns: TurnRecord[]; items: ItemRecord[]; turnContexts?: TurnContextSnapshotRecord[]; pendingApproval?: PendingApproval | null }>;
       startTurn: (params: StartTurnParams) => Promise<{ turn: TurnRecord }>;
       steerTurn: (params: TurnSteerParams) => Promise<{ steer: TurnSteerRecord }>;
       interruptTurn: (params: InterruptTurnParams) => Promise<{ turn: TurnRecord }>;

@@ -47,6 +47,8 @@ import * as Dialog from "@radix-ui/react-dialog";
 import {
   type AgentTaskRecord,
   type ApprovalPolicy,
+  type AutomationRecord,
+  type AutomationRunRecord,
   type ExecutionContextRecord,
   type ItemKind,
   type ItemRecord,
@@ -67,6 +69,7 @@ import {
   type TerminalSessionRecord,
   type ThreadRecord,
   type TurnInputAttachment,
+  type TurnContextSnapshotRecord,
   type TurnRecord,
   type WorktreeRecord,
   type EnvironmentRecord,
@@ -222,6 +225,16 @@ interface RequirementMemoryDraft {
   definitionOfDone: string;
 }
 
+interface AutomationDraftState {
+  name: string;
+  kind: AutomationRecord["kind"];
+  workflowId: string;
+  prompt: string;
+  threadTitle: string;
+  scheduleType: AutomationRecord["scheduleType"];
+  intervalMinutes: string;
+}
+
 export function App() {
   const {
     bootstrapped,
@@ -238,6 +251,8 @@ export function App() {
     executionContexts,
     workflows,
     workflowRuns,
+    automations,
+    automationRuns,
     agentTasks,
     terminals,
     terminalOutputs,
@@ -254,6 +269,9 @@ export function App() {
     providerModelsError,
     bootstrap,
     createProject,
+    createAutomation,
+    updateAutomation,
+    runAutomation,
     createRequirement,
     updateRequirement,
     createThread,
@@ -580,6 +598,19 @@ export function App() {
     () => [...(activeSession?.turns ?? [])].sort((left, right) => left.updatedAt.localeCompare(right.updatedAt)).at(-1),
     [activeSession?.turns],
   );
+  const latestTurnContext = useMemo(() => {
+    const contexts = activeSession?.turnContexts ?? [];
+
+    if (contexts.length === 0) {
+      return null;
+    }
+
+    if (activeTurn) {
+      return contexts.find((snapshot) => snapshot.turnId === activeTurn.id) ?? contexts.at(-1) ?? null;
+    }
+
+    return contexts.at(-1) ?? null;
+  }, [activeSession?.turnContexts, activeTurn]);
   const showingThreadWorkspace = Boolean(activeThreadId && activeThread);
   const interruptibleTurnId = useMemo(() => {
     const candidate = [...(activeSession?.turns ?? [])]
@@ -1564,6 +1595,7 @@ export function App() {
                   <DiffPatchPanel threadId={activeThreadId} changeSets={threadChangeSets} latestReview={latestReview} />
                 ) : (
                   <>
+                    {latestTurnContext && <RunContextCard snapshot={latestTurnContext} />}
                     {latestReview && <ReviewSummaryCard review={latestReview} />}
                     {orderedItems.length === 0 ? (
                       <EmptyState />
@@ -1749,13 +1781,19 @@ export function App() {
         ) : activeView === "automation" ? (
           <RuntimeAutomationPanel
             projectId={activeProjectId}
+            requirementId={activeRequirementId}
             threads={threads}
+            automations={automations}
+            automationRuns={automationRuns}
             workflows={workflows}
             runs={workflowRuns}
             worktrees={worktrees}
             environments={environments}
             executionContexts={executionContexts}
             agentTasks={agentTasks}
+            onCreateAutomation={(params) => createAutomation(params)}
+            onUpdateAutomation={(automationId, patch) => updateAutomation(automationId, patch)}
+            onRunAutomation={(automationId) => runAutomation(automationId)}
             onRunWorkflow={(workflowId) =>
               activeProjectId
                 ? window.myAgent.runWorkflow({ workflowId, projectId: activeProjectId })
@@ -2845,29 +2883,71 @@ function RuntimePluginsPanel({
 
 function RuntimeAutomationPanel({
   projectId,
+  requirementId,
   threads,
+  automations,
+  automationRuns,
   workflows,
   runs,
   worktrees,
   environments,
   executionContexts,
   agentTasks,
+  onCreateAutomation,
+  onUpdateAutomation,
+  onRunAutomation,
   onRunWorkflow,
   onResumeWorkflow,
 }: {
   projectId?: string;
+  requirementId?: string;
   threads: ThreadRecord[];
+  automations: AutomationRecord[];
+  automationRuns: AutomationRunRecord[];
   workflows: WorkflowRecord[];
   runs: WorkflowRunRecord[];
   worktrees: WorktreeRecord[];
   environments: EnvironmentRecord[];
   executionContexts: ExecutionContextRecord[];
   agentTasks: AgentTaskRecord[];
+  onCreateAutomation: (params: {
+    name: string;
+    kind: AutomationRecord["kind"];
+    projectId: string;
+    requirementId?: string;
+    workflowId?: string;
+    prompt?: string;
+    threadTitle?: string;
+    scheduleType?: AutomationRecord["scheduleType"];
+    intervalMinutes?: number;
+  }) => Promise<void>;
+  onUpdateAutomation: (automationId: string, patch: {
+    name?: string;
+    kind?: AutomationRecord["kind"];
+    projectId?: string;
+    requirementId?: string;
+    workflowId?: string;
+    prompt?: string;
+    threadTitle?: string;
+    scheduleType?: AutomationRecord["scheduleType"];
+    intervalMinutes?: number;
+    status?: AutomationRecord["status"];
+  }) => Promise<void>;
+  onRunAutomation: (automationId: string) => Promise<void>;
   onRunWorkflow: (workflowId: string) => Promise<unknown>;
   onResumeWorkflow: (params: { runId: string; approvePausedSteps?: boolean; retryFailedStepIds?: string[] }) => Promise<unknown>;
 }) {
   const [pendingActionKey, setPendingActionKey] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [automationDraft, setAutomationDraft] = useState<AutomationDraftState>({
+    name: "",
+    kind: "workflow",
+    workflowId: "",
+    prompt: "",
+    threadTitle: "",
+    scheduleType: "manual",
+    intervalMinutes: "60",
+  });
   const projectAgentTasks = useMemo(
     () =>
       projectId
@@ -2879,6 +2959,14 @@ function RuntimeAutomationPanel({
   const activeAgents = useMemo(
     () => projectAgentTasks.filter((task) => task.status === "running" || task.status === "awaiting_approval"),
     [projectAgentTasks],
+  );
+  const visibleAutomations = useMemo(
+    () => (projectId ? automations.filter((automation) => automation.projectId === projectId) : automations),
+    [automations, projectId],
+  );
+  const visibleAutomationRuns = useMemo(
+    () => (projectId ? automationRuns.filter((run) => run.projectId === projectId) : automationRuns),
+    [automationRuns, projectId],
   );
 
   async function handleResumeWorkflow(params: { runId: string; approvePausedSteps?: boolean; retryFailedStepIds?: string[] }) {
@@ -2900,6 +2988,56 @@ function RuntimeAutomationPanel({
     }
   }
 
+  async function handleCreateAutomation() {
+    if (!projectId || !automationDraft.name.trim()) {
+      return;
+    }
+
+    setPendingActionKey("automation:create");
+    setActionError(null);
+
+    try {
+      await onCreateAutomation({
+        name: automationDraft.name.trim(),
+        kind: automationDraft.kind,
+        projectId,
+        requirementId,
+        workflowId: automationDraft.kind === "workflow" ? automationDraft.workflowId || undefined : undefined,
+        prompt: automationDraft.kind === "prompt" ? automationDraft.prompt.trim() || undefined : undefined,
+        threadTitle: automationDraft.threadTitle.trim() || undefined,
+        scheduleType: automationDraft.scheduleType,
+        intervalMinutes:
+          automationDraft.scheduleType === "interval"
+            ? Math.max(1, Number.parseInt(automationDraft.intervalMinutes, 10) || 60)
+            : undefined,
+      });
+      setAutomationDraft((current) => ({
+        ...current,
+        name: "",
+        workflowId: "",
+        prompt: "",
+        threadTitle: "",
+      }));
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPendingActionKey(null);
+    }
+  }
+
+  async function handleRunAutomation(automationId: string) {
+    setPendingActionKey(`automation:run:${automationId}`);
+    setActionError(null);
+
+    try {
+      await onRunAutomation(automationId);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPendingActionKey(null);
+    }
+  }
+
   return (
     <div className="skills-page">
       <div className="skills-page__header">
@@ -2912,6 +3050,10 @@ function RuntimeAutomationPanel({
           <span>Active runs</span>
         </div>
         <div className="workflow-dashboard__card">
+          <strong>{visibleAutomations.length}</strong>
+          <span>Automations</span>
+        </div>
+        <div className="workflow-dashboard__card">
           <strong>{activeAgents.length}</strong>
           <span>Live agents</span>
         </div>
@@ -2921,6 +3063,169 @@ function RuntimeAutomationPanel({
         </div>
       </div>
       {actionError ? <div className="settings-panel__message workflow-panel__message">{actionError}</div> : null}
+      <div className="skills-grid">
+        <div className="skill-card">
+          <div className="skill-card__header">
+            <div>
+              <h3>New Automation</h3>
+              <span>{projectId ? "Manual or interval execution" : "Select a project first"}</span>
+            </div>
+          </div>
+          <label className="review-popover__field">
+            <span>Name</span>
+            <input
+              type="text"
+              value={automationDraft.name}
+              onChange={(event) => setAutomationDraft((current) => ({ ...current, name: event.target.value }))}
+              placeholder="Nightly review"
+            />
+          </label>
+          <label className="review-popover__field">
+            <span>Kind</span>
+            <select
+              value={automationDraft.kind}
+              onChange={(event) =>
+                setAutomationDraft((current) => ({
+                  ...current,
+                  kind: event.target.value as AutomationRecord["kind"],
+                }))
+              }
+            >
+              <option value="workflow">Workflow</option>
+              <option value="prompt">Prompt</option>
+            </select>
+          </label>
+          {automationDraft.kind === "workflow" ? (
+            <label className="review-popover__field">
+              <span>Workflow</span>
+              <select
+                value={automationDraft.workflowId}
+                onChange={(event) => setAutomationDraft((current) => ({ ...current, workflowId: event.target.value }))}
+              >
+                <option value="">Select workflow</option>
+                {workflows.map((workflow) => (
+                  <option key={workflow.id} value={workflow.id}>
+                    {workflow.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <label className="review-popover__field">
+              <span>Prompt</span>
+              <textarea
+                value={automationDraft.prompt}
+                onChange={(event) => setAutomationDraft((current) => ({ ...current, prompt: event.target.value }))}
+                placeholder="Summarize current repo issues and open a review."
+              />
+            </label>
+          )}
+          <label className="review-popover__field">
+            <span>Thread title</span>
+            <input
+              type="text"
+              value={automationDraft.threadTitle}
+              onChange={(event) => setAutomationDraft((current) => ({ ...current, threadTitle: event.target.value }))}
+              placeholder="Automation run"
+            />
+          </label>
+          <label className="review-popover__field">
+            <span>Schedule</span>
+            <select
+              value={automationDraft.scheduleType}
+              onChange={(event) =>
+                setAutomationDraft((current) => ({
+                  ...current,
+                  scheduleType: event.target.value as AutomationRecord["scheduleType"],
+                }))
+              }
+            >
+              <option value="manual">Manual</option>
+              <option value="interval">Interval</option>
+            </select>
+          </label>
+          {automationDraft.scheduleType === "interval" ? (
+            <label className="review-popover__field">
+              <span>Interval minutes</span>
+              <input
+                type="number"
+                min={1}
+                value={automationDraft.intervalMinutes}
+                onChange={(event) => setAutomationDraft((current) => ({ ...current, intervalMinutes: event.target.value }))}
+              />
+            </label>
+          ) : null}
+          <button
+            className="button button--primary"
+            disabled={
+              !projectId ||
+              !automationDraft.name.trim() ||
+              (automationDraft.kind === "workflow" ? !automationDraft.workflowId : !automationDraft.prompt.trim()) ||
+              pendingActionKey === "automation:create"
+            }
+            onClick={() => void handleCreateAutomation()}
+          >
+            Create Automation
+          </button>
+        </div>
+
+        {visibleAutomations.map((automation) => {
+          const recentRuns = visibleAutomationRuns.filter((run) => run.automationId === automation.id).slice(0, 3);
+          return (
+            <div key={automation.id} className="skill-card">
+              <div className="skill-card__header">
+                <div>
+                  <h3>{automation.name}</h3>
+                  <span>{automation.kind} · {automation.scheduleType === "interval" ? `every ${automation.intervalMinutes ?? 60} min` : "manual"}</span>
+                </div>
+                <span className={`skill-card__status ${automation.status === "active" ? "skill-card__status--enabled" : ""}`}>
+                  {automation.status}
+                </span>
+              </div>
+              <p>{automation.kind === "workflow" ? `Workflow: ${automation.workflowId ?? "unconfigured"}` : automation.prompt ?? "No prompt configured."}</p>
+              <pre>
+                Last run: {automation.lastRunAt ? `${formatRelativeTime(automation.lastRunAt)} · ${automation.lastRunStatus ?? "idle"}` : "never"}
+                {"\n"}
+                Next run: {automation.nextRunAt ? formatRelativeTime(automation.nextRunAt) : "manual only"}
+              </pre>
+              <div className="workflow-run-card__actions">
+                <button
+                  className="button"
+                  disabled={pendingActionKey === `automation:run:${automation.id}`}
+                  onClick={() => void handleRunAutomation(automation.id)}
+                >
+                  Run Automation
+                </button>
+                <button
+                  className="button button--ghost"
+                  onClick={() =>
+                    void onUpdateAutomation(automation.id, {
+                      status: automation.status === "active" ? "paused" : "active",
+                    })
+                  }
+                >
+                  {automation.status === "active" ? "Pause" : "Activate"}
+                </button>
+              </div>
+              <div className="settings-panel__message">Recent runs: {recentRuns.length}</div>
+              {recentRuns.map((run) => (
+                <div key={run.id} className="workflow-step-row">
+                  <div className="workflow-step-row__title">
+                    <strong>{run.status}</strong>
+                    <span>{formatRelativeTime(run.updatedAt)}</span>
+                  </div>
+                  <div className="workflow-step-row__meta">
+                    {run.workflowRunId && <code>{run.workflowRunId}</code>}
+                    {run.threadId && <code>{run.threadId}</code>}
+                    {run.summary ? <small>{run.summary}</small> : null}
+                    {run.error ? <small>{run.error}</small> : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+          );
+        })}
+      </div>
       <div className="skills-grid">
         {workflows.map((workflow) => (
           <div key={workflow.id} className="skill-card">
@@ -4531,6 +4836,41 @@ function ReviewSummaryCard({ review }: { review: ReviewRecord }) {
   );
 }
 
+function RunContextCard({ snapshot }: { snapshot: TurnContextSnapshotRecord }) {
+  const includedSections = snapshot.sections.filter((section) => section.included);
+
+  return (
+    <details className="run-context-card">
+      <summary className="run-context-card__summary">
+        <div>
+          <strong>Run Context</strong>
+          <span>{snapshot.summaryText}</span>
+        </div>
+        <div className="run-context-card__meta">
+          <span>{snapshot.historyMode === "compressed" ? "Compressed history" : "Full history"}</span>
+          <span>{includedSections.length} sections</span>
+        </div>
+      </summary>
+      <div className="run-context-card__body">
+        {snapshot.sections.map((section) => (
+          <div key={section.key} className={`run-context-card__section ${section.included ? "" : "run-context-card__section--muted"}`}>
+            <div className="run-context-card__section-head">
+              <strong>{section.label}</strong>
+              <span>
+                {section.included ? "Included" : "Skipped"}
+                {typeof section.count === "number" ? ` · ${section.count}` : ""}
+                {typeof section.estimatedTokens === "number" ? ` · ~${formatCompactTokens(section.estimatedTokens)} tok` : ""}
+              </span>
+            </div>
+            <p>{section.summary}</p>
+            {section.detail ? <pre>{section.detail}</pre> : null}
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
 function SteerCard({
   value,
   onChange,
@@ -5659,6 +5999,7 @@ function createEmptyThreadSessionView() {
   return {
     turns: [] as TurnRecord[],
     items: [] as ItemRecord[],
+    turnContexts: [] as TurnContextSnapshotRecord[],
     pendingApproval: null as PendingApproval | null,
     submitting: false,
   };
