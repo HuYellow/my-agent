@@ -25,6 +25,7 @@ interface BuildPromptInput {
     resolvedPrompts?: Array<{ name: string; content: string }>;
     resolvedResources?: Array<{ uri: string; content: string }>;
   }>;
+  requirementContext?: string;
   ideContext?: {
     projectName: string;
     workspaceRoot: string;
@@ -52,6 +53,10 @@ export class PromptBuilder {
       renderSkillMetadata(input.discoveredSkills),
       renderEnvironmentContext(input.cwd, input.workspace.shell),
     ];
+
+    if (input.requirementContext) {
+      sections.push(input.requirementContext);
+    }
 
     if (input.ideContext) {
       sections.push(renderIdeContext(input.ideContext));

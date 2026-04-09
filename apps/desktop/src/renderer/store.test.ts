@@ -16,6 +16,8 @@ afterEach(() => {
     agentTasks: [],
     environments: [],
     executionContexts: [],
+    requirementMemories: [],
+    requirements: [],
     reviews: [],
     terminals: [],
     terminalOutputArchives: [],
@@ -262,6 +264,11 @@ describe("desktop thread smoke", () => {
     expect(source).toContain("ReviewSummaryCard");
     expect(source).toContain("SteerCard");
     expect(source).toContain("TerminalCard");
+    expect(source).toContain("DiffPatchPanel");
+    expect(source).toContain("threadWorkspaceView");
+    expect(source).toContain("Diff / Patch");
+    expect(source).toContain("workspace-toggle");
+    expect(source).toContain("buildThreadChangeSets");
     expect(source).toContain("threadTerminals");
     expect(source).toContain("selectedTerminalId");
     expect(source).toContain("reviewMenuOpen");
@@ -285,6 +292,11 @@ describe("desktop thread smoke", () => {
     expect(source).toContain("buildExecutionContextLineage");
     expect(source).toContain("buildAgentTree");
     expect(source).toContain("workflow-runtime-grid");
+    expect(source).toContain("RequirementOverview");
+    expect(source).toContain("RequirementsPanel");
+    expect(source).toContain("activeRequirementId");
+    expect(source).toContain("Requirement Memory");
+    expect(source).toContain("Unassigned Threads");
     expect(source).toContain("Execution Context Lineage");
     expect(source).toContain("executionContexts");
     expect(source).toContain("agentTasks");

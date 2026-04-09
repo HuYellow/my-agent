@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { createRuntimeKernel } from "../src/runtime-kernel.js";
 
 describe("HarnessServer protocol compatibility", () => {
-  it("accepts review/list and turn/steer methods", async () => {
+  it("accepts review/list, requirement/list, and turn/steer methods", async () => {
     const homeDir = mkdtempSync(join(tmpdir(), "my-agent-kernel-"));
     const kernel = createRuntimeKernel({
       homeDir,
@@ -17,6 +17,11 @@ describe("HarnessServer protocol compatibility", () => {
         jsonrpc: "2.0",
         id: "review-list",
         method: "review/list",
+      });
+      const requirementList = await kernel.server.handle({
+        jsonrpc: "2.0",
+        id: "requirement-list",
+        method: "requirement/list",
       });
       const steer = await kernel.server.handle({
         jsonrpc: "2.0",
@@ -54,6 +59,7 @@ describe("HarnessServer protocol compatibility", () => {
       });
 
       expect("result" in reviewList && Array.isArray((reviewList as any).result.reviews)).toBe(true);
+      expect("result" in requirementList && Array.isArray((requirementList as any).result.requirements)).toBe(true);
       expect("error" in steer && steer.error.message).toContain("Turn not found");
       expect("error" in terminalApproval && terminalApproval.error.message).toContain("Terminal session not found");
       expect("error" in terminalArchive && terminalArchive.error.message).toContain("Terminal session not found");

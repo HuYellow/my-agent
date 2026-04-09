@@ -68,6 +68,7 @@ interface RunnerContext {
     prompts: import("@my-agent/protocol").McpPromptRecord[];
     resources: import("@my-agent/protocol").McpResourceRecord[];
   }>;
+  requirementContext?: string;
   ideContext?: {
     projectName: string;
     workspaceRoot: string;
@@ -138,6 +139,7 @@ export class OpenAiCompatibleRunner {
       selectedSkills: context.selectedSkills,
       discoveredSkills: context.discoveredSkills,
       mcpContext: context.mcpContext,
+      requirementContext: context.requirementContext,
       ideContext: context.ideContext,
     });
     const toolService = new ToolService(context.workspace, {

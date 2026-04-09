@@ -127,6 +127,80 @@ describe("HarnessDatabase projects", () => {
     ]);
   });
 
+  it("stores requirement entities, thread bindings, and structured memories", () => {
+    const root = mkdtempSync(join(tmpdir(), "my-agent-db-"));
+    const database = new HarnessDatabase(join(root, "app.db"));
+    const primaryProject = database.listProjects()[0]!;
+    const relatedProject = database.createProject({
+      id: "project-related",
+      name: "Related",
+      rootPath: root,
+      shell: process.platform === "win32" ? "powershell" : "bash",
+      sandboxMode: "workspace-write",
+      approvalPolicy: "on-request",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    const now = new Date().toISOString();
+
+    database.createRequirement({
+      id: "requirement-1",
+      title: "Ship requirement memory",
+      status: "active",
+      primaryProjectId: primaryProject.id,
+      relatedProjectIds: [relatedProject.id],
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    database.upsertRequirementMemory({
+      requirementId: "requirement-1",
+      manual: {
+        brief: "Shared memory for a requirement.",
+        goals: ["Ship the new model"],
+        constraints: [],
+        decisions: ["Keep one thread per requirement binding"],
+        openQuestions: [],
+        definitionOfDone: ["Desktop UI loads requirements"],
+      },
+      derived: {
+        linkedProjects: [],
+        linkedThreads: [],
+        recentReviews: [],
+        recentArtifacts: [],
+        recentChanges: ["src/app.ts"],
+        activitySummary: "1 changed path",
+      },
+      updatedAt: now,
+      lastRebuiltAt: now,
+    });
+    database.createThread({
+      id: "thread-requirement",
+      title: "Requirement thread",
+      projectId: primaryProject.id,
+      requirementId: "requirement-1",
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+
+    expect(database.getRequirement("requirement-1")).toMatchObject({
+      primaryProjectId: primaryProject.id,
+      relatedProjectIds: [relatedProject.id],
+    });
+    expect(database.getRequirementMemory("requirement-1")).toMatchObject({
+      manual: {
+        brief: "Shared memory for a requirement.",
+      },
+      derived: {
+        recentChanges: ["src/app.ts"],
+      },
+    });
+    expect(database.getThread("thread-requirement")).toMatchObject({
+      requirementId: "requirement-1",
+    });
+  });
+
   it("persists extended terminal session state for future PTY backends", () => {
     const root = mkdtempSync(join(tmpdir(), "my-agent-db-"));
     const database = new HarnessDatabase(join(root, "app.db"));

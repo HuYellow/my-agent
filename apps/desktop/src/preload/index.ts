@@ -5,6 +5,7 @@ import {
   type CommandExecParams,
   type ConfigWriteParams,
   type CreateProjectParams,
+  type CreateRequirementParams,
   type ExecutionContextRecord,
   type HarnessEvent,
   type InterruptTurnParams,
@@ -12,6 +13,8 @@ import {
   type ReviewRecord,
   type ReviewStartParams,
   type ProviderModelRecord,
+  type RequirementMemoryRecord,
+  type RequirementRecord,
   type TerminalArchiveParams,
   type TerminalApprovalResponseParams,
   type TerminalClearBufferParams,
@@ -33,6 +36,7 @@ import {
   type TurnInputAttachment,
   type TurnSteerParams,
   type TurnSteerRecord,
+  type UpdateRequirementParams,
   type UpdateThreadParams,
   type UpdateProjectParams,
 } from "@my-agent/protocol";
@@ -41,6 +45,18 @@ const api = {
   initialize: () => ipcRenderer.invoke("harness:initialize"),
   createProject: (params: CreateProjectParams) => ipcRenderer.invoke("project:create", params),
   updateProject: (params: UpdateProjectParams) => ipcRenderer.invoke("project:update", params),
+  listRequirements: (params?: { projectId?: string }) =>
+    ipcRenderer.invoke("requirement:list", params ?? {}) as Promise<{ requirements: RequirementRecord[]; memories: RequirementMemoryRecord[] }>,
+  getRequirement: (requirementId: string) =>
+    ipcRenderer.invoke("requirement:get", { requirementId }) as Promise<{ requirement: RequirementRecord; memory: RequirementMemoryRecord }>,
+  createRequirement: (params: CreateRequirementParams) =>
+    ipcRenderer.invoke("requirement:create", params) as Promise<{ requirement: RequirementRecord; memory: RequirementMemoryRecord }>,
+  updateRequirement: (params: UpdateRequirementParams) =>
+    ipcRenderer.invoke("requirement:update", params) as Promise<{ requirement: RequirementRecord; memory: RequirementMemoryRecord }>,
+  assignThreadToRequirement: (params: { requirementId: string; threadId: string }) =>
+    ipcRenderer.invoke("requirement:assign-thread", params) as Promise<{ requirement: RequirementRecord; memory: RequirementMemoryRecord; thread: import("@my-agent/protocol").ThreadRecord }>,
+  unassignThreadFromRequirement: (params: { threadId: string }) =>
+    ipcRenderer.invoke("requirement:unassign-thread", params) as Promise<{ thread: import("@my-agent/protocol").ThreadRecord }>,
   updateThread: (params: UpdateThreadParams) => ipcRenderer.invoke("thread:update", params),
   startThread: (params: StartThreadParams) => ipcRenderer.invoke("thread:start", params),
   resumeThread: (threadId: string) => ipcRenderer.invoke("thread:resume", { threadId }),

@@ -37,6 +37,7 @@ import {
   Moon,
   Rabbit,
   MoreHorizontal,
+  Copy,
   Key,
   FolderGit2,
   Shield,
@@ -57,6 +58,8 @@ import {
   type ProjectRecord,
   type ProviderProfile,
   type ProviderModelRecord,
+  type RequirementMemoryRecord,
+  type RequirementRecord,
   type ReviewRecord,
   type SandboxMode,
   type SkillDescriptor,
@@ -86,6 +89,7 @@ type NavView = "threads" | "skills" | "plugins" | "automation" | "settings";
 type ComposerAttachment = TurnInputAttachment;
 type ThemeMode = "light" | "dark";
 type ReviewSourceKind = ReviewRecord["source"]["kind"];
+type ThreadWorkspaceView = "conversation" | "diff";
 
 const SIDEBAR_WIDTH_STORAGE_KEY = "my-agent-sidebar-width-ratio";
 const SIDEBAR_MIN_RATIO = 0.18;
@@ -174,6 +178,25 @@ interface ChangedFileReview {
   error?: string;
 }
 
+interface ThreadChangeFile {
+  itemId: string;
+  turnId: string;
+  path: string;
+  title: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface ThreadChangeSet {
+  id: string;
+  turnId: string;
+  createdAt: string;
+  updatedAt: string;
+  label: string;
+  files: ThreadChangeFile[];
+}
+
 interface ComposerDraftState {
   input: string;
   attachments: ComposerAttachment[];
@@ -190,12 +213,23 @@ interface UserAttachmentSummary {
   previewSrc?: string;
 }
 
+interface RequirementMemoryDraft {
+  brief: string;
+  goals: string;
+  constraints: string;
+  decisions: string;
+  openQuestions: string;
+  definitionOfDone: string;
+}
+
 export function App() {
   const {
     bootstrapped,
     bootError,
     loading,
     projects,
+    requirements,
+    requirementMemories,
     threads,
     threadSessions,
     reviews,
@@ -211,6 +245,7 @@ export function App() {
     terminalCapabilities,
     skills,
     activeProjectId,
+    activeRequirementId,
     activeThreadId,
     config,
     providerTestMessage,
@@ -219,9 +254,14 @@ export function App() {
     providerModelsError,
     bootstrap,
     createProject,
+    createRequirement,
+    updateRequirement,
     createThread,
+    assignThreadToRequirement,
+    unassignThreadFromRequirement,
     updateProject,
     updateThread,
+    selectRequirement,
     selectThread,
     sendTurn,
     steerTurn,
@@ -261,6 +301,7 @@ export function App() {
   const [reviewSourceKind, setReviewSourceKind] = useState<ReviewSourceKind>("workspace");
   const [reviewBaseBranch, setReviewBaseBranch] = useState("main");
   const [reviewCommit, setReviewCommit] = useState("");
+  const [threadWorkspaceView, setThreadWorkspaceView] = useState<ThreadWorkspaceView>("conversation");
   const [steerInput, setSteerInput] = useState("");
   const [selectedTerminalId, setSelectedTerminalId] = useState<string | null>(null);
   const [terminalInput, setTerminalInput] = useState("");
@@ -279,6 +320,18 @@ export function App() {
     approvalPolicy: "on-request",
     sandboxMode: "workspace-write",
   });
+  const [newRequirementTitle, setNewRequirementTitle] = useState("");
+  const [newRequirementProjectId, setNewRequirementProjectId] = useState<string | null>(null);
+  const [savingRequirement, setSavingRequirement] = useState(false);
+  const [requirementDraft, setRequirementDraft] = useState<RequirementMemoryDraft>({
+    brief: "",
+    goals: "",
+    constraints: "",
+    decisions: "",
+    openQuestions: "",
+    definitionOfDone: "",
+  });
+  const [requirementSaveMessage, setRequirementSaveMessage] = useState<string | null>(null);
   const composerMenuRef = useRef<HTMLDivElement | null>(null);
   const modelMenuRef = useRef<HTMLDivElement | null>(null);
   const reasoningMenuRef = useRef<HTMLDivElement | null>(null);
@@ -336,6 +389,40 @@ export function App() {
       sandboxMode: selectedProject?.sandboxMode ?? config.workspace.sandboxMode,
     });
   }, [activeProjectId, config, projects]);
+
+  useEffect(() => {
+    if (!newRequirementProjectId) {
+      const selectedRequirement = activeRequirementId ? requirements.find((requirement) => requirement.id === activeRequirementId) : null;
+      setNewRequirementProjectId(selectedRequirement?.primaryProjectId ?? activeProjectId ?? projects[0]?.id ?? null);
+    }
+  }, [activeProjectId, activeRequirementId, newRequirementProjectId, projects, requirements]);
+
+  useEffect(() => {
+    const currentMemory = activeRequirementId
+      ? requirementMemories.find((memory) => memory.requirementId === activeRequirementId) ?? null
+      : null;
+
+    if (!currentMemory) {
+      setRequirementDraft({
+        brief: "",
+        goals: "",
+        constraints: "",
+        decisions: "",
+        openQuestions: "",
+        definitionOfDone: "",
+      });
+      return;
+    }
+
+    setRequirementDraft({
+      brief: currentMemory.manual.brief,
+      goals: currentMemory.manual.goals.join("\n"),
+      constraints: currentMemory.manual.constraints.join("\n"),
+      decisions: currentMemory.manual.decisions.join("\n"),
+      openQuestions: currentMemory.manual.openQuestions.join("\n"),
+      definitionOfDone: currentMemory.manual.definitionOfDone.join("\n"),
+    });
+  }, [activeRequirementId, requirementMemories]);
 
   useEffect(() => {
     const handlePointerDown = (event: PointerEvent) => {
@@ -437,6 +524,14 @@ export function App() {
     () => buildConversationEntries(orderedItems),
     [orderedItems],
   );
+  const threadChangeSets = useMemo(
+    () => buildThreadChangeSets({ items: orderedItems, turns: activeSession?.turns ?? [] }),
+    [activeSession?.turns, orderedItems],
+  );
+  const threadChangedFileCount = useMemo(
+    () => new Set(threadChangeSets.flatMap((changeSet) => changeSet.files.map((file) => file.path))).size,
+    [threadChangeSets],
+  );
   const activeThread = useMemo(
     () => orderedThreads.find((thread) => thread.id === activeThreadId),
     [activeThreadId, orderedThreads],
@@ -445,10 +540,47 @@ export function App() {
     () => projects.find((project) => project.id === activeProjectId),
     [activeProjectId, projects],
   );
+  const activeRequirement = useMemo(
+    () => requirements.find((requirement) => requirement.id === activeRequirementId) ?? null,
+    [activeRequirementId, requirements],
+  );
+  const activeRequirementMemory = useMemo(
+    () =>
+      (activeRequirementId
+        ? requirementMemories.find((memory) => memory.requirementId === activeRequirementId)
+        : undefined) ?? null,
+    [activeRequirementId, requirementMemories],
+  );
+  const activeRequirementPrimaryProject = useMemo(
+    () => (activeRequirement ? projects.find((project) => project.id === activeRequirement.primaryProjectId) ?? null : null),
+    [activeRequirement, projects],
+  );
+  const requirementThreads = useMemo(
+    () =>
+      activeRequirementId
+        ? orderedThreads.filter((thread) => thread.requirementId === activeRequirementId)
+        : [],
+    [activeRequirementId, orderedThreads],
+  );
+  const unassignedThreadsByProject = useMemo(() => {
+    const grouped = new Map<string, ThreadRecord[]>();
+
+    for (const thread of orderedThreads.filter((entry) => !entry.requirementId)) {
+      const bucket = grouped.get(thread.projectId) ?? [];
+      bucket.push(thread);
+      grouped.set(thread.projectId, bucket);
+    }
+
+    return [...grouped.entries()].map(([projectId, projectThreads]) => ({
+      project: projects.find((project) => project.id === projectId) ?? null,
+      threads: projectThreads,
+    }));
+  }, [orderedThreads, projects]);
   const activeTurn = useMemo(
     () => [...(activeSession?.turns ?? [])].sort((left, right) => left.updatedAt.localeCompare(right.updatedAt)).at(-1),
     [activeSession?.turns],
   );
+  const showingThreadWorkspace = Boolean(activeThreadId && activeThread);
   const interruptibleTurnId = useMemo(() => {
     const candidate = [...(activeSession?.turns ?? [])]
       .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt))
@@ -569,6 +701,17 @@ export function App() {
   const includeIdeContext = activeDraft.includeIdeContext;
   const planMode = activeDraft.planMode;
   const pendingApproval = activeSession?.pendingApproval ?? null;
+
+  useEffect(() => {
+    setThreadWorkspaceView("conversation");
+  }, [activeThreadId]);
+
+  useEffect(() => {
+    if (threadWorkspaceView === "diff" && threadChangeSets.length === 0) {
+      setThreadWorkspaceView("conversation");
+    }
+  }, [threadChangeSets.length, threadWorkspaceView]);
+
   useEffect(() => {
     const targetThreadId = pendingThreadScrollRef.current;
 
@@ -780,9 +923,66 @@ export function App() {
     };
   }, [activeProject?.rootPath, activeThreadId]);
 
-  const handleCreateThread = async (projectId?: string) => {
-    await createThread(undefined, projectId ?? activeProjectId);
+  const handleCreateThread = async (projectId?: string, requirementId?: string) => {
+    await createThread(undefined, projectId ?? activeProjectId, requirementId ?? activeRequirementId);
     setActiveView("threads");
+  };
+
+  const handleSelectRequirement = async (requirementId?: string) => {
+    await selectRequirement(requirementId);
+    setActiveView("threads");
+  };
+
+  const handleCreateRequirement = async () => {
+    const title = newRequirementTitle.trim();
+    const primaryProjectId = newRequirementProjectId ?? activeProjectId ?? projects[0]?.id;
+
+    if (!title || !primaryProjectId) {
+      return;
+    }
+
+    setSavingRequirement(true);
+    setRequirementSaveMessage(null);
+
+    try {
+      await createRequirement({
+        title,
+        primaryProjectId,
+      });
+      setNewRequirementTitle("");
+      setRequirementSaveMessage("Requirement created.");
+    } catch (error) {
+      setRequirementSaveMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSavingRequirement(false);
+    }
+  };
+
+  const handleSaveRequirementMemory = async () => {
+    if (!activeRequirement) {
+      return;
+    }
+
+    setSavingRequirement(true);
+    setRequirementSaveMessage(null);
+
+    try {
+      await updateRequirement(activeRequirement.id, {
+        memory: {
+          brief: requirementDraft.brief,
+          goals: splitLines(requirementDraft.goals),
+          constraints: splitLines(requirementDraft.constraints),
+          decisions: splitLines(requirementDraft.decisions),
+          openQuestions: splitLines(requirementDraft.openQuestions),
+          definitionOfDone: splitLines(requirementDraft.definitionOfDone),
+        },
+      });
+      setRequirementSaveMessage("Requirement memory saved.");
+    } catch (error) {
+      setRequirementSaveMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSavingRequirement(false);
+    }
   };
 
   const handleThreadSandboxModeChange = async (mode: SandboxMode) => {
@@ -1177,17 +1377,27 @@ export function App() {
 
         {/* 缂傚倸鍊搁崐鎼佸磹閻戣姤鍊块柨鏇炲€堕埀顒€鍟崇粻娑樷槈濡⒈妲繝鐢靛仦閸ㄨ埖绌遍悜妯诲弿闁规儼濮ら悡鍐煕濠靛棗顏╅柡鍡樻礃缁绘稑鐣濇繝渚€鍋楅梺鍝勬湰缁嬫垿鎮惧┑鍫氬亾閿濆簼鎲炬繛宸幘缁辨挻鎷呴悷鏉款潔闂侀潧妫楃粣宸搄ect闂傚倷娴囬褍顫濋敃鍌︾稏濠㈣埖鍔曠粻鏍煕椤愶絾绀€缁炬儳娼￠弻鐔封枔閸喗鐏撶紓浣插亾濠电姴娲﹂悡娑㈡煕閹扳晛濡垮褎鐩弻?*/}
         <div className="sidebar__section sidebar__section--projects">
-          <ThreadsPanel
+          <RequirementsPanel
+            requirements={requirements}
+            requirementMemories={requirementMemories}
+            activeRequirementId={activeRequirementId}
             projects={projects}
-            activeProjectId={activeProjectId}
             threads={orderedThreads}
             activeThreadId={activeThreadId}
             workingThreadIds={workingThreadIds}
             search={threadSearch}
             onSearchChange={setThreadSearch}
+            onSelectRequirement={(requirementId) => void handleSelectRequirement(requirementId)}
             onSelectThread={handleSelectThread}
-            onCreateThread={handleCreateThread}
+            onCreateThread={(projectId, requirementId) => void handleCreateThread(projectId, requirementId)}
             onCreateProject={handleCreateProject}
+            onCreateRequirement={() => void handleCreateRequirement()}
+            newRequirementTitle={newRequirementTitle}
+            onNewRequirementTitleChange={setNewRequirementTitle}
+            newRequirementProjectId={newRequirementProjectId}
+            onNewRequirementProjectIdChange={setNewRequirementProjectId}
+            savingRequirement={savingRequirement}
+            unassignedThreadsByProject={unassignedThreadsByProject}
             onRevealProject={async (projectPath) => {
               await window.myAgent.revealProjectPath(projectPath).catch(() => null);
             }}
@@ -1219,112 +1429,179 @@ export function App() {
             {/* 婵犵數濮烽。顔炬閺囥垹纾婚柟杈剧畱绾惧綊鏌￠崶銉ョ仾闁稿顦埞鎴﹀磼濠婂海鍔哥紒鐐劤濞硷繝寮婚悢铏圭＜闁靛繒濮甸悘鍫ユ⒑閸涘﹤濮€闁稿鎹囧缁樻媴鐟欏嫬浠╅梺绋垮濡炶棄鐣峰鍫熸櫇闁稿本纰嶆潏鍫濐渻閵堝棛澧遍柛瀣仱閹?*/}
             <header className="main-header">
               <div className="main-header__title">
-                <h1>{activeThread?.title ?? "New Thread"}</h1>
-                <span className="main-header__project">{activeProject?.name ?? "Current Project"}</span>
+                <h1>{showingThreadWorkspace ? activeThread?.title ?? "New Thread" : activeRequirement?.title ?? "Requirements"}</h1>
+                <span className="main-header__project">
+                  {showingThreadWorkspace
+                    ? activeProject?.name ?? "Current Project"
+                    : activeRequirementPrimaryProject?.name ?? activeProject?.name ?? "Requirement Workspace"}
+                </span>
               </div>
               <div className="main-header__actions">
-                <div className="review-popover-anchor" ref={reviewMenuRef}>
+                {showingThreadWorkspace ? (
+                  <>
+                    <div className="workspace-toggle" role="tablist" aria-label="Thread workspace">
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={threadWorkspaceView === "conversation"}
+                        className={`workspace-toggle__button ${threadWorkspaceView === "conversation" ? "workspace-toggle__button--active" : ""}`}
+                        onClick={() => setThreadWorkspaceView("conversation")}
+                      >
+                        <MessageSquarePlus size={14} />
+                        <span>Transcript</span>
+                      </button>
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={threadWorkspaceView === "diff"}
+                        className={`workspace-toggle__button ${threadWorkspaceView === "diff" ? "workspace-toggle__button--active" : ""}`}
+                        onClick={() => setThreadWorkspaceView("diff")}
+                        disabled={threadChangeSets.length === 0}
+                      >
+                        <FileText size={14} />
+                        <span>Diff / Patch</span>
+                        {threadChangedFileCount > 0 && <span className="workspace-toggle__badge">{threadChangedFileCount}</span>}
+                      </button>
+                    </div>
+                    <div className="review-popover-anchor" ref={reviewMenuRef}>
+                      <button
+                        type="button"
+                        className="main-header__action"
+                        onClick={() => setReviewMenuOpen((current) => !current)}
+                        disabled={!activeProjectId || reviewRunning}
+                      >
+                        <Shield size={14} />
+                        <span>{reviewRunning ? "Reviewing…" : `Review · ${reviewSourceLabel}`}</span>
+                        <ChevronDown size={12} />
+                      </button>
+
+                      {reviewMenuOpen && (
+                        <>
+                          <button
+                            type="button"
+                            className="review-popover-scrim"
+                            aria-label="Close review source menu"
+                            onClick={() => setReviewMenuOpen(false)}
+                          />
+                          <div className="review-popover">
+                            <div className="review-popover__header">
+                              <strong>Review source</strong>
+                              <small>Choose which diff to review before launching.</small>
+                            </div>
+
+                            <div className="review-popover__options">
+                              {REVIEW_SOURCE_OPTIONS.map((option) => (
+                                <button
+                                  key={option.value}
+                                  type="button"
+                                  className={`review-popover__option ${option.value === reviewSourceKind ? "review-popover__option--active" : ""}`}
+                                  onClick={() => setReviewSourceKind(option.value)}
+                                >
+                                  <span className="review-popover__option-body">
+                                    <strong>{option.label}</strong>
+                                    <small>{option.hint}</small>
+                                  </span>
+                                  {option.value === reviewSourceKind && <Check size={14} />}
+                                </button>
+                              ))}
+                            </div>
+
+                            {reviewSourceKind === "base_branch" && (
+                              <label className="review-popover__field">
+                                <span>Base branch</span>
+                                <input
+                                  type="text"
+                                  value={reviewBaseBranch}
+                                  onChange={(event) => setReviewBaseBranch(event.target.value)}
+                                  placeholder="main"
+                                />
+                              </label>
+                            )}
+
+                            {reviewSourceKind === "commit" && (
+                              <label className="review-popover__field">
+                                <span>Commit SHA</span>
+                                <input
+                                  type="text"
+                                  value={reviewCommit}
+                                  onChange={(event) => setReviewCommit(event.target.value)}
+                                  placeholder="abc1234"
+                                />
+                              </label>
+                            )}
+
+                            <div className="review-popover__footer">
+                              <button type="button" className="review-popover__cancel" onClick={() => setReviewMenuOpen(false)}>
+                                Cancel
+                              </button>
+                              <button type="button" className="review-popover__submit" onClick={() => void triggerReview()} disabled={!canStartReview}>
+                                Start review
+                              </button>
+                            </div>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </>
+                ) : (
                   <button
                     type="button"
                     className="main-header__action"
-                    onClick={() => setReviewMenuOpen((current) => !current)}
-                    disabled={!activeProjectId || reviewRunning}
+                    onClick={() => void handleCreateThread(activeRequirement?.primaryProjectId, activeRequirement?.id)}
+                    disabled={!activeRequirement}
                   >
-                    <Shield size={14} />
-                    <span>{reviewRunning ? "Reviewing…" : `Review · ${reviewSourceLabel}`}</span>
-                    <ChevronDown size={12} />
+                    <Plus size={14} />
+                    <span>New Thread</span>
                   </button>
-
-                  {reviewMenuOpen && (
-                    <>
-                      <button
-                        type="button"
-                        className="review-popover-scrim"
-                        aria-label="Close review source menu"
-                        onClick={() => setReviewMenuOpen(false)}
-                      />
-                      <div className="review-popover">
-                        <div className="review-popover__header">
-                          <strong>Review source</strong>
-                          <small>Choose which diff to review before launching.</small>
-                        </div>
-
-                        <div className="review-popover__options">
-                          {REVIEW_SOURCE_OPTIONS.map((option) => (
-                            <button
-                              key={option.value}
-                              type="button"
-                              className={`review-popover__option ${option.value === reviewSourceKind ? "review-popover__option--active" : ""}`}
-                              onClick={() => setReviewSourceKind(option.value)}
-                            >
-                              <span className="review-popover__option-body">
-                                <strong>{option.label}</strong>
-                                <small>{option.hint}</small>
-                              </span>
-                              {option.value === reviewSourceKind && <Check size={14} />}
-                            </button>
-                          ))}
-                        </div>
-
-                        {reviewSourceKind === "base_branch" && (
-                          <label className="review-popover__field">
-                            <span>Base branch</span>
-                            <input
-                              type="text"
-                              value={reviewBaseBranch}
-                              onChange={(event) => setReviewBaseBranch(event.target.value)}
-                              placeholder="main"
-                            />
-                          </label>
-                        )}
-
-                        {reviewSourceKind === "commit" && (
-                          <label className="review-popover__field">
-                            <span>Commit SHA</span>
-                            <input
-                              type="text"
-                              value={reviewCommit}
-                              onChange={(event) => setReviewCommit(event.target.value)}
-                              placeholder="abc1234"
-                            />
-                          </label>
-                        )}
-
-                        <div className="review-popover__footer">
-                          <button type="button" className="review-popover__cancel" onClick={() => setReviewMenuOpen(false)}>
-                            Cancel
-                          </button>
-                          <button type="button" className="review-popover__submit" onClick={() => void triggerReview()} disabled={!canStartReview}>
-                            Start review
-                          </button>
-                        </div>
-                      </div>
-                    </>
-                  )}
-                </div>
+                )}
               </div>
             </header>
 
             {/* 濠电姷鏁告慨鐑藉极閹间礁纾婚柣鎰惈閸ㄥ倿鏌ｉ姀鐘冲暈闁稿顑呴埞鎴︽偐閹绘帗娈銈嗘礋娴滃爼寮诲☉妯锋婵炲棙鍔楃粙鍥╃磽娴ｆ彃浜鹃梺绯曞墲鐪夌紒璇叉閺屾洟宕煎┑鍥ф濡炪倕绻堥崕鐢稿蓟?*/}
             <div className="message-area" ref={messageAreaRef}>
-              {latestReview && <ReviewSummaryCard review={latestReview} />}
-              {orderedItems.length === 0 ? (
-                <EmptyState />
+              {showingThreadWorkspace ? (
+                threadWorkspaceView === "diff" ? (
+                  <DiffPatchPanel threadId={activeThreadId} changeSets={threadChangeSets} latestReview={latestReview} />
+                ) : (
+                  <>
+                    {latestReview && <ReviewSummaryCard review={latestReview} />}
+                    {orderedItems.length === 0 ? (
+                      <EmptyState />
+                    ) : (
+                      <ConversationFeed entries={conversationEntries} threadId={activeThreadId} />
+                    )}
+                    {pendingApproval && (
+                      <ApprovalRequest
+                        approval={pendingApproval}
+                        onApprove={(scope) => void respondApproval(pendingApproval.id, "approve", scope)}
+                        onReject={() => void respondApproval(pendingApproval.id, "reject")}
+                      />
+                    )}
+                  </>
+                )
               ) : (
-                <ConversationFeed entries={conversationEntries} threadId={activeThreadId} />
-              )}
-
-              {/* 闂傚倸鍊峰ù鍥敋瑜庨〃銉╁箹娴ｇ鍋嶅┑鐘诧工閻楀棛绮堥崼鐔虹瘈闂傚牊绋掑婵嬫煟濠靛棛鍩ｉ柡宀€鍠栭幃婊兾熼悜鈺傚闂佽瀛╃喊宥呯暆缁嬫娼栨繛宸簻閸ㄥ倹銇勯弴鐐村櫣闁告挸鍟块埞鎴︽偐椤愵澀澹?*/}
-              {pendingApproval && (
-                <ApprovalRequest
-                  approval={pendingApproval}
-                  onApprove={(scope) => void respondApproval(pendingApproval.id, "approve", scope)}
-                  onReject={() => void respondApproval(pendingApproval.id, "reject")}
+                <RequirementOverview
+                  requirement={activeRequirement}
+                  memory={activeRequirementMemory}
+                  projects={projects}
+                  threads={requirementThreads}
+                  draft={requirementDraft}
+                  saveMessage={requirementSaveMessage}
+                  saving={savingRequirement}
+                  unassignedThreadsByProject={unassignedThreadsByProject}
+                  onDraftChange={setRequirementDraft}
+                  onSave={() => void handleSaveRequirementMemory()}
+                  onCreateThread={() => void handleCreateThread(activeRequirement?.primaryProjectId, activeRequirement?.id)}
+                  onOpenThread={(threadId) => void handleSelectThread(threadId)}
+                  onAssignThread={(threadId) =>
+                    activeRequirement ? void assignThreadToRequirement(activeRequirement.id, threadId) : undefined
+                  }
+                  onUnassignThread={(threadId) => void unassignThreadFromRequirement(threadId)}
                 />
               )}
             </div>
 
-            {steerableTurnId && (
+            {showingThreadWorkspace && steerableTurnId && (
               <SteerCard
                 value={steerInput}
                 onChange={setSteerInput}
@@ -1333,7 +1610,7 @@ export function App() {
               />
             )}
 
-            {activeThreadId && (
+            {showingThreadWorkspace && activeThreadId && (
               <TerminalCard
                 sessions={threadTerminals}
                 session={activeTerminal}
@@ -1355,6 +1632,7 @@ export function App() {
             )}
 
             {/* 闂傚倸鍊风粈浣革耿闁秴鍌ㄧ憸鏃堝箖濞差亜惟闁靛鍟浠嬪箖閵忋倖鍋傞幖杈剧秶缁辩敻姊虹拠鎻掝劉缂佸甯熼幗顐ょ磽閸屾氨孝婵炲樊鍙冨濠氭偄閻撳海鐣鹃悷婊冪Ч瀵櫕娼忛埞鎯т壕婵炲牆鐏濋弸鐔封攽閻愯韬€?*/}
+            {showingThreadWorkspace ? (
             <ComposerBar
               input={input}
               onChange={(value) =>
@@ -1442,6 +1720,7 @@ export function App() {
               loading={currentThreadBusy}
               canInterrupt={canInterrupt}
             />
+            ) : null}
           </>
         ) : activeView === "skills" ? (
           <SkillsPanel
@@ -1622,6 +1901,216 @@ function NavButton({ icon, label, active, onClick }: { icon: React.ReactNode; la
       <span className="nav-button__icon">{icon}</span>
       <span className="nav-button__label">{label}</span>
     </button>
+  );
+}
+
+function RequirementsPanel({
+  requirements,
+  requirementMemories,
+  activeRequirementId,
+  projects,
+  threads,
+  activeThreadId,
+  workingThreadIds,
+  search,
+  onSearchChange,
+  onSelectRequirement,
+  onSelectThread,
+  onCreateThread,
+  onCreateProject,
+  onCreateRequirement,
+  newRequirementTitle,
+  onNewRequirementTitleChange,
+  newRequirementProjectId,
+  onNewRequirementProjectIdChange,
+  savingRequirement,
+  unassignedThreadsByProject,
+  onRevealProject,
+}: {
+  requirements: RequirementRecord[];
+  requirementMemories: RequirementMemoryRecord[];
+  activeRequirementId?: string;
+  projects: ProjectRecord[];
+  threads: ThreadRecord[];
+  activeThreadId?: string;
+  workingThreadIds: Set<string>;
+  search: string;
+  onSearchChange: (value: string) => void;
+  onSelectRequirement: (requirementId?: string) => void;
+  onSelectThread: (threadId: string) => void;
+  onCreateThread: (projectId?: string, requirementId?: string) => void;
+  onCreateProject: () => void;
+  onCreateRequirement: () => void;
+  newRequirementTitle: string;
+  onNewRequirementTitleChange: (value: string) => void;
+  newRequirementProjectId: string | null;
+  onNewRequirementProjectIdChange: (value: string) => void;
+  savingRequirement: boolean;
+  unassignedThreadsByProject: Array<{ project: ProjectRecord | null; threads: ThreadRecord[] }>;
+  onRevealProject: (projectPath: string) => void;
+}) {
+  const searchTerm = search.trim().toLowerCase();
+  const filteredRequirements = requirements.filter((requirement) => {
+    if (!searchTerm) {
+      return true;
+    }
+
+    const memory = requirementMemories.find((entry) => entry.requirementId === requirement.id);
+    const project = projects.find((entry) => entry.id === requirement.primaryProjectId);
+    const haystack = [
+      requirement.title,
+      requirement.status,
+      project?.name ?? "",
+      memory?.manual.brief ?? "",
+    ]
+      .join(" ")
+      .toLowerCase();
+
+    return haystack.includes(searchTerm);
+  });
+
+  return (
+    <div className="sidebar-secondary__content thread-sidebar requirement-sidebar">
+      <div className="thread-sidebar__header">
+        <div className="thread-sidebar__title-row">
+          <span className="thread-sidebar__title">Requirements</span>
+          <div className="thread-sidebar__actions">
+            <button
+              className="thread-sidebar__action"
+              onClick={() => void onCreateProject()}
+              aria-label="Create project"
+              title="Create project"
+            >
+              <FolderGit2 size={14} />
+            </button>
+          </div>
+        </div>
+        <div className="thread-sidebar__search-shell thread-sidebar__search-shell--open">
+          <div className="thread-sidebar__search">
+            <Search size={14} />
+            <input
+              type="text"
+              placeholder="Search requirements or threads"
+              value={search}
+              onChange={(event) => onSearchChange(event.target.value)}
+            />
+          </div>
+        </div>
+        <div className="requirement-sidebar__composer">
+          <input
+            type="text"
+            placeholder="New requirement title"
+            value={newRequirementTitle}
+            onChange={(event) => onNewRequirementTitleChange(event.target.value)}
+          />
+          <div className="requirement-sidebar__composer-row">
+            <select
+              value={newRequirementProjectId ?? ""}
+              onChange={(event) => onNewRequirementProjectIdChange(event.target.value)}
+            >
+              <option value="" disabled>
+                Select primary project
+              </option>
+              {projects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.name}
+                </option>
+              ))}
+            </select>
+            <button
+              className="button button--primary"
+              onClick={() => void onCreateRequirement()}
+              disabled={savingRequirement || !newRequirementTitle.trim() || !newRequirementProjectId}
+            >
+              <Plus size={14} />
+              Create
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="thread-sidebar__list">
+        <div className="requirement-sidebar__section">
+          <div className="requirement-sidebar__section-header">
+            <strong>Active Requirements</strong>
+            <span>{filteredRequirements.length}</span>
+          </div>
+          {filteredRequirements.length > 0 ? (
+            <div className="requirement-sidebar__requirements">
+              {filteredRequirements.map((requirement) => {
+                const project = projects.find((entry) => entry.id === requirement.primaryProjectId);
+                const memory = requirementMemories.find((entry) => entry.requirementId === requirement.id);
+                const linkedThreadCount = memory?.derived.linkedThreads.length ?? threads.filter((thread) => thread.requirementId === requirement.id).length;
+
+                return (
+                  <button
+                    key={requirement.id}
+                    type="button"
+                    className={`requirement-sidebar__requirement ${requirement.id === activeRequirementId ? "requirement-sidebar__requirement--active" : ""}`}
+                    onClick={() => void onSelectRequirement(requirement.id)}
+                  >
+                    <div className="requirement-sidebar__requirement-head">
+                      <strong>{requirement.title}</strong>
+                      <span>{formatRequirementStatusLabel(requirement.status)}</span>
+                    </div>
+                    <small>{project?.name ?? requirement.primaryProjectId}</small>
+                    <div className="requirement-sidebar__requirement-meta">
+                      <span>{linkedThreadCount} thread{linkedThreadCount === 1 ? "" : "s"}</span>
+                      <span>{formatRelativeTime(requirement.updatedAt)}</span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="project-tree__empty">No matching requirements.</div>
+          )}
+        </div>
+
+        <div className="requirement-sidebar__section">
+          <div className="requirement-sidebar__section-header">
+            <strong>Unassigned Threads</strong>
+            <span>{unassignedThreadsByProject.reduce((count, group) => count + group.threads.length, 0)}</span>
+          </div>
+          <div className="project-tree">
+            {unassignedThreadsByProject.map(({ project, threads: projectThreads }) => (
+              <section key={project?.id ?? `unassigned:${projectThreads[0]?.projectId ?? "unknown"}`} className="project-tree__group">
+                <div className="project-tree__project">
+                  <button className="project-item" onClick={() => project && void onRevealProject(project.rootPath)}>
+                    <div className="project-item__name">{project?.name ?? "Unknown project"}</div>
+                  </button>
+                  <button
+                    className="project-tree__control"
+                    onClick={() => void onCreateThread(project?.id)}
+                    aria-label={`Create a new thread in ${project?.name ?? "project"}`}
+                    title="New thread"
+                  >
+                    <MessageSquarePlus size={14} />
+                  </button>
+                </div>
+                <div className="project-tree__threads">
+                  {projectThreads.map((thread) => (
+                    <button
+                      key={thread.id}
+                      className={`thread-item thread-item--nested ${thread.id === activeThreadId ? "thread-item--active" : ""}`}
+                      onClick={() => void onSelectThread(thread.id)}
+                    >
+                      <div className="thread-item__content thread-item__content--compact">
+                        <div className="thread-item__title">
+                          {workingThreadIds.has(thread.id) && <span className="thread-item__spinner" aria-hidden="true" />}
+                          <span>{thread.title}</span>
+                        </div>
+                        <div className="thread-item__age">{formatRelativeTime(thread.updatedAt)}</div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1911,10 +2400,267 @@ function ThreadsPanel({
             <span>Create a project to get started</span>
           </div>
         )}
-                    </div>
-                    <RuntimeContextLineage nodes={contextLineage} />
+      </div>
+    </div>
+  );
+}
+
+function RequirementOverview({
+  requirement,
+  memory,
+  projects,
+  threads,
+  draft,
+  saveMessage,
+  saving,
+  unassignedThreadsByProject,
+  onDraftChange,
+  onSave,
+  onCreateThread,
+  onOpenThread,
+  onAssignThread,
+  onUnassignThread,
+}: {
+  requirement: RequirementRecord | null;
+  memory: RequirementMemoryRecord | null;
+  projects: ProjectRecord[];
+  threads: ThreadRecord[];
+  draft: RequirementMemoryDraft;
+  saveMessage: string | null;
+  saving: boolean;
+  unassignedThreadsByProject: Array<{ project: ProjectRecord | null; threads: ThreadRecord[] }>;
+  onDraftChange: (updater: RequirementMemoryDraft | ((current: RequirementMemoryDraft) => RequirementMemoryDraft)) => void;
+  onSave: () => void;
+  onCreateThread: () => void;
+  onOpenThread: (threadId: string) => void;
+  onAssignThread: (threadId: string) => void;
+  onUnassignThread: (threadId: string) => void;
+}) {
+  if (!requirement) {
+    return (
+      <PlaceholderPanel
+        title="Requirement Workspace"
+        description="Create or select a requirement to manage shared memory, linked threads, and cross-project context."
+      />
+    );
+  }
+
+  const primaryProject = projects.find((project) => project.id === requirement.primaryProjectId) ?? null;
+  const relatedProjects = requirement.relatedProjectIds
+    .map((projectId) => projects.find((project) => project.id === projectId) ?? null)
+    .filter((project): project is ProjectRecord => Boolean(project));
+
+  return (
+    <div className="skills-page requirement-overview">
+      <div className="skills-page__header">
+        <div>
+          <h2 className="skills-page__title">{requirement.title}</h2>
+          <div className="requirement-overview__subtitle">
+            <span>{formatRequirementStatusLabel(requirement.status)}</span>
+            <span>{primaryProject?.name ?? requirement.primaryProjectId}</span>
+          </div>
+        </div>
+        <div className="requirement-overview__actions">
+          <button className="button button--primary" onClick={onCreateThread}>
+            <MessageSquarePlus size={14} />
+            New Thread
+          </button>
+        </div>
+      </div>
+
+      <div className="workflow-dashboard requirement-overview__stats">
+        <div className="workflow-dashboard__card">
+          <strong>{threads.length}</strong>
+          <span>Linked threads</span>
+        </div>
+        <div className="workflow-dashboard__card">
+          <strong>{memory?.derived.recentReviews.length ?? 0}</strong>
+          <span>Recent reviews</span>
+        </div>
+        <div className="workflow-dashboard__card">
+          <strong>{memory?.derived.recentChanges.length ?? 0}</strong>
+          <span>Changed paths</span>
+        </div>
+      </div>
+
+      <div className="skills-grid requirement-overview__grid">
+        <div className="skill-card requirement-overview__card">
+          <div className="skill-card__header">
+            <div>
+              <h3>Requirement Memory</h3>
+              <span>Editable shared context</span>
+            </div>
+          </div>
+          <RequirementMemoryField
+            label="Brief"
+            value={draft.brief}
+            onChange={(value) => onDraftChange((current) => ({ ...current, brief: value }))}
+            rows={4}
+          />
+          <RequirementMemoryField
+            label="Goals"
+            value={draft.goals}
+            onChange={(value) => onDraftChange((current) => ({ ...current, goals: value }))}
+          />
+          <RequirementMemoryField
+            label="Constraints"
+            value={draft.constraints}
+            onChange={(value) => onDraftChange((current) => ({ ...current, constraints: value }))}
+          />
+          <RequirementMemoryField
+            label="Decisions"
+            value={draft.decisions}
+            onChange={(value) => onDraftChange((current) => ({ ...current, decisions: value }))}
+          />
+          <RequirementMemoryField
+            label="Open Questions"
+            value={draft.openQuestions}
+            onChange={(value) => onDraftChange((current) => ({ ...current, openQuestions: value }))}
+          />
+          <RequirementMemoryField
+            label="Definition of Done"
+            value={draft.definitionOfDone}
+            onChange={(value) => onDraftChange((current) => ({ ...current, definitionOfDone: value }))}
+          />
+          <div className="settings-panel__actions requirement-overview__editor-actions">
+            <button className="button button--primary" onClick={onSave} disabled={saving}>
+              {saving ? "Saving..." : "Save Memory"}
+            </button>
+            {saveMessage ? <div className="settings-panel__message">{saveMessage}</div> : null}
+          </div>
+        </div>
+
+        <div className="skill-card requirement-overview__card">
+          <div className="skill-card__header">
+            <div>
+              <h3>Derived Memory</h3>
+              <span>Read-only system summary</span>
+            </div>
+          </div>
+          <p className="requirement-overview__activity">
+            {memory?.derived.activitySummary || "Derived memory will refresh as linked threads, reviews, and workflows finish."}
+          </p>
+          <RequirementTokenList
+            title="Linked Projects"
+            items={[
+              primaryProject ? `${primaryProject.name} (primary)` : requirement.primaryProjectId,
+              ...relatedProjects.map((project) => `${project.name} (related)`),
+            ]}
+          />
+          <RequirementTokenList
+            title="Recent Reviews"
+            items={(memory?.derived.recentReviews ?? []).map((review) => `${review.status}: ${review.summary ?? review.reviewId}`)}
+          />
+          <RequirementTokenList
+            title="Recent Artifacts"
+            items={(memory?.derived.recentArtifacts ?? []).map((artifact) => `${artifact.source}: ${artifact.summary}`)}
+          />
+          <RequirementTokenList
+            title="Recent Changes"
+            items={memory?.derived.recentChanges ?? []}
+          />
+        </div>
+
+        <div className="skill-card requirement-overview__card">
+          <div className="skill-card__header">
+            <div>
+              <h3>Linked Threads</h3>
+              <span>{threads.length} total</span>
+            </div>
+          </div>
+          {threads.length > 0 ? (
+            <div className="requirement-overview__thread-list">
+              {threads.map((thread) => (
+                <div key={thread.id} className="requirement-overview__thread-row">
+                  <div>
+                    <strong>{thread.title}</strong>
+                    <small>{formatRelativeTime(thread.updatedAt)}</small>
                   </div>
-                );
+                  <div className="requirement-overview__thread-actions">
+                    <button className="button button--small" onClick={() => onOpenThread(thread.id)}>
+                      Open
+                    </button>
+                    <button className="button button--ghost button--small" onClick={() => onUnassignThread(thread.id)}>
+                      Unassign
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="settings-panel__message">No threads are linked yet.</div>
+          )}
+        </div>
+
+        <div className="skill-card requirement-overview__card">
+          <div className="skill-card__header">
+            <div>
+              <h3>Assign Existing Threads</h3>
+              <span>Bind unassigned work into this requirement</span>
+            </div>
+          </div>
+          <div className="requirement-overview__thread-list">
+            {unassignedThreadsByProject.flatMap(({ project, threads: projectThreads }) =>
+              projectThreads.map((thread) => (
+                <div key={thread.id} className="requirement-overview__thread-row">
+                  <div>
+                    <strong>{thread.title}</strong>
+                    <small>{project?.name ?? thread.projectId}</small>
+                  </div>
+                  <div className="requirement-overview__thread-actions">
+                    <button className="button button--small" onClick={() => onAssignThread(thread.id)}>
+                      Assign
+                    </button>
+                  </div>
+                </div>
+              )),
+            )}
+            {unassignedThreadsByProject.every((entry) => entry.threads.length === 0) ? (
+              <div className="settings-panel__message">All visible threads are already assigned to a requirement.</div>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RequirementMemoryField({
+  label,
+  value,
+  onChange,
+  rows = 5,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  rows?: number;
+}) {
+  return (
+    <label className="requirement-overview__field">
+      <span>{label}</span>
+      <textarea value={value} rows={rows} onChange={(event) => onChange(event.target.value)} placeholder="One item per line when applicable" />
+    </label>
+  );
+}
+
+function RequirementTokenList({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div className="requirement-overview__tokens">
+      <strong>{title}</strong>
+      {items.length > 0 ? (
+        <div className="requirement-overview__token-list">
+          {items.map((item) => (
+            <span key={`${title}:${item}`} className="requirement-overview__token">
+              {item}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <div className="settings-panel__message">None yet.</div>
+      )}
+    </div>
+  );
 }
 
 function SkillsPanel({
@@ -2216,14 +2962,6 @@ function RuntimeAutomationPanel({
                 const relatedWorktrees = worktrees.filter((entry) => relatedWorktreeIds.has(entry.id)).slice(0, 4);
                 const relatedAgents = projectAgentTasks.filter((entry) => relatedAgentIds.has(entry.id)).slice(0, 4);
                 const relatedAgentTree = buildAgentTree(projectAgentTasks, relatedAgentIds);
-                const contextLineage = buildExecutionContextLineage({
-                  workflow,
-                  run,
-                  executionContexts,
-                  environments,
-                  worktrees,
-                  agentTree: relatedAgentTree,
-                });
                 const contextLineage = buildExecutionContextLineage({
                   workflow,
                   run,
@@ -3394,6 +4132,332 @@ function ChangedFilesCard({ items, threadId }: { items: ItemRecord[]; threadId?:
   );
 }
 
+function DiffPatchPanel({
+  threadId,
+  changeSets,
+  latestReview,
+}: {
+  threadId?: string;
+  changeSets: ThreadChangeSet[];
+  latestReview: ReviewRecord | null;
+}) {
+  const [selectedChangeSetId, setSelectedChangeSetId] = useState<string | null>(changeSets[0]?.id ?? null);
+  const [selectedFilePath, setSelectedFilePath] = useState<string | null>(changeSets[0]?.files[0]?.path ?? null);
+  const [viewerMode, setViewerMode] = useState<"diff" | "patch">("diff");
+  const [copiedPatchPath, setCopiedPatchPath] = useState<string | null>(null);
+  const [reviews, setReviews] = useState<Record<string, ChangedFileReview>>(() =>
+    Object.fromEntries(
+      changeSets.flatMap((changeSet) => changeSet.files.map((file) => [file.path, { path: file.path, status: "idle" as const }])),
+    ),
+  );
+  const allFiles = useMemo(
+    () =>
+      changeSets
+        .flatMap((changeSet) => changeSet.files)
+        .filter((file, index, list) => list.findIndex((candidate) => candidate.path === file.path) === index),
+    [changeSets],
+  );
+  const selectedChangeSet = useMemo(
+    () => changeSets.find((changeSet) => changeSet.id === selectedChangeSetId) ?? changeSets[0] ?? null,
+    [changeSets, selectedChangeSetId],
+  );
+  const selectedFile = useMemo(
+    () => selectedChangeSet?.files.find((file) => file.path === selectedFilePath) ?? selectedChangeSet?.files[0] ?? null,
+    [selectedChangeSet, selectedFilePath],
+  );
+  const selectedReview = selectedFile ? reviews[selectedFile.path] : undefined;
+
+  useEffect(() => {
+    setReviews((current) => {
+      const next: Record<string, ChangedFileReview> = {};
+
+      for (const file of allFiles) {
+        next[file.path] = current[file.path] ?? { path: file.path, status: "idle" };
+      }
+
+      return next;
+    });
+  }, [allFiles]);
+
+  useEffect(() => {
+    if (changeSets.length === 0) {
+      setSelectedChangeSetId(null);
+      setSelectedFilePath(null);
+      return;
+    }
+
+    if (!selectedChangeSetId || !changeSets.some((changeSet) => changeSet.id === selectedChangeSetId)) {
+      setSelectedChangeSetId(changeSets[0]!.id);
+    }
+  }, [changeSets, selectedChangeSetId]);
+
+  useEffect(() => {
+    if (!selectedChangeSet) {
+      setSelectedFilePath(null);
+      return;
+    }
+
+    if (!selectedFilePath || !selectedChangeSet.files.some((file) => file.path === selectedFilePath)) {
+      setSelectedFilePath(selectedChangeSet.files[0]?.path ?? null);
+    }
+  }, [selectedChangeSet, selectedFilePath]);
+
+  useEffect(() => {
+    if (!threadId || allFiles.length === 0) {
+      return;
+    }
+
+    void loadChangedFileSummaries(threadId, allFiles.map((file) => file.path))
+      .then((summary) => {
+        setReviews((current) => {
+          const next = { ...current };
+
+          for (const file of allFiles) {
+            next[file.path] = {
+              ...next[file.path],
+              path: file.path,
+              additions: summary[file.path]?.additions,
+              deletions: summary[file.path]?.deletions,
+              status: next[file.path]?.diff ? "ready" : "idle",
+            };
+          }
+
+          return next;
+        });
+      })
+      .catch(() => undefined);
+  }, [allFiles, threadId]);
+
+  useEffect(() => {
+    if (!threadId || !selectedFile) {
+      return;
+    }
+
+    const existing = reviews[selectedFile.path];
+
+    if (existing?.status === "loading" || existing?.status === "ready") {
+      return;
+    }
+
+    setReviews((current) => ({
+      ...current,
+      [selectedFile.path]: {
+        ...current[selectedFile.path],
+        path: selectedFile.path,
+        status: "loading",
+      },
+    }));
+
+    void loadChangedFileDiff(threadId, selectedFile.path)
+      .then((diff) => {
+        setReviews((current) => ({
+          ...current,
+          [selectedFile.path]: {
+            ...current[selectedFile.path],
+            path: selectedFile.path,
+            diff,
+            status: "ready",
+          },
+        }));
+      })
+      .catch((error) => {
+        setReviews((current) => ({
+          ...current,
+          [selectedFile.path]: {
+            ...current[selectedFile.path],
+            path: selectedFile.path,
+            status: "error",
+            error: error instanceof Error ? error.message : String(error),
+          },
+        }));
+      });
+  }, [reviews, selectedFile, threadId]);
+
+  useEffect(() => {
+    if (!copiedPatchPath) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => setCopiedPatchPath(null), 1800);
+    return () => window.clearTimeout(timer);
+  }, [copiedPatchPath]);
+
+  if (changeSets.length === 0) {
+    return (
+      <section className="diff-panel diff-panel--empty">
+        <div className="diff-panel__empty">
+          <strong>No thread patches yet</strong>
+          <span>File changes from `write_patch` actions will appear here once this thread edits the workspace.</span>
+        </div>
+      </section>
+    );
+  }
+
+  const handleCopyPatch = async () => {
+    if (!selectedFile || !selectedReview?.diff) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(selectedReview.diff);
+      setCopiedPatchPath(selectedFile.path);
+    } catch {
+      setCopiedPatchPath(null);
+    }
+  };
+
+  return (
+    <section className="diff-panel">
+      <div className="diff-panel__header">
+        <div>
+          <span className="diff-panel__eyebrow">Workspace Panel</span>
+          <h2>Diff / Patch</h2>
+        </div>
+        <div className="diff-panel__meta">
+          <span>{changeSets.length} batch{changeSets.length === 1 ? "" : "es"}</span>
+          <span>{allFiles.length} file{allFiles.length === 1 ? "" : "s"}</span>
+        </div>
+      </div>
+
+      {latestReview ? (
+        <div className="diff-panel__review-link">
+          <strong>Latest review</strong>
+          <span>{latestReview.summary ?? latestReview.error ?? "Review available for this thread."}</span>
+        </div>
+      ) : null}
+
+      <div className="diff-panel__layout">
+        <aside className="diff-panel__sidebar">
+          <div className="diff-panel__section">
+            <div className="diff-panel__section-header">
+              <strong>Change Batches</strong>
+              <span>{formatRelativeTime(changeSets[0]!.updatedAt)} latest</span>
+            </div>
+            <div className="diff-panel__change-sets">
+              {changeSets.map((changeSet) => (
+                <button
+                  key={changeSet.id}
+                  type="button"
+                  className={`diff-panel__change-set ${changeSet.id === selectedChangeSet?.id ? "diff-panel__change-set--active" : ""}`}
+                  onClick={() => setSelectedChangeSetId(changeSet.id)}
+                >
+                  <strong>{changeSet.label}</strong>
+                  <span>{changeSet.files.length} file{changeSet.files.length === 1 ? "" : "s"}</span>
+                  <small>{formatRelativeTime(changeSet.updatedAt)}</small>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="diff-panel__section">
+            <div className="diff-panel__section-header">
+              <strong>Files</strong>
+              <span>{selectedChangeSet?.files.length ?? 0} selected</span>
+            </div>
+            <div className="diff-panel__file-list">
+              {(selectedChangeSet?.files ?? []).map((file) => {
+                const review = reviews[file.path];
+
+                return (
+                  <button
+                    key={`${selectedChangeSet?.id}:${file.path}`}
+                    type="button"
+                    className={`diff-panel__file ${file.path === selectedFile?.path ? "diff-panel__file--active" : ""}`}
+                    onClick={() => setSelectedFilePath(file.path)}
+                  >
+                    <span className="diff-panel__file-path">{file.path}</span>
+                    <span className="diff-panel__file-stats">
+                      {typeof review?.additions === "number" && <span className="changed-file__stat changed-file__stat--add">+{review.additions}</span>}
+                      {typeof review?.deletions === "number" && <span className="changed-file__stat changed-file__stat--del">-{review.deletions}</span>}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </aside>
+
+        <div className="diff-panel__viewer">
+          {selectedFile ? (
+            <>
+              <div className="diff-panel__viewer-header">
+                <div>
+                  <strong>{selectedFile.path}</strong>
+                  <small>{selectedFile.title}</small>
+                </div>
+                <div className="diff-panel__viewer-actions">
+                  <div className="diff-panel__mode-switch" role="tablist" aria-label="Diff viewer mode">
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={viewerMode === "diff"}
+                      className={viewerMode === "diff" ? "diff-panel__mode-switch-button diff-panel__mode-switch-button--active" : "diff-panel__mode-switch-button"}
+                      onClick={() => setViewerMode("diff")}
+                    >
+                      Diff
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={viewerMode === "patch"}
+                      className={viewerMode === "patch" ? "diff-panel__mode-switch-button diff-panel__mode-switch-button--active" : "diff-panel__mode-switch-button"}
+                      onClick={() => setViewerMode("patch")}
+                    >
+                      Patch
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    className="diff-panel__copy"
+                    onClick={() => void handleCopyPatch()}
+                    disabled={!selectedReview?.diff}
+                  >
+                    {copiedPatchPath === selectedFile.path ? <Check size={14} /> : <Copy size={14} />}
+                    <span>{copiedPatchPath === selectedFile.path ? "Copied" : "Copy patch"}</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="diff-panel__viewer-meta">
+                <span>{formatRelativeTime(selectedFile.updatedAt)} updated</span>
+                {selectedReview?.status === "loading" && <span>Loading diff…</span>}
+                {selectedReview?.status === "error" && <span>{selectedReview.error ?? "Unable to read diff."}</span>}
+              </div>
+
+              <div className="diff-panel__viewer-body">
+                {selectedReview?.status === "loading" && <div className="changed-file__empty">Loading diff...</div>}
+                {selectedReview?.status === "error" && (
+                  <div className="changed-file__empty">
+                    {selectedReview.error ?? "Unable to read this file diff."}
+                  </div>
+                )}
+                {selectedReview?.status === "ready" && selectedReview.diff ? (
+                  viewerMode === "diff" ? (
+                    <div className="changed-file__diff-lines">{renderDiffLines(selectedReview.diff)}</div>
+                  ) : (
+                    <pre className="diff-panel__patch">{selectedReview.diff}</pre>
+                  )
+                ) : null}
+                {selectedReview?.status === "ready" && !selectedReview.diff && (
+                  <div className="changed-file__empty">No git diff is available for this file yet.</div>
+                )}
+                {!selectedReview || selectedReview.status === "idle" ? (
+                  <div className="changed-file__empty">Select a changed file to load its current workspace patch.</div>
+                ) : null}
+              </div>
+            </>
+          ) : (
+            <div className="diff-panel__empty">
+              <strong>No file selected</strong>
+              <span>Choose a file from the current change batch to inspect its patch.</span>
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function ApprovalRequest({
   approval,
   onApprove,
@@ -4525,6 +5589,19 @@ function formatSkillScopeLabel(scope: SkillDescriptor["scope"]) {
   }
 }
 
+function formatRequirementStatusLabel(status: RequirementRecord["status"]) {
+  switch (status) {
+    case "paused":
+      return "Paused";
+    case "completed":
+      return "Completed";
+    case "archived":
+      return "Archived";
+    default:
+      return "Active";
+  }
+}
+
 function formatRelativeTime(value: string) {
   const target = new Date(value).getTime();
   const deltaMs = Date.now() - target;
@@ -4680,6 +5757,77 @@ function buildComposerInput(params: {
   }
 
   return sections.join("\n\n");
+}
+
+function splitLines(value: string): string[] {
+  return [...new Set(value.split(/\r?\n/).map((entry) => entry.trim()).filter(Boolean))];
+}
+
+function buildThreadChangeSets(params: { items: ItemRecord[]; turns: TurnRecord[] }): ThreadChangeSet[] {
+  const turnsById = new Map(params.turns.map((turn, index) => [turn.id, { turn, index }]));
+  const grouped = new Map<string, ThreadChangeSet>();
+
+  for (const item of params.items) {
+    if (item.kind !== "fileChange") {
+      continue;
+    }
+
+    const path = getChangedFilePath(item);
+
+    if (!path) {
+      continue;
+    }
+
+    const turnEntry = turnsById.get(item.turnId);
+    const key = item.turnId || item.id;
+    const current = grouped.get(key) ?? {
+      id: key,
+      turnId: item.turnId,
+      createdAt: item.createdAt,
+      updatedAt: item.updatedAt,
+      label: formatTurnDiffLabel(turnEntry?.turn, turnEntry ? turnEntry.index + 1 : grouped.size + 1),
+      files: [],
+    };
+    const nextFile: ThreadChangeFile = {
+      itemId: item.id,
+      turnId: item.turnId,
+      path,
+      title: item.title,
+      body: item.body,
+      createdAt: item.createdAt,
+      updatedAt: item.updatedAt,
+    };
+    const existingIndex = current.files.findIndex((file) => file.path === path);
+
+    if (existingIndex >= 0) {
+      current.files[existingIndex] = nextFile;
+    } else {
+      current.files.push(nextFile);
+    }
+
+    current.createdAt = current.createdAt < item.createdAt ? current.createdAt : item.createdAt;
+    current.updatedAt = current.updatedAt > item.updatedAt ? current.updatedAt : item.updatedAt;
+    grouped.set(key, current);
+  }
+
+  return [...grouped.values()]
+    .map((changeSet) => ({
+      ...changeSet,
+      files: [...changeSet.files].sort((left, right) => left.path.localeCompare(right.path)),
+    }))
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+}
+
+function formatTurnDiffLabel(turn?: TurnRecord, ordinal?: number) {
+  const input = turn?.input?.trim() ?? "";
+  const firstLine = input.split(/\r?\n/)[0]?.trim() ?? "";
+  const snippet = firstLine.length > 54 ? `${firstLine.slice(0, 54).trimEnd()}…` : firstLine;
+
+  if (snippet) {
+    return snippet;
+  }
+
+  return `Turn ${ordinal ?? 1}`;
 }
 
 function getChangedFilePath(item: ItemRecord): string | null {

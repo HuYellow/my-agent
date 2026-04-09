@@ -11,6 +11,7 @@ export class ExecutionContextManager {
   create(params: {
     project: ProjectRecord;
     kind: ExecutionContextRecord["kind"];
+    requirementId?: string;
     threadId?: string;
     agentId?: string;
     worktree?: WorktreeRecord;
@@ -20,6 +21,7 @@ export class ExecutionContextManager {
     const executionContext: ExecutionContextRecord = {
       id: createId("exec"),
       projectId: params.project.id,
+      requirementId: params.requirementId,
       kind: params.kind,
       threadId: params.threadId,
       agentId: params.agentId,

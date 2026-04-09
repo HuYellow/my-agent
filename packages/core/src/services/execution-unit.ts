@@ -48,6 +48,7 @@ export class ExecutionUnitRunner {
   prepareResources(
     step: WorkflowStep,
     project: ProjectRecord,
+    requirementId: string | undefined,
     threadId: string | undefined,
     stepRunRecord?: WorkflowRunStepRecord,
   ): ExecutionUnitResources {
@@ -61,12 +62,14 @@ export class ExecutionUnitRunner {
           ? existingWorktree
           : this.worktreeManager.create({
               project,
+              requirementId,
               threadId,
               branch: `workflow/${step.id}`,
             })
         : undefined;
     const environment = this.environmentManager.detect({
       project,
+      requirementId,
       threadId,
       worktreeId: worktree?.id,
       cwd: worktree?.path ?? project.rootPath,
@@ -74,6 +77,7 @@ export class ExecutionUnitRunner {
 
     const executionContext = this.executionContextManager.create({
       project,
+      requirementId,
       kind: "workflow",
       threadId,
       worktree,
@@ -176,6 +180,7 @@ async function executeExecutionUnitInternal(
       provider: context.provider,
       workspace: scopedWorkspace,
       project: scopedProject,
+      requirementId: context.run.requirementId,
       parentThreadId: context.threadId ?? createId("workflow_thread"),
       title: step.title,
       input: step.prompt,
@@ -202,6 +207,7 @@ async function executeExecutionUnitInternal(
     const review = reviewManager.start({
       project: scopedProject,
       provider: context.provider,
+      requirementId: context.run.requirementId,
       threadId: context.threadId,
       source: step.reviewSource,
       instructions: step.prompt,

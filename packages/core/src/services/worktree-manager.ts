@@ -21,6 +21,7 @@ export class WorktreeManager {
 
   create(params: {
     project: ProjectRecord;
+    requirementId?: string;
     threadId?: string;
     agentId?: string;
     branch?: string;
@@ -34,6 +35,7 @@ export class WorktreeManager {
     const record = this.database.createWorktree({
       id: createId("worktree"),
       projectId: params.project.id,
+      requirementId: params.requirementId,
       threadId: params.threadId,
       agentId: params.agentId,
       branch,

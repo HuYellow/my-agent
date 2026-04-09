@@ -3,6 +3,7 @@ import {
   type AgentTaskRecord,
   type AppConfig,
   type CreateProjectParams,
+  type CreateRequirementParams,
   type EnvironmentRecord,
   type ExecutionContextRecord,
   type HarnessEvent,
@@ -12,6 +13,8 @@ import {
   type ProjectRecord,
   type ProviderProfile,
   type ProviderModelRecord,
+  type RequirementMemoryRecord,
+  type RequirementRecord,
   type ReviewRecord,
   type SkillDescriptor,
   type TerminalBackendCapability,
@@ -21,6 +24,7 @@ import {
   type ThreadRecord,
   type TurnSteerRecord,
   type TurnRecord,
+  type UpdateRequirementParams,
   type WorkflowRecord,
   type WorkflowRunRecord,
   type WorktreeRecord,
@@ -41,6 +45,8 @@ interface AppState {
   loading: boolean;
   bootError?: string;
   projects: ProjectRecord[];
+  requirements: RequirementRecord[];
+  requirementMemories: RequirementMemoryRecord[];
   threads: ThreadRecord[];
   threadSessions: Record<string, ThreadSessionState>;
   reviews: ReviewRecord[];
@@ -56,6 +62,7 @@ interface AppState {
   terminalCapabilities: TerminalBackendCapability[];
   skills: SkillDescriptor[];
   activeProjectId?: string;
+  activeRequirementId?: string;
   activeThreadId?: string;
   config?: AppConfig;
   providerTestMessage?: string;
@@ -64,10 +71,15 @@ interface AppState {
   providerModelsError?: string;
   bootstrap: () => Promise<void>;
   createProject: (params: CreateProjectParams) => Promise<void>;
+  createRequirement: (params: CreateRequirementParams) => Promise<void>;
+  updateRequirement: (requirementId: string, patch: UpdateRequirementParams["patch"]) => Promise<void>;
   updateProject: (projectId: string, patch: Partial<Pick<ProjectRecord, "name" | "rootPath" | "shell" | "sandboxMode" | "approvalPolicy">>) => Promise<void>;
   updateThread: (threadId: string, patch: Partial<Pick<ThreadRecord, "title" | "sandboxMode" | "archivedAt">>) => Promise<void>;
   selectProject: (projectId: string) => Promise<void>;
-  createThread: (title?: string, projectId?: string) => Promise<void>;
+  selectRequirement: (requirementId?: string) => Promise<void>;
+  createThread: (title?: string, projectId?: string, requirementId?: string) => Promise<void>;
+  assignThreadToRequirement: (requirementId: string, threadId: string) => Promise<void>;
+  unassignThreadFromRequirement: (threadId: string) => Promise<void>;
   selectThread: (threadId: string) => Promise<void>;
   sendTurn: (input: string, selectedSkillIds?: string[], attachments?: TurnInputAttachment[], includeIdeContext?: boolean) => Promise<void>;
   steerTurn: (turnId: string, input: string, priority?: TurnSteerRecord["priority"]) => Promise<TurnSteerRecord>;
@@ -87,6 +99,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   loading: false,
   bootError: undefined,
   projects: [],
+  requirements: [],
+  requirementMemories: [],
   threads: [],
   threadSessions: {},
   reviews: [],
@@ -101,6 +115,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   terminalOutputArchives: [],
   terminalCapabilities: [],
   skills: [],
+  activeRequirementId: undefined,
   providerModels: [],
   providerModelsLoading: false,
   bootstrap: async () => {
@@ -119,13 +134,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       try {
         const initial = (await withTimeout(window.myAgent.initialize(), 10_000, "Harness initialization timed out.")) as InitializeResult;
         const activeProjectId = initial.config.selectedProjectId ?? initial.projects[0]?.id;
-        const activeThreadId = initial.threads.find((thread) => thread.projectId === activeProjectId)?.id ?? initial.threads[0]?.id;
+        const activeRequirementId = initial.config.selectedRequirementId ?? initial.requirements?.[0]?.id;
+        const activeThreadId = activeRequirementId
+          ? undefined
+          : initial.threads.find((thread) => thread.projectId === activeProjectId)?.id ?? initial.threads[0]?.id;
 
         set({
           bootstrapped: true,
           loading: false,
           bootError: undefined,
           projects: initial.projects,
+          requirements: initial.requirements ?? [],
+          requirementMemories: initial.requirementMemories ?? [],
           threads: initial.threads,
           threadSessions: Object.fromEntries(initial.threads.map((thread) => [thread.id, createEmptyThreadSession()])),
           reviews: initial.reviews ?? [],
@@ -141,6 +161,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           skills: initial.skills,
           config: initial.config,
           activeProjectId,
+          activeRequirementId,
           activeThreadId,
         });
 
@@ -171,10 +192,48 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => ({
       projects: [result.project, ...state.projects.filter((project) => project.id !== result.project.id)],
       activeProjectId: result.project.id,
+      activeRequirementId: undefined,
       config: state.config ? { ...state.config, selectedProjectId: result.project.id } : state.config,
       activeThreadId: undefined,
     }));
     await get().refreshRuntimeProjectState(result.project.id);
+  },
+  createRequirement: async (params) => {
+    const result = (await window.myAgent.createRequirement(params)) as { requirement: RequirementRecord; memory: RequirementMemoryRecord };
+    set((state) => ({
+      requirements: upsertRequirement(state.requirements, result.requirement),
+      requirementMemories: upsertRequirementMemory(state.requirementMemories, result.memory),
+      activeRequirementId: result.requirement.id,
+      activeProjectId: result.requirement.primaryProjectId,
+      activeThreadId: undefined,
+      config: state.config
+        ? {
+            ...state.config,
+            selectedRequirementId: result.requirement.id,
+            selectedProjectId: result.requirement.primaryProjectId,
+          }
+        : state.config,
+    }));
+    await get().refreshRuntimeProjectState(result.requirement.primaryProjectId);
+  },
+  updateRequirement: async (requirementId, patch) => {
+    const result = (await window.myAgent.updateRequirement({ requirementId, patch })) as {
+      requirement: RequirementRecord;
+      memory: RequirementMemoryRecord;
+    };
+    set((state) => ({
+      requirements: upsertRequirement(state.requirements, result.requirement),
+      requirementMemories: upsertRequirementMemory(state.requirementMemories, result.memory),
+      activeProjectId:
+        state.activeRequirementId === result.requirement.id ? result.requirement.primaryProjectId : state.activeProjectId,
+      config:
+        state.config && state.activeRequirementId === result.requirement.id
+          ? {
+              ...state.config,
+              selectedProjectId: result.requirement.primaryProjectId,
+            }
+          : state.config,
+    }));
   },
   updateProject: async (projectId, patch) => {
     const result = (await window.myAgent.updateProject({ projectId, patch })) as { project: ProjectRecord };
@@ -195,32 +254,106 @@ export const useAppStore = create<AppState>((set, get) => ({
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 
     if (current) {
-      const result = (await window.myAgent.writeConfig({ config: { selectedProjectId: projectId } })) as { config: AppConfig };
+      const result = (await window.myAgent.writeConfig({
+        config: {
+          selectedProjectId: projectId,
+          selectedRequirementId: undefined,
+        },
+      })) as { config: AppConfig };
       set({ config: result.config });
     }
 
     if (projectThreads[0]) {
-      set({ activeProjectId: projectId });
+      set({ activeProjectId: projectId, activeRequirementId: undefined });
       await get().selectThread(projectThreads[0].id);
       return;
     }
 
     set({
       activeProjectId: projectId,
+      activeRequirementId: undefined,
       activeThreadId: undefined,
     });
     await get().refreshRuntimeProjectState(projectId);
   },
-  createThread: async (title, projectId) => {
-    const ensuredProjectId = projectId ?? get().activeProjectId ?? get().config?.selectedProjectId;
-    const result = (await window.myAgent.startThread({ title, projectId: ensuredProjectId })) as { thread: ThreadRecord };
+  selectRequirement: async (requirementId) => {
+    const requirement = requirementId ? get().requirements.find((entry) => entry.id === requirementId) : undefined;
+    const selectedProjectId = requirement?.primaryProjectId;
+
+    const result = (await window.myAgent.writeConfig({
+      config: {
+        selectedRequirementId: requirementId,
+        selectedProjectId,
+      },
+    })) as { config: AppConfig };
+
+    set({
+      config: result.config,
+      activeRequirementId: requirementId,
+      activeProjectId: selectedProjectId,
+      activeThreadId: undefined,
+    });
+
+    await get().refreshRuntimeProjectState(selectedProjectId);
+  },
+  createThread: async (title, projectId, requirementId) => {
+    const activeRequirementId = requirementId ?? get().activeRequirementId;
+    const activeRequirement = activeRequirementId ? get().requirements.find((entry) => entry.id === activeRequirementId) : undefined;
+    const ensuredProjectId = projectId ?? activeRequirement?.primaryProjectId ?? get().activeProjectId ?? get().config?.selectedProjectId;
+    const result = (await window.myAgent.startThread({
+      title,
+      projectId: ensuredProjectId,
+      requirementId: activeRequirementId,
+    })) as { thread: ThreadRecord };
     const currentConfig = get().config;
     set((state) => ({
       threads: upsertThread(state.threads, result.thread),
       threadSessions: ensureThreadSessionState(state.threadSessions, result.thread.id),
       activeProjectId: result.thread.projectId,
+      activeRequirementId: result.thread.requirementId,
       activeThreadId: result.thread.id,
-      config: currentConfig ? { ...currentConfig, selectedProjectId: result.thread.projectId } : currentConfig,
+      config: currentConfig
+        ? {
+            ...currentConfig,
+            selectedProjectId: result.thread.projectId,
+            selectedRequirementId: result.thread.requirementId,
+          }
+        : currentConfig,
+    }));
+  },
+  assignThreadToRequirement: async (requirementId, threadId) => {
+    const result = (await window.myAgent.assignThreadToRequirement({ requirementId, threadId })) as {
+      requirement: RequirementRecord;
+      memory: RequirementMemoryRecord;
+      thread: ThreadRecord;
+    };
+    set((state) => ({
+      requirements: upsertRequirement(state.requirements, result.requirement),
+      requirementMemories: upsertRequirementMemory(state.requirementMemories, result.memory),
+      threads: state.threads.map((thread) => (thread.id === result.thread.id ? result.thread : thread)),
+      activeRequirementId: result.requirement.id,
+      activeProjectId: result.requirement.primaryProjectId,
+      config: state.config
+        ? {
+            ...state.config,
+            selectedRequirementId: result.requirement.id,
+            selectedProjectId: result.requirement.primaryProjectId,
+          }
+        : state.config,
+    }));
+  },
+  unassignThreadFromRequirement: async (threadId) => {
+    const result = (await window.myAgent.unassignThreadFromRequirement({ threadId })) as { thread: ThreadRecord };
+    set((state) => ({
+      threads: state.threads.map((thread) => (thread.id === result.thread.id ? result.thread : thread)),
+      activeRequirementId: state.activeThreadId === threadId ? result.thread.requirementId : state.activeRequirementId,
+      config:
+        state.config && state.activeThreadId === threadId
+          ? {
+              ...state.config,
+              selectedRequirementId: result.thread.requirementId,
+            }
+          : state.config,
     }));
   },
   selectThread: async (threadId) => {
@@ -229,9 +362,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (existingThread) {
       set((state) => ({
         activeProjectId: existingThread.projectId,
+        activeRequirementId: existingThread.requirementId,
         activeThreadId: threadId,
         threadSessions: ensureThreadSessionState(state.threadSessions, threadId),
-        config: state.config ? { ...state.config, selectedProjectId: existingThread.projectId } : state.config,
+        config: state.config
+          ? {
+              ...state.config,
+              selectedProjectId: existingThread.projectId,
+              selectedRequirementId: existingThread.requirementId,
+            }
+          : state.config,
       }));
     }
 
@@ -243,6 +383,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     };
     set((state) => ({
       activeProjectId: result.thread.projectId,
+      activeRequirementId: result.thread.requirementId,
       activeThreadId: threadId,
       threadSessions: updateThreadSession(state.threadSessions, threadId, (session) => ({
         ...session,
@@ -251,7 +392,13 @@ export const useAppStore = create<AppState>((set, get) => ({
         pendingApproval: result.pendingApproval ?? null,
         submitting: false,
       })),
-      config: state.config ? { ...state.config, selectedProjectId: result.thread.projectId } : state.config,
+      config: state.config
+        ? {
+            ...state.config,
+            selectedProjectId: result.thread.projectId,
+            selectedRequirementId: result.thread.requirementId,
+          }
+        : state.config,
     }));
   },
   sendTurn: async (input, selectedSkillIds, attachments, includeIdeContext) => {
@@ -368,7 +515,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   updateConfig: async (config) => {
     const result = (await window.myAgent.writeConfig({ config })) as { config: AppConfig };
-    set({ config: result.config, activeProjectId: result.config.selectedProjectId ?? get().activeProjectId });
+    set({
+      config: result.config,
+      activeProjectId: result.config.selectedProjectId ?? get().activeProjectId,
+      activeRequirementId: result.config.selectedRequirementId,
+    });
   },
   testProvider: async (provider) => {
     const currentProvider = get().config?.provider;
@@ -456,6 +607,16 @@ export const useAppStore = create<AppState>((set, get) => ({
         set((state) => ({
           threads: upsertThread(state.threads, event.payload.thread),
           threadSessions: ensureThreadSessionState(state.threadSessions, event.payload.thread.id),
+        }));
+        break;
+      case "requirement/updated":
+        set((state) => ({
+          requirements: upsertRequirement(state.requirements, event.payload.requirement),
+        }));
+        break;
+      case "requirement/memoryUpdated":
+        set((state) => ({
+          requirementMemories: upsertRequirementMemory(state.requirementMemories, event.payload.memory),
         }));
         break;
       case "turn/started":
@@ -611,6 +772,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         set((state) => ({
           config: event.payload.config,
           activeProjectId: event.payload.config.selectedProjectId ?? state.activeProjectId,
+          activeRequirementId: event.payload.config.selectedRequirementId,
         }));
         void get().refreshProviderModels();
         void get().refreshRuntimeProjectState(event.payload.config.selectedProjectId ?? get().activeProjectId);
@@ -626,6 +788,21 @@ export const useAppStore = create<AppState>((set, get) => ({
 
 function upsertThread(threads: ThreadRecord[], thread: ThreadRecord): ThreadRecord[] {
   return [thread, ...threads.filter((entry) => entry.id !== thread.id)];
+}
+
+function upsertRequirement(requirements: RequirementRecord[], requirement: RequirementRecord): RequirementRecord[] {
+  return [requirement, ...requirements.filter((entry) => entry.id !== requirement.id)].sort((left, right) =>
+    right.updatedAt.localeCompare(left.updatedAt),
+  );
+}
+
+function upsertRequirementMemory(
+  memories: RequirementMemoryRecord[],
+  memory: RequirementMemoryRecord,
+): RequirementMemoryRecord[] {
+  return [...memories.filter((entry) => entry.requirementId !== memory.requirementId), memory].sort((left, right) =>
+    right.updatedAt.localeCompare(left.updatedAt),
+  );
 }
 
 function upsertTurn(turns: TurnRecord[], turn: TurnRecord): TurnRecord[] {

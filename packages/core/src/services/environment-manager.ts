@@ -15,6 +15,7 @@ export class EnvironmentManager {
 
   detect(params: {
     project: ProjectRecord;
+    requirementId?: string;
     threadId?: string;
     worktreeId?: string;
     cwd?: string;
@@ -29,6 +30,7 @@ export class EnvironmentManager {
     const record = this.database.createEnvironment({
       id: createId("env"),
       projectId: params.project.id,
+      requirementId: params.requirementId,
       threadId: params.threadId,
       worktreeId: params.worktreeId,
       cwd,

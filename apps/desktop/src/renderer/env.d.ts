@@ -4,6 +4,7 @@ import {
   type AppConfig,
   type ConfigWriteParams,
   type CreateProjectParams,
+  type CreateRequirementParams,
   type ExecutionContextRecord,
   type HarnessEvent,
   type InitializeResult,
@@ -16,6 +17,8 @@ import {
   type PluginRecord,
   type ProviderActionParams,
   type ProjectRecord,
+  type RequirementMemoryRecord,
+  type RequirementRecord,
   type ReviewRecord,
   type ReviewStartParams,
   type SkillDescriptor,
@@ -39,6 +42,7 @@ import {
   type TurnSteerParams,
   type TurnSteerRecord,
   type TurnRecord,
+  type UpdateRequirementParams,
   type UpdateThreadParams,
   type UpdateProjectParams,
 } from "@my-agent/protocol";
@@ -49,6 +53,12 @@ declare global {
       initialize: () => Promise<InitializeResult>;
       createProject: (params: CreateProjectParams) => Promise<{ project: ProjectRecord }>;
       updateProject: (params: UpdateProjectParams) => Promise<{ project: ProjectRecord }>;
+      listRequirements: (params?: { projectId?: string }) => Promise<{ requirements: RequirementRecord[]; memories: RequirementMemoryRecord[] }>;
+      getRequirement: (requirementId: string) => Promise<{ requirement: RequirementRecord; memory: RequirementMemoryRecord }>;
+      createRequirement: (params: CreateRequirementParams) => Promise<{ requirement: RequirementRecord; memory: RequirementMemoryRecord }>;
+      updateRequirement: (params: UpdateRequirementParams) => Promise<{ requirement: RequirementRecord; memory: RequirementMemoryRecord }>;
+      assignThreadToRequirement: (params: { requirementId: string; threadId: string }) => Promise<{ requirement: RequirementRecord; memory: RequirementMemoryRecord; thread: ThreadRecord }>;
+      unassignThreadFromRequirement: (params: { threadId: string }) => Promise<{ thread: ThreadRecord }>;
       updateThread: (params: UpdateThreadParams) => Promise<{ thread: ThreadRecord }>;
       startThread: (params: StartThreadParams) => Promise<{ thread: ThreadRecord }>;
       resumeThread: (threadId: string) => Promise<{ thread: ThreadRecord; turns: TurnRecord[]; items: ItemRecord[]; pendingApproval?: PendingApproval | null }>;

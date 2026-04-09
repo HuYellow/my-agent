@@ -23,6 +23,7 @@ interface AgentTaskRunOptions {
   provider: ProviderProfile;
   globalInstructions?: string;
   runtimeRunMode?: RuntimeRunMode;
+  requirementContext?: string;
   discoveredSkills?: SkillDescriptor[];
   selectedSkills?: SkillDescriptor[];
   mcpContext?: Array<{
@@ -59,6 +60,7 @@ export class AgentTaskManager {
     provider: ProviderProfile;
     workspace: WorkspaceProfile;
     project: ProjectRecord;
+    requirementId?: string;
     parentThreadId: string;
     parentTurnId?: string;
     title: string;
@@ -66,18 +68,22 @@ export class AgentTaskManager {
     inheritHistory?: boolean;
     globalInstructions?: string;
     runtimeRunMode?: import("@my-agent/protocol").RuntimeRunMode;
+    requirementContext?: string;
     discoveredSkills?: SkillDescriptor[];
     selectedSkills?: SkillDescriptor[];
     mcpContext?: AgentTaskRunOptions["mcpContext"];
   }): AgentTaskRecord {
     const now = new Date().toISOString();
     const taskId = createId("agent");
-    const worktree = canCreateWorktree(params.project) ? this.worktreeManager.create({ project: params.project, agentId: taskId }) : undefined;
+    const worktree = canCreateWorktree(params.project)
+      ? this.worktreeManager.create({ project: params.project, requirementId: params.requirementId, agentId: taskId })
+      : undefined;
     const delegatedWorkspace = buildDelegatedWorkspace(params.workspace, params.project, worktree);
     const childThread = this.database.createThread({
       id: createId("thread"),
       title: params.title?.trim() || "Delegated task",
       projectId: params.project.id,
+      requirementId: params.requirementId,
       sandboxMode: delegatedWorkspace.sandboxMode,
       hidden: true,
       createdAt: now,
@@ -91,12 +97,14 @@ export class AgentTaskManager {
 
     const environment = this.environmentManager.detect({
       project: params.project,
+      requirementId: params.requirementId,
       threadId: childThread.id,
       worktreeId: worktree?.id,
       cwd: delegatedWorkspace.rootPath,
     });
     const executionContext = this.executionContextManager.create({
       project: params.project,
+      requirementId: params.requirementId,
       kind: "agent",
       threadId: childThread.id,
       agentId: taskId,
@@ -127,6 +135,7 @@ export class AgentTaskManager {
         provider: params.provider,
         globalInstructions: params.globalInstructions,
         runtimeRunMode: params.runtimeRunMode,
+        requirementContext: params.requirementContext,
         discoveredSkills: params.discoveredSkills ?? [],
         selectedSkills: params.selectedSkills ?? [],
         mcpContext: params.mcpContext,
@@ -296,6 +305,7 @@ export class AgentTaskManager {
         globalInstructions: options.globalInstructions ?? "",
         runtimeRunMode: options.runtimeRunMode,
         mcpContext: options.mcpContext,
+        requirementContext: options.requirementContext,
       });
       const synced = this.syncTaskForHiddenThread(live.childThread.id, finalTurn.id);
       return synced ?? live.task;

@@ -18,6 +18,12 @@ import {
   type McpSessionsResult,
   type McpToolsResult,
   type PluginListResult,
+  type RequirementAssignThreadParams,
+  type RequirementGetParams,
+  type RequirementListParams,
+  type CreateRequirementParams,
+  type UpdateRequirementParams,
+  type RequirementUnassignThreadParams,
   type JsonRpcNotification,
   type JsonRpcRequest,
   type ProjectRecord,
@@ -73,6 +79,8 @@ import { ensureStoredProviderConfig, syncStoredProviderConfig, watchStoredConfig
 import { PluginManager } from "../services/plugin-manager.js";
 import { PromptBuilder } from "../services/prompt-builder.js";
 import { ProviderService } from "../services/provider-service.js";
+import { RequirementMemoryManager } from "../services/requirement-memory-manager.js";
+import { RequirementService } from "../services/requirement-service.js";
 import { ReviewManager } from "../services/review-manager.js";
 import { SkillService } from "../services/skill-service.js";
 import { TerminalManager } from "../services/terminal-manager.js";
@@ -95,6 +103,8 @@ export class HarnessServer {
   private readonly workflowManager: WorkflowManager;
   private readonly pluginManager: PluginManager;
   private readonly mcpManager: McpManager;
+  private readonly requirementMemoryManager: RequirementMemoryManager;
+  private readonly requirementService: RequirementService;
   private readonly reviewManager: ReviewManager;
 
   constructor(
@@ -148,6 +158,21 @@ export class HarnessServer {
         payload: { executionContext },
       }),
     );
+    this.requirementMemoryManager = new RequirementMemoryManager(this.database, (memory) =>
+      this.emit({
+        type: "requirement/memoryUpdated",
+        payload: { memory },
+      }),
+    );
+    this.requirementService = new RequirementService(
+      this.database,
+      this.requirementMemoryManager,
+      (requirement) =>
+        this.emit({
+          type: "requirement/updated",
+          payload: { requirement },
+        }),
+    );
     const delegatedRunner = new OpenAiCompatibleRunner(this.database, this.promptBuilder, () => undefined);
     this.agentTaskManager = new AgentTaskManager(
       this.database,
@@ -170,6 +195,7 @@ export class HarnessServer {
       this.providerService,
       this.environmentManager,
       this.executionContextManager,
+      this.requirementMemoryManager,
       (event) => this.emit(event),
     );
     this.workflowManager = new WorkflowManager(
@@ -257,6 +283,18 @@ export class HarnessServer {
         return this.createProject((message.params ?? {}) as CreateProjectParams);
       case "project/update":
         return this.updateProject(message.params as UpdateProjectParams);
+      case "requirement/list":
+        return this.listRequirements((message.params ?? {}) as RequirementListParams);
+      case "requirement/get":
+        return this.getRequirement(message.params as RequirementGetParams);
+      case "requirement/create":
+        return this.createRequirement(message.params as CreateRequirementParams);
+      case "requirement/update":
+        return this.updateRequirement(message.params as UpdateRequirementParams);
+      case "requirement/assignThread":
+        return this.assignThreadToRequirement(message.params as RequirementAssignThreadParams);
+      case "requirement/unassignThread":
+        return this.unassignThreadFromRequirement(message.params as RequirementUnassignThreadParams);
       case "thread/start":
         return this.startThread((message.params ?? {}) as StartThreadParams);
       case "thread/resume":
@@ -361,7 +399,7 @@ export class HarnessServer {
   }
 
   private initialize(): InitializeResult {
-    const config = this.syncProjectSelection(this.database.getConfig());
+    const config = this.syncRequirementSelection(this.syncProjectSelection(this.database.getConfig()), true);
     const skills = this.refreshSkills(config.selectedProjectId);
     return {
       protocolVersion: "0.1.0",
@@ -371,6 +409,8 @@ export class HarnessServer {
       },
       config,
       projects: this.database.listProjects(),
+      requirements: this.requirementService.list(),
+      requirementMemories: this.requirementService.listMemories(),
       threads: this.database.listThreads(),
       skills,
       worktrees: this.database.listWorktrees(config.selectedProjectId),
@@ -438,14 +478,110 @@ export class HarnessServer {
     return { project: updated };
   }
 
+  private listRequirements(params?: RequirementListParams) {
+    return {
+      requirements: this.requirementService.list(params?.projectId),
+      memories: this.requirementService.listMemories(),
+    };
+  }
+
+  private getRequirement(params: RequirementGetParams) {
+    return this.requirementService.getWithMemory(params.requirementId);
+  }
+
+  private createRequirement(params: CreateRequirementParams) {
+    const result = this.requirementService.create({
+      title: params.title,
+      primaryProjectId: params.primaryProjectId,
+      relatedProjectIds: params.relatedProjectIds,
+      status: params.status,
+      memory: params.memory,
+    });
+    const config = this.syncProjectSelection(
+      this.database.writeConfig({
+        ...this.database.getConfig(),
+        selectedRequirementId: result.requirement.id,
+        selectedProjectId: result.requirement.primaryProjectId,
+      }),
+    );
+    this.emit({
+      type: "config/changed",
+      payload: { config },
+    });
+    this.refreshSkills(result.requirement.primaryProjectId);
+    return result;
+  }
+
+  private updateRequirement(params: UpdateRequirementParams) {
+    const result = this.requirementService.update({
+      requirementId: params.requirementId,
+      patch: params.patch,
+    });
+    const current = this.database.getConfig();
+    const config = this.syncRequirementSelection(
+      this.syncProjectSelection({
+        ...current,
+        selectedRequirementId:
+          current.selectedRequirementId === result.requirement.id
+            ? result.requirement.id
+            : current.selectedRequirementId,
+        selectedProjectId:
+          current.selectedRequirementId === result.requirement.id
+            ? result.requirement.primaryProjectId
+            : current.selectedProjectId,
+      }),
+    );
+    this.database.writeConfig(config);
+    this.emit({
+      type: "config/changed",
+      payload: { config },
+    });
+    return result;
+  }
+
+  private assignThreadToRequirement(params: RequirementAssignThreadParams) {
+    const result = this.requirementService.assignThread(params.requirementId, params.threadId);
+    const config = this.syncProjectSelection(
+      this.database.writeConfig({
+        ...this.database.getConfig(),
+        selectedRequirementId: result.requirement.id,
+        selectedProjectId: result.requirement.primaryProjectId,
+      }),
+    );
+    this.emit({
+      type: "config/changed",
+      payload: { config },
+    });
+    this.refreshSkills(result.thread.projectId);
+    return result;
+  }
+
+  private unassignThreadFromRequirement(params: RequirementUnassignThreadParams) {
+    const previous = this.database.getThread(params.threadId);
+    const thread = this.requirementService.unassignThread(params.threadId);
+    const current = this.database.getConfig();
+    const config = this.database.writeConfig({
+      ...current,
+      selectedRequirementId: current.selectedRequirementId === previous?.requirementId ? undefined : current.selectedRequirementId,
+      selectedProjectId: thread.projectId,
+    });
+    this.emit({
+      type: "config/changed",
+      payload: { config },
+    });
+    return { thread };
+  }
+
   private startThread(params: StartThreadParams): StartThreadResult {
     const config = this.database.getConfig();
-    const project = this.requireProject(params.projectId ?? config.selectedProjectId);
+    const requirement = params.requirementId ? this.requireRequirement(params.requirementId) : undefined;
+    const project = this.requireProject(params.projectId ?? requirement?.primaryProjectId ?? config.selectedProjectId);
     const now = new Date().toISOString();
     const thread: ThreadRecord = {
       id: createId("thread"),
       title: params.title?.trim() || "New Thread",
       projectId: project.id,
+      requirementId: requirement?.id,
       sandboxMode: params.sandboxMode ?? project.sandboxMode,
       createdAt: now,
       updatedAt: now,
@@ -454,8 +590,12 @@ export class HarnessServer {
     this.database.writeConfig({
       ...config,
       selectedProjectId: project.id,
+      selectedRequirementId: requirement?.id,
     });
     this.database.createThread(thread);
+    if (thread.requirementId) {
+      this.requirementService.rebuildMemory(thread.requirementId);
+    }
     this.emit({ type: "thread/started", payload: { thread } });
     return { thread };
   }
@@ -488,6 +628,7 @@ export class HarnessServer {
       this.database.writeConfig({
         ...this.database.getConfig(),
         selectedProjectId: thread.projectId,
+        selectedRequirementId: thread.requirementId,
       }),
     );
     this.clearThreadSessionApprovals(thread.id);
@@ -533,6 +674,7 @@ export class HarnessServer {
       id: createId("thread"),
       title: params.title?.trim() || `${source.title} (fork)`,
       projectId: source.projectId,
+      requirementId: source.requirementId,
       sandboxMode: source.sandboxMode,
       createdAt: now,
       updatedAt: now,
@@ -540,6 +682,9 @@ export class HarnessServer {
     };
 
     this.database.createThread(thread);
+    if (thread.requirementId) {
+      this.requirementService.rebuildMemory(thread.requirementId);
+    }
     const turnIdMap = new Map<string, string>();
 
     for (const turn of this.database.listTurns(source.id)) {
@@ -601,6 +746,7 @@ export class HarnessServer {
     const workspace = this.resolveThreadWorkspace(project, thread);
     const selectedSkills = this.skillService.resolveSelectedSkills(params.input, params.selectedSkillIds, discoveredSkills);
     const mcpContext = await this.buildRelevantMcpContext(params.input);
+    const requirementContext = this.requirementService.buildPromptContextSection(thread.requirementId);
     const finalTurn = await this.runner.runTurn({
       provider: config.provider,
       workspace,
@@ -613,6 +759,7 @@ export class HarnessServer {
       globalInstructions: config.globalInstructions,
       runtimeRunMode: config.runtimeRunMode ?? config.providerCapabilities?.recommendedRunMode ?? "full-tools",
       mcpContext,
+      requirementContext,
       ideContext: params.includeIdeContext
         ? {
             projectName: project.name,
@@ -724,6 +871,7 @@ export class HarnessServer {
     const review = this.reviewManager.start({
       project,
       provider: this.database.getConfig().provider,
+      requirementId: thread?.requirementId,
       threadId: thread?.id,
       source: params.source,
       instructions: params.instructions,
@@ -1034,10 +1182,12 @@ export class HarnessServer {
     const discoveredSkills = this.refreshSkills(project.id);
     const selectedSkills = this.skillService.resolveSelectedSkills(params.input, params.selectedSkillIds, discoveredSkills);
     const mcpContext = await this.buildRelevantMcpContext(params.input);
+    const requirementContext = this.requirementService.buildPromptContextSection(thread.requirementId);
     const task = this.agentTaskManager.spawn({
       provider: config.provider,
       workspace,
       project,
+      requirementId: thread.requirementId,
       parentThreadId: thread.id,
       parentTurnId: params.turnId,
       title: params.title?.trim() || "Delegated task",
@@ -1045,6 +1195,7 @@ export class HarnessServer {
       inheritHistory: params.inheritHistory,
       globalInstructions: config.globalInstructions,
       runtimeRunMode: config.runtimeRunMode ?? config.providerCapabilities?.recommendedRunMode ?? "full-tools",
+      requirementContext,
       discoveredSkills,
       selectedSkills,
       mcpContext,
@@ -1075,10 +1226,12 @@ export class HarnessServer {
     const discoveredSkills = this.refreshSkills(project.id);
     const selectedSkills = this.skillService.resolveSelectedSkills(params.input, undefined, discoveredSkills);
     const mcpContext = await this.buildRelevantMcpContext(params.input);
+    const requirementContext = this.requirementService.buildPromptContextSection(parentThread.requirementId);
     const updated = await this.agentTaskManager.sendInput(params.agentId, params.input, {
       provider: config.provider,
       globalInstructions: config.globalInstructions,
       runtimeRunMode: config.runtimeRunMode ?? config.providerCapabilities?.recommendedRunMode ?? "full-tools",
+      requirementContext,
       discoveredSkills,
       selectedSkills,
       mcpContext,
@@ -1141,9 +1294,11 @@ export class HarnessServer {
 
   private createWorktree(params: WorktreeCreateParams) {
     const project = this.requireProject(params.projectId);
+    const thread = params.threadId ? this.database.getThread(params.threadId) : null;
     return {
       worktree: this.worktreeManager.create({
         project,
+        requirementId: thread?.requirementId,
         threadId: params.threadId,
         agentId: params.agentId,
         branch: params.branch,
@@ -1166,9 +1321,11 @@ export class HarnessServer {
 
   private detectEnvironment(params: EnvironmentDetectParams) {
     const project = this.requireProject(params.projectId);
+    const thread = params.threadId ? this.database.getThread(params.threadId) : null;
     return {
       environment: this.environmentManager.detect({
         project,
+        requirementId: thread?.requirementId,
         threadId: params.threadId,
         worktreeId: params.worktreeId,
         cwd: params.cwd,
@@ -1183,11 +1340,13 @@ export class HarnessServer {
 
   private async runWorkflow(params: WorkflowRunParams): Promise<WorkflowRunResult> {
     const project = this.requireProject(params.projectId);
+    const thread = params.threadId ? this.database.getThread(params.threadId) : null;
     return this.workflowManager.run({
       workflowId: params.workflowId,
       project,
       provider: this.database.getConfig().provider,
       workspace: project,
+      requirementId: thread?.requirementId,
       threadId: params.threadId,
       nonInteractive: params.nonInteractive,
       runId: params.runId,
@@ -1207,6 +1366,7 @@ export class HarnessServer {
       project,
       provider: this.database.getConfig().provider,
       workspace: project,
+      requirementId: run.requirementId,
       approvePausedSteps: params.approvePausedSteps,
       retryFailedStepIds: params.retryFailedStepIds,
     });
@@ -1373,6 +1533,18 @@ export class HarnessServer {
     next.providerCapabilities = detectProviderCapabilities(next.provider);
     next.runtimeRunMode = next.runtimeRunMode ?? next.providerCapabilities.recommendedRunMode;
 
+    if (Object.prototype.hasOwnProperty.call(params.config, "selectedRequirementId")) {
+      next.selectedRequirementId = params.config.selectedRequirementId;
+
+      if (next.selectedRequirementId) {
+        const requirement = this.database.getRequirement(next.selectedRequirementId);
+        if (!requirement) {
+          throw new Error(`Requirement not found: ${next.selectedRequirementId}`);
+        }
+        next.selectedProjectId = requirement.primaryProjectId;
+      }
+    }
+
     const stored = this.database.writeConfig(next);
 
     if (params.config.provider) {
@@ -1380,14 +1552,15 @@ export class HarnessServer {
     }
 
     const synced = this.syncProjectSelection(stored);
+    const syncedRequirement = this.syncRequirementSelection(synced);
     this.emit({
       type: "config/changed",
       payload: {
-        config: synced,
+        config: syncedRequirement,
       },
     });
-    this.refreshSkills(synced.selectedProjectId);
-    return { config: synced };
+    this.refreshSkills(syncedRequirement.selectedProjectId);
+    return { config: syncedRequirement };
   }
 
   private refreshSkills(projectId?: string) {
@@ -1407,6 +1580,16 @@ export class HarnessServer {
     }
 
     return project;
+  }
+
+  private requireRequirement(requirementId: string) {
+    const requirement = this.database.getRequirement(requirementId);
+
+    if (!requirement) {
+      throw new Error(`Requirement not found: ${requirementId}`);
+    }
+
+    return requirement;
   }
 
   private resolveWorkspace(threadId?: string): ProjectRecord {
@@ -1470,12 +1653,76 @@ export class HarnessServer {
     });
   }
 
+  private syncRequirementSelection(config: AppConfig, preferFirstRequirement = false): AppConfig {
+    if (config.selectedRequirementId) {
+      const requirement = this.database.getRequirement(config.selectedRequirementId);
+
+      if (requirement) {
+        if (config.selectedProjectId === requirement.primaryProjectId) {
+          return config;
+        }
+
+        return this.database.writeConfig({
+          ...config,
+          selectedProjectId: requirement.primaryProjectId,
+        });
+      }
+    }
+
+    if (!preferFirstRequirement) {
+      return config;
+    }
+
+    const firstRequirement = this.database.listRequirements()[0];
+
+    if (!firstRequirement) {
+      if (!config.selectedRequirementId) {
+        return config;
+      }
+
+      return this.database.writeConfig({
+        ...config,
+        selectedRequirementId: undefined,
+      });
+    }
+
+    return this.database.writeConfig({
+      ...config,
+      selectedRequirementId: firstRequirement.id,
+      selectedProjectId: firstRequirement.primaryProjectId,
+    });
+  }
+
   private emit(event: HarnessEvent): void {
+    this.refreshRequirementMemoryFromEvent(event);
     this.emitRaw({
       jsonrpc: "2.0",
       method: event.type,
       params: event.payload,
     });
+  }
+
+  private refreshRequirementMemoryFromEvent(event: HarnessEvent): void {
+    try {
+      if (event.type === "turn/completed" || event.type === "turn/cancelled" || event.type === "turn/failed") {
+        const thread = this.database.getThread(event.payload.turn.threadId);
+        if (thread?.requirementId) {
+          this.requirementService.rebuildMemory(thread.requirementId);
+        }
+        return;
+      }
+
+      if (event.type === "review/result" && event.payload.review.requirementId) {
+        this.requirementService.rebuildMemory(event.payload.review.requirementId);
+        return;
+      }
+
+      if (event.type === "workflow/run" && event.payload.run.requirementId && event.payload.run.status !== "running") {
+        this.requirementService.rebuildMemory(event.payload.run.requirementId);
+      }
+    } catch {
+      // best effort refresh; failing to rebuild memory should not block the primary event
+    }
   }
 }
 

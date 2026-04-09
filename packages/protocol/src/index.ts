@@ -40,6 +40,7 @@ export type ApiFlavor = "chat_completions" | "responses";
 export type ModelReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
 export type SkillScope = "SYSTEM" | "USER" | "REPO" | "ADMIN";
 export type RuntimeRunMode = "no-tools" | "limited-tools" | "full-tools";
+export type RequirementStatus = "active" | "paused" | "completed" | "archived";
 export type ItemKind =
   | "userMessage"
   | "agentMessage"
@@ -101,9 +102,77 @@ export interface ProjectRecord {
   updatedAt: string;
 }
 
+export interface RequirementRecord {
+  id: string;
+  title: string;
+  status: RequirementStatus;
+  primaryProjectId: string;
+  relatedProjectIds: string[];
+  createdAt: string;
+  updatedAt: string;
+  archivedAt?: string | null;
+}
+
+export interface RequirementManualMemoryRecord {
+  brief: string;
+  goals: string[];
+  constraints: string[];
+  decisions: string[];
+  openQuestions: string[];
+  definitionOfDone: string[];
+}
+
+export interface RequirementDerivedProjectLink {
+  projectId: string;
+  name: string;
+  role: "primary" | "related";
+}
+
+export interface RequirementDerivedThreadLink {
+  threadId: string;
+  title: string;
+  projectId: string;
+  updatedAt: string;
+  hidden: boolean;
+  latestTurnStatus?: TurnRecord["status"] | "idle";
+}
+
+export interface RequirementDerivedReviewLink {
+  reviewId: string;
+  status: ReviewRecord["status"];
+  summary?: string;
+  updatedAt: string;
+  threadId?: string;
+}
+
+export interface RequirementDerivedArtifactLink {
+  source: "review" | "workflow" | "agent";
+  sourceId: string;
+  summary: string;
+  updatedAt: string;
+}
+
+export interface RequirementDerivedMemoryRecord {
+  linkedProjects: RequirementDerivedProjectLink[];
+  linkedThreads: RequirementDerivedThreadLink[];
+  recentReviews: RequirementDerivedReviewLink[];
+  recentArtifacts: RequirementDerivedArtifactLink[];
+  recentChanges: string[];
+  activitySummary: string;
+}
+
+export interface RequirementMemoryRecord {
+  requirementId: string;
+  manual: RequirementManualMemoryRecord;
+  derived: RequirementDerivedMemoryRecord;
+  updatedAt: string;
+  lastRebuiltAt?: string;
+}
+
 export interface WorktreeRecord {
   id: string;
   projectId: string;
+  requirementId?: string;
   threadId?: string;
   agentId?: string;
   branch: string;
@@ -116,6 +185,7 @@ export interface WorktreeRecord {
 export interface EnvironmentRecord {
   id: string;
   projectId: string;
+  requirementId?: string;
   threadId?: string;
   worktreeId?: string;
   cwd: string;
@@ -132,6 +202,7 @@ export interface ThreadRecord {
   id: string;
   title: string;
   projectId: string;
+  requirementId?: string;
   sandboxMode: SandboxMode;
   hidden?: boolean;
   createdAt: string;
@@ -191,6 +262,7 @@ export interface PendingApproval {
 export interface AppConfig {
   globalInstructions: string;
   selectedProjectId?: string;
+  selectedRequirementId?: string;
   selectedWorkspaceId?: string;
   provider: ProviderProfile;
   providerCapabilities?: ProviderCapabilities;
@@ -207,6 +279,8 @@ export interface InitializeResult {
   };
   config: AppConfig;
   projects: ProjectRecord[];
+  requirements?: RequirementRecord[];
+  requirementMemories?: RequirementMemoryRecord[];
   threads: ThreadRecord[];
   skills: SkillDescriptor[];
   worktrees?: WorktreeRecord[];
@@ -225,6 +299,7 @@ export interface StartThreadParams {
   title?: string;
   workspace?: Partial<WorkspaceProfile>;
   projectId?: string;
+  requirementId?: string;
   sandboxMode?: SandboxMode;
 }
 
@@ -324,6 +399,7 @@ export interface ReviewFinding {
 export interface ReviewRecord {
   id: string;
   projectId: string;
+  requirementId?: string;
   threadId?: string;
   executionContextId?: string;
   status: "queued" | "running" | "completed" | "failed";
@@ -409,6 +485,68 @@ export interface UpdateProjectResult {
 export interface UpdateThreadParams {
   threadId: string;
   patch: Partial<Pick<ThreadRecord, "title" | "sandboxMode" | "archivedAt">>;
+}
+
+export interface RequirementListParams {
+  projectId?: string;
+}
+
+export interface RequirementListResult {
+  requirements: RequirementRecord[];
+  memories: RequirementMemoryRecord[];
+}
+
+export interface RequirementGetParams {
+  requirementId: string;
+}
+
+export interface RequirementGetResult {
+  requirement: RequirementRecord;
+  memory: RequirementMemoryRecord;
+}
+
+export interface CreateRequirementParams {
+  title: string;
+  primaryProjectId: string;
+  relatedProjectIds?: string[];
+  status?: RequirementStatus;
+  memory?: Partial<RequirementManualMemoryRecord>;
+}
+
+export interface CreateRequirementResult {
+  requirement: RequirementRecord;
+  memory: RequirementMemoryRecord;
+}
+
+export interface UpdateRequirementParams {
+  requirementId: string;
+  patch: Partial<Pick<RequirementRecord, "title" | "status" | "primaryProjectId" | "relatedProjectIds" | "archivedAt">> & {
+    memory?: Partial<RequirementManualMemoryRecord>;
+  };
+}
+
+export interface UpdateRequirementResult {
+  requirement: RequirementRecord;
+  memory: RequirementMemoryRecord;
+}
+
+export interface RequirementAssignThreadParams {
+  requirementId: string;
+  threadId: string;
+}
+
+export interface RequirementAssignThreadResult {
+  requirement: RequirementRecord;
+  memory: RequirementMemoryRecord;
+  thread: ThreadRecord;
+}
+
+export interface RequirementUnassignThreadParams {
+  threadId: string;
+}
+
+export interface RequirementUnassignThreadResult {
+  thread: ThreadRecord;
 }
 
 export interface UpdateThreadResult {
@@ -510,6 +648,7 @@ export interface TerminalClearBufferParams {
 export interface ExecutionContextRecord {
   id: string;
   projectId: string;
+  requirementId?: string;
   kind: "thread" | "agent" | "workflow" | "review";
   threadId?: string;
   agentId?: string;
@@ -621,6 +760,7 @@ export interface WorkflowRunRecord {
   id: string;
   workflowId: string;
   projectId: string;
+  requirementId?: string;
   threadId?: string;
   status: "running" | "paused" | "completed" | "failed" | "cancelled";
   pendingStepIds: string[];
@@ -693,6 +833,8 @@ export interface McpToolRecord {
 
 export type HarnessEvent =
   | EventEnvelope<"thread/started", { thread: ThreadRecord }>
+  | EventEnvelope<"requirement/updated", { requirement: RequirementRecord }>
+  | EventEnvelope<"requirement/memoryUpdated", { memory: RequirementMemoryRecord }>
   | EventEnvelope<"turn/started", { turn: TurnRecord }>
   | EventEnvelope<"turn/steered", { steer: TurnSteerRecord }>
   | EventEnvelope<"item/started", { item: ItemRecord }>

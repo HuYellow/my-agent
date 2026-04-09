@@ -12,6 +12,7 @@ import { createId } from "../utils/ids.js";
 import { EnvironmentManager } from "./environment-manager.js";
 import { ExecutionContextManager } from "./execution-context-manager.js";
 import { ProviderService, type ChatMessage } from "./provider-service.js";
+import { RequirementMemoryManager } from "./requirement-memory-manager.js";
 
 export class ReviewManager {
   constructor(
@@ -19,6 +20,7 @@ export class ReviewManager {
     private readonly providerService: ProviderService,
     private readonly environmentManager: EnvironmentManager,
     private readonly executionContextManager: ExecutionContextManager,
+    private readonly requirementMemoryManager: RequirementMemoryManager,
     private readonly emit: (event: HarnessEvent) => void,
   ) {}
 
@@ -29,6 +31,7 @@ export class ReviewManager {
   start(params: {
     project: ProjectRecord;
     provider: ProviderProfile;
+    requirementId?: string;
     threadId?: string;
     source?: ReviewSource;
     instructions?: string;
@@ -36,11 +39,13 @@ export class ReviewManager {
     const source = params.source ?? { kind: "workspace" };
     const environment = this.environmentManager.detect({
       project: params.project,
+      requirementId: params.requirementId,
       threadId: params.threadId,
       cwd: params.project.rootPath,
     });
     const executionContext = this.executionContextManager.create({
       project: params.project,
+      requirementId: params.requirementId,
       kind: "review",
       threadId: params.threadId,
       environment,
@@ -49,6 +54,7 @@ export class ReviewManager {
     const review: ReviewRecord = {
       id: createId("review"),
       projectId: params.project.id,
+      requirementId: params.requirementId,
       threadId: params.threadId,
       executionContextId: executionContext.id,
       status: "running",
@@ -63,11 +69,21 @@ export class ReviewManager {
     this.emit({ type: "review/started", payload: { review } });
     this.emit({ type: "review/status", payload: { review } });
 
-    void this.runReview(review, params.provider, executionContext.cwd);
+    void this.runReview(
+      review,
+      params.provider,
+      executionContext.cwd,
+      this.requirementMemoryManager.buildPromptContextSection(params.requirementId),
+    );
     return review;
   }
 
-  private async runReview(review: ReviewRecord, provider: ProviderProfile, cwd: string): Promise<void> {
+  private async runReview(
+    review: ReviewRecord,
+    provider: ProviderProfile,
+    cwd: string,
+    requirementContext?: string,
+  ): Promise<void> {
     try {
       if (!provider.baseUrl || !provider.model) {
         throw new Error("Provider is not configured yet. Configure baseUrl and model before starting review.");
@@ -90,7 +106,7 @@ export class ReviewManager {
 
       const response = await this.providerService.complete({
         provider,
-        messages: buildReviewMessages(review, truncateDiff(diff)),
+        messages: buildReviewMessages(review, truncateDiff(diff), requirementContext),
         tools: [],
       });
       const parsed = parseReviewResponse(response.content ?? "");
@@ -156,7 +172,7 @@ function runGit(cwd: string, args: string[]): string {
   return `${result.stdout ?? ""}`.trim();
 }
 
-function buildReviewMessages(review: ReviewRecord, diff: string): ChatMessage[] {
+function buildReviewMessages(review: ReviewRecord, diff: string, requirementContext?: string): ChatMessage[] {
   const instructions = review.instructions ? `\n\nAdditional review focus:\n${review.instructions}` : "";
   return [
     {
@@ -174,6 +190,7 @@ function buildReviewMessages(review: ReviewRecord, diff: string): ChatMessage[] 
       role: "user",
       content: [
         `Review source: ${formatReviewSource(review.source)}`,
+        requirementContext,
         instructions,
         "Review this diff:",
         diff,

@@ -89,6 +89,9 @@ describe("ReviewManager", () => {
           updatedAt: now,
         }),
       } as never,
+      {
+        buildPromptContextSection: () => undefined,
+      } as never,
       () => undefined,
     );
 
@@ -213,6 +216,9 @@ function createReviewHarness() {
         createdAt: now,
         updatedAt: now,
       }),
+    } as never,
+    {
+      buildPromptContextSection: () => undefined,
     } as never,
     () => undefined,
   );

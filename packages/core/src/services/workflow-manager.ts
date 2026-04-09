@@ -61,6 +61,7 @@ export class WorkflowManager {
     project: ProjectRecord;
     provider: ProviderProfile;
     workspace: WorkspaceProfile;
+    requirementId?: string;
     threadId?: string;
     nonInteractive?: boolean;
     runId?: string;
@@ -72,7 +73,7 @@ export class WorkflowManager {
     }
 
     const run = params.runId ? this.database.getWorkflowRun(params.runId) : null;
-    const initialRun = run ?? this.createRunRecord(workflow, params.project, params.threadId);
+    const initialRun = run ?? this.createRunRecord(workflow, params.project, params.requirementId, params.threadId);
     if (!run) {
       this.database.createWorkflowRun(initialRun);
       this.emitRun?.(initialRun);
@@ -137,6 +138,7 @@ export class WorkflowManager {
     project: ProjectRecord;
     provider: ProviderProfile;
     workspace: WorkspaceProfile;
+    requirementId?: string;
     approvePausedSteps?: boolean;
     retryFailedStepIds?: string[];
   }): Promise<WorkflowRunResult> {
@@ -178,12 +180,13 @@ export class WorkflowManager {
     });
   }
 
-  private createRunRecord(workflow: WorkflowRecord, project: ProjectRecord, threadId?: string): WorkflowRunRecord {
+  private createRunRecord(workflow: WorkflowRecord, project: ProjectRecord, requirementId?: string, threadId?: string): WorkflowRunRecord {
     const now = new Date().toISOString();
     return {
       id: createId("workflow_run"),
       workflowId: workflow.id,
       projectId: project.id,
+      requirementId,
       threadId,
       status: "running",
       pendingStepIds: workflow.steps.map((step) => step.id),

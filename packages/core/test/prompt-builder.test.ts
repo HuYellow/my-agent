@@ -40,9 +40,11 @@ describe("PromptBuilder", () => {
       attachments: [],
       selectedSkills: discoveredSkills,
       discoveredSkills,
+      requirementContext: "# Requirement Context\nRequirement: Build repo QA flow",
     });
 
     expect(built.systemPrompt).toContain("Project rule: be careful.");
+    expect(built.systemPrompt).toContain("Requirement: Build repo QA flow");
     expect(built.systemPrompt).toContain("Detailed workflow.");
     expect(built.systemPrompt).toContain("# Run Completion Rules");
     expect(built.systemPrompt).toContain("Do not repeat the same tool call");

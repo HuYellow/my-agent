@@ -17,6 +17,11 @@ import {
   type JsonRpcNotification,
   type JsonRpcRequest,
   type JsonRpcResponse,
+  type CreateRequirementParams,
+  type RequirementAssignThreadParams,
+  type RequirementGetParams,
+  type RequirementListParams,
+  type RequirementUnassignThreadParams,
   type ReviewStartParams,
   type StartThreadParams,
   type StartTurnParams,
@@ -30,6 +35,7 @@ import {
   type TerminalWriteParams,
   type TurnInputAttachment,
   type TurnSteerParams,
+  type UpdateRequirementParams,
   type WorkflowRunParams,
   type WorktreeCreateParams,
   type WorktreeListParams,
@@ -381,6 +387,16 @@ function registerIpc(): void {
   ipcMain.handle("harness:initialize", () => harness.request("initialize"));
   ipcMain.handle("project:create", (_event, params: CreateProjectParams) => harness.request("project/create", params));
   ipcMain.handle("project:update", (_event, params: UpdateProjectParams) => harness.request("project/update", params));
+  ipcMain.handle("requirement:list", (_event, params: RequirementListParams) => harness.request("requirement/list", params));
+  ipcMain.handle("requirement:get", (_event, params: RequirementGetParams) => harness.request("requirement/get", params));
+  ipcMain.handle("requirement:create", (_event, params: CreateRequirementParams) => harness.request("requirement/create", params));
+  ipcMain.handle("requirement:update", (_event, params: UpdateRequirementParams) => harness.request("requirement/update", params));
+  ipcMain.handle("requirement:assign-thread", (_event, params: RequirementAssignThreadParams) =>
+    harness.request("requirement/assignThread", params),
+  );
+  ipcMain.handle("requirement:unassign-thread", (_event, params: RequirementUnassignThreadParams) =>
+    harness.request("requirement/unassignThread", params),
+  );
   ipcMain.handle("project:path:reveal", async (_event, params: { projectPath: string }) => {
     const error = await shell.openPath(params.projectPath);
     return { ok: error.length === 0, error: error || undefined };

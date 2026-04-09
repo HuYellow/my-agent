@@ -16,6 +16,10 @@ import {
   type PendingApproval,
   type PluginRecord,
   type ProjectRecord,
+  type RequirementMemoryRecord,
+  type RequirementRecord,
+  type RequirementManualMemoryRecord,
+  type RequirementDerivedMemoryRecord,
   type ReviewRecord,
   type TerminalSessionRecord,
   type ThreadRecord,
@@ -52,6 +56,24 @@ type ThreadWriteRecord = Omit<ThreadRecord, "sandboxMode"> & {
   hidden?: ThreadRecord["hidden"];
 };
 
+const EMPTY_REQUIREMENT_MANUAL_MEMORY: RequirementManualMemoryRecord = {
+  brief: "",
+  goals: [],
+  constraints: [],
+  decisions: [],
+  openQuestions: [],
+  definitionOfDone: [],
+};
+
+const EMPTY_REQUIREMENT_DERIVED_MEMORY: RequirementDerivedMemoryRecord = {
+  linkedProjects: [],
+  linkedThreads: [],
+  recentReviews: [],
+  recentArtifacts: [],
+  recentChanges: [],
+  activitySummary: "",
+};
+
 export class HarnessDatabase {
   private readonly db: DatabaseSync;
 
@@ -75,10 +97,37 @@ export class HarnessDatabase {
         updated_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS requirements (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL,
+        primary_project_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        archived_at TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS requirement_project_links (
+        requirement_id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (requirement_id, project_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS requirement_memories (
+        requirement_id TEXT PRIMARY KEY,
+        manual_json TEXT NOT NULL,
+        derived_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        last_rebuilt_at TEXT
+      );
+
       CREATE TABLE IF NOT EXISTS threads (
         id TEXT PRIMARY KEY,
         title TEXT NOT NULL,
         workspace_id TEXT NOT NULL,
+        requirement_id TEXT,
         sandbox_mode TEXT NOT NULL DEFAULT 'workspace-write',
         hidden INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
@@ -202,6 +251,7 @@ export class HarnessDatabase {
       CREATE TABLE IF NOT EXISTS worktrees (
         id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL,
+        requirement_id TEXT,
         thread_id TEXT,
         agent_id TEXT,
         branch TEXT NOT NULL,
@@ -214,6 +264,7 @@ export class HarnessDatabase {
       CREATE TABLE IF NOT EXISTS environments (
         id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL,
+        requirement_id TEXT,
         thread_id TEXT,
         worktree_id TEXT,
         cwd TEXT NOT NULL,
@@ -229,6 +280,7 @@ export class HarnessDatabase {
       CREATE TABLE IF NOT EXISTS execution_contexts (
         id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL,
+        requirement_id TEXT,
         kind TEXT NOT NULL,
         thread_id TEXT,
         agent_id TEXT,
@@ -258,6 +310,7 @@ export class HarnessDatabase {
         id TEXT PRIMARY KEY,
         workflow_id TEXT NOT NULL,
         project_id TEXT NOT NULL,
+        requirement_id TEXT,
         thread_id TEXT,
         status TEXT NOT NULL,
         pending_step_ids_json TEXT NOT NULL,
@@ -317,6 +370,7 @@ export class HarnessDatabase {
       CREATE TABLE IF NOT EXISTS reviews (
         id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL,
+        requirement_id TEXT,
         thread_id TEXT,
         execution_context_id TEXT,
         status TEXT NOT NULL,
@@ -397,6 +451,99 @@ export class HarnessDatabase {
       .map((row) => this.mapProject(row as Record<string, unknown>));
   }
 
+  listRequirements(projectId?: string): RequirementRecord[] {
+    const rows = projectId
+      ? (this.db
+          .prepare(
+            `
+              SELECT DISTINCT requirements.*
+              FROM requirements
+              LEFT JOIN requirement_project_links
+                ON requirement_project_links.requirement_id = requirements.id
+              WHERE requirements.primary_project_id = ?
+                 OR requirement_project_links.project_id = ?
+              ORDER BY requirements.updated_at DESC, requirements.created_at DESC
+            `,
+          )
+          .all(projectId, projectId) as Record<string, unknown>[])
+      : (this.db.prepare("SELECT * FROM requirements ORDER BY updated_at DESC, created_at DESC").all() as Record<string, unknown>[]);
+
+    return rows.map((row) => this.mapRequirement(row));
+  }
+
+  getRequirement(requirementId: string): RequirementRecord | null {
+    const row = this.db.prepare("SELECT * FROM requirements WHERE id = ?").get(requirementId) as Record<string, unknown> | undefined;
+    return row ? this.mapRequirement(row) : null;
+  }
+
+  createRequirement(requirement: RequirementRecord): RequirementRecord {
+    this.db
+      .prepare(
+        "INSERT INTO requirements(id, title, status, primary_project_id, created_at, updated_at, archived_at) VALUES(?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        requirement.id,
+        requirement.title,
+        requirement.status,
+        requirement.primaryProjectId,
+        requirement.createdAt,
+        requirement.updatedAt,
+        requirement.archivedAt ?? null,
+      );
+    this.setRequirementRelatedProjects(requirement.id, requirement.relatedProjectIds, requirement.createdAt, requirement.updatedAt);
+    return requirement;
+  }
+
+  updateRequirement(requirement: RequirementRecord): RequirementRecord {
+    this.db
+      .prepare(
+        "UPDATE requirements SET title = ?, status = ?, primary_project_id = ?, updated_at = ?, archived_at = ? WHERE id = ?",
+      )
+      .run(
+        requirement.title,
+        requirement.status,
+        requirement.primaryProjectId,
+        requirement.updatedAt,
+        requirement.archivedAt ?? null,
+        requirement.id,
+      );
+    this.setRequirementRelatedProjects(requirement.id, requirement.relatedProjectIds, requirement.createdAt, requirement.updatedAt);
+    return requirement;
+  }
+
+  listRequirementMemories(): RequirementMemoryRecord[] {
+    const rows = this.db.prepare("SELECT * FROM requirement_memories ORDER BY updated_at DESC").all() as Record<string, unknown>[];
+    return rows.map((row) => this.mapRequirementMemory(row));
+  }
+
+  getRequirementMemory(requirementId: string): RequirementMemoryRecord | null {
+    const row = this.db.prepare("SELECT * FROM requirement_memories WHERE requirement_id = ?").get(requirementId) as Record<string, unknown> | undefined;
+    return row ? this.mapRequirementMemory(row) : null;
+  }
+
+  upsertRequirementMemory(memory: RequirementMemoryRecord): RequirementMemoryRecord {
+    this.db
+      .prepare(
+        `
+          INSERT INTO requirement_memories(requirement_id, manual_json, derived_json, updated_at, last_rebuilt_at)
+          VALUES(?, ?, ?, ?, ?)
+          ON CONFLICT(requirement_id) DO UPDATE SET
+            manual_json = excluded.manual_json,
+            derived_json = excluded.derived_json,
+            updated_at = excluded.updated_at,
+            last_rebuilt_at = excluded.last_rebuilt_at
+        `,
+      )
+      .run(
+        memory.requirementId,
+        JSON.stringify(memory.manual),
+        JSON.stringify(memory.derived),
+        memory.updatedAt,
+        memory.lastRebuiltAt ?? null,
+      );
+    return memory;
+  }
+
   getProject(projectId: string): ProjectRecord | null {
     const row = this.db.prepare("SELECT * FROM projects WHERE id = ?").get(projectId) as Record<string, unknown> | undefined;
     return row ? this.mapProject(row) : null;
@@ -429,13 +576,14 @@ export class HarnessDatabase {
     const normalized = this.normalizeThread(thread);
     this.db
       .prepare(
-        "INSERT INTO threads(id, title, workspace_id, project_id, sandbox_mode, hidden, created_at, updated_at, archived_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO threads(id, title, workspace_id, project_id, requirement_id, sandbox_mode, hidden, created_at, updated_at, archived_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       )
       .run(
         normalized.id,
         normalized.title,
         normalized.projectId,
         normalized.projectId,
+        normalized.requirementId ?? null,
         normalized.sandboxMode,
         normalized.hidden ? 1 : 0,
         normalized.createdAt,
@@ -448,11 +596,12 @@ export class HarnessDatabase {
   updateThread(thread: ThreadWriteRecord): ThreadRecord {
     const normalized = this.normalizeThread(thread);
     this.db
-      .prepare("UPDATE threads SET title = ?, workspace_id = ?, project_id = ?, sandbox_mode = ?, hidden = ?, updated_at = ?, archived_at = ? WHERE id = ?")
+      .prepare("UPDATE threads SET title = ?, workspace_id = ?, project_id = ?, requirement_id = ?, sandbox_mode = ?, hidden = ?, updated_at = ?, archived_at = ? WHERE id = ?")
       .run(
         normalized.title,
         normalized.projectId,
         normalized.projectId,
+        normalized.requirementId ?? null,
         normalized.sandboxMode,
         normalized.hidden ? 1 : 0,
         normalized.updatedAt,
@@ -518,6 +667,7 @@ export class HarnessDatabase {
           INSERT INTO reviews(
             id,
             project_id,
+            requirement_id,
             thread_id,
             execution_context_id,
             status,
@@ -529,12 +679,13 @@ export class HarnessDatabase {
             created_at,
             updated_at,
             completed_at
-          ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
       )
       .run(
         review.id,
         review.projectId,
+        review.requirementId ?? null,
         review.threadId ?? null,
         review.executionContextId ?? null,
         review.status,
@@ -574,12 +725,13 @@ export class HarnessDatabase {
       .prepare(
         `
           UPDATE reviews
-          SET project_id = ?, thread_id = ?, execution_context_id = ?, status = ?, source_json = ?, instructions = ?, summary = ?, findings_json = ?, error = ?, updated_at = ?, completed_at = ?
+          SET project_id = ?, requirement_id = ?, thread_id = ?, execution_context_id = ?, status = ?, source_json = ?, instructions = ?, summary = ?, findings_json = ?, error = ?, updated_at = ?, completed_at = ?
           WHERE id = ?
         `,
       )
       .run(
         review.projectId,
+        review.requirementId ?? null,
         review.threadId ?? null,
         review.executionContextId ?? null,
         review.status,
@@ -902,11 +1054,12 @@ export class HarnessDatabase {
   createWorktree(worktree: WorktreeRecord): WorktreeRecord {
     this.db
       .prepare(
-        "INSERT INTO worktrees(id, project_id, thread_id, agent_id, branch, path, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO worktrees(id, project_id, requirement_id, thread_id, agent_id, branch, path, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       )
       .run(
         worktree.id,
         worktree.projectId,
+        worktree.requirementId ?? null,
         worktree.threadId ?? null,
         worktree.agentId ?? null,
         worktree.branch,
@@ -932,19 +1085,20 @@ export class HarnessDatabase {
 
   updateWorktree(worktree: WorktreeRecord): WorktreeRecord {
     this.db
-      .prepare("UPDATE worktrees SET thread_id = ?, agent_id = ?, branch = ?, path = ?, status = ?, updated_at = ? WHERE id = ?")
-      .run(worktree.threadId ?? null, worktree.agentId ?? null, worktree.branch, worktree.path, worktree.status, worktree.updatedAt, worktree.id);
+      .prepare("UPDATE worktrees SET requirement_id = ?, thread_id = ?, agent_id = ?, branch = ?, path = ?, status = ?, updated_at = ? WHERE id = ?")
+      .run(worktree.requirementId ?? null, worktree.threadId ?? null, worktree.agentId ?? null, worktree.branch, worktree.path, worktree.status, worktree.updatedAt, worktree.id);
     return worktree;
   }
 
   createEnvironment(environment: EnvironmentRecord): EnvironmentRecord {
     this.db
       .prepare(
-        "INSERT INTO environments(id, project_id, thread_id, worktree_id, cwd, shell, env_json, detected_tools_json, python_venv_path, node_version, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO environments(id, project_id, requirement_id, thread_id, worktree_id, cwd, shell, env_json, detected_tools_json, python_venv_path, node_version, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       )
       .run(
         environment.id,
         environment.projectId,
+        environment.requirementId ?? null,
         environment.threadId ?? null,
         environment.worktreeId ?? null,
         environment.cwd,
@@ -969,11 +1123,12 @@ export class HarnessDatabase {
   createExecutionContext(executionContext: ExecutionContextRecord): ExecutionContextRecord {
     this.db
       .prepare(
-        "INSERT INTO execution_contexts(id, project_id, kind, thread_id, agent_id, worktree_id, environment_id, cwd, shell, env_json, detected_tools_json, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO execution_contexts(id, project_id, requirement_id, kind, thread_id, agent_id, worktree_id, environment_id, cwd, shell, env_json, detected_tools_json, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       )
       .run(
         executionContext.id,
         executionContext.projectId,
+        executionContext.requirementId ?? null,
         executionContext.kind,
         executionContext.threadId ?? null,
         executionContext.agentId ?? null,
@@ -992,10 +1147,11 @@ export class HarnessDatabase {
   updateExecutionContext(executionContext: ExecutionContextRecord): ExecutionContextRecord {
     this.db
       .prepare(
-        "UPDATE execution_contexts SET project_id = ?, kind = ?, thread_id = ?, agent_id = ?, worktree_id = ?, environment_id = ?, cwd = ?, shell = ?, env_json = ?, detected_tools_json = ?, updated_at = ? WHERE id = ?",
+        "UPDATE execution_contexts SET project_id = ?, requirement_id = ?, kind = ?, thread_id = ?, agent_id = ?, worktree_id = ?, environment_id = ?, cwd = ?, shell = ?, env_json = ?, detected_tools_json = ?, updated_at = ? WHERE id = ?",
       )
       .run(
         executionContext.projectId,
+        executionContext.requirementId ?? null,
         executionContext.kind,
         executionContext.threadId ?? null,
         executionContext.agentId ?? null,
@@ -1064,12 +1220,13 @@ export class HarnessDatabase {
   createWorkflowRun(run: WorkflowRunRecord): WorkflowRunRecord {
     this.db
       .prepare(
-        "INSERT INTO workflow_runs(id, workflow_id, project_id, thread_id, status, pending_step_ids_json, paused_step_ids_json, completed_step_ids_json, failed_step_ids_json, steps_json, pause_reason, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO workflow_runs(id, workflow_id, project_id, requirement_id, thread_id, status, pending_step_ids_json, paused_step_ids_json, completed_step_ids_json, failed_step_ids_json, steps_json, pause_reason, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       )
       .run(
         run.id,
         run.workflowId,
         run.projectId,
+        run.requirementId ?? null,
         run.threadId ?? null,
         run.status,
         JSON.stringify(run.pendingStepIds),
@@ -1087,9 +1244,10 @@ export class HarnessDatabase {
   updateWorkflowRun(run: WorkflowRunRecord): WorkflowRunRecord {
     this.db
       .prepare(
-        "UPDATE workflow_runs SET status = ?, pending_step_ids_json = ?, paused_step_ids_json = ?, completed_step_ids_json = ?, failed_step_ids_json = ?, steps_json = ?, pause_reason = ?, updated_at = ? WHERE id = ?",
+        "UPDATE workflow_runs SET requirement_id = ?, status = ?, pending_step_ids_json = ?, paused_step_ids_json = ?, completed_step_ids_json = ?, failed_step_ids_json = ?, steps_json = ?, pause_reason = ?, updated_at = ? WHERE id = ?",
       )
       .run(
+        run.requirementId ?? null,
         run.status,
         JSON.stringify(run.pendingStepIds),
         JSON.stringify(run.pausedStepIds),
@@ -1251,6 +1409,7 @@ export class HarnessDatabase {
       id: String(row.id),
       title: String(row.title),
       projectId: String(row.project_id ?? row.workspace_id),
+      requirementId: row.requirement_id ? String(row.requirement_id) : undefined,
       sandboxMode: (row.sandbox_mode as ThreadRecord["sandboxMode"]) ?? "workspace-write",
       hidden: Number(row.hidden ?? 0) === 1,
       createdAt: String(row.created_at),
@@ -1269,6 +1428,19 @@ export class HarnessDatabase {
       approvalPolicy: row.approval_policy as ProjectRecord["approvalPolicy"],
       createdAt: String(row.created_at),
       updatedAt: String(row.updated_at),
+    };
+  }
+
+  private mapRequirement(row: Record<string, unknown>): RequirementRecord {
+    return {
+      id: String(row.id),
+      title: String(row.title),
+      status: String(row.status) as RequirementRecord["status"],
+      primaryProjectId: String(row.primary_project_id),
+      relatedProjectIds: this.listRequirementRelatedProjectIds(String(row.id)),
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+      archivedAt: row.archived_at ? String(row.archived_at) : null,
     };
   }
 
@@ -1302,6 +1474,7 @@ export class HarnessDatabase {
     return {
       id: String(row.id),
       projectId: String(row.project_id),
+      requirementId: row.requirement_id ? String(row.requirement_id) : undefined,
       threadId: row.thread_id ? String(row.thread_id) : undefined,
       executionContextId: row.execution_context_id ? String(row.execution_context_id) : undefined,
       status: row.status as ReviewRecord["status"],
@@ -1397,6 +1570,7 @@ export class HarnessDatabase {
     return {
       id: String(row.id),
       projectId: String(row.project_id),
+      requirementId: row.requirement_id ? String(row.requirement_id) : undefined,
       threadId: row.thread_id ? String(row.thread_id) : undefined,
       agentId: row.agent_id ? String(row.agent_id) : undefined,
       branch: String(row.branch),
@@ -1411,6 +1585,7 @@ export class HarnessDatabase {
     return {
       id: String(row.id),
       projectId: String(row.project_id),
+      requirementId: row.requirement_id ? String(row.requirement_id) : undefined,
       threadId: row.thread_id ? String(row.thread_id) : undefined,
       worktreeId: row.worktree_id ? String(row.worktree_id) : undefined,
       cwd: String(row.cwd),
@@ -1428,6 +1603,7 @@ export class HarnessDatabase {
     return {
       id: String(row.id),
       projectId: String(row.project_id),
+      requirementId: row.requirement_id ? String(row.requirement_id) : undefined,
       kind: row.kind as ExecutionContextRecord["kind"],
       threadId: row.thread_id ? String(row.thread_id) : undefined,
       agentId: row.agent_id ? String(row.agent_id) : undefined,
@@ -1460,6 +1636,7 @@ export class HarnessDatabase {
       id: String(row.id),
       workflowId: String(row.workflow_id),
       projectId: String(row.project_id),
+      requirementId: row.requirement_id ? String(row.requirement_id) : undefined,
       threadId: row.thread_id ? String(row.thread_id) : undefined,
       status: row.status as WorkflowRunRecord["status"],
       pendingStepIds: JSON.parse(String(row.pending_step_ids_json)) as string[],
@@ -1470,6 +1647,20 @@ export class HarnessDatabase {
       pauseReason: row.pause_reason ? String(row.pause_reason) : undefined,
       createdAt: String(row.created_at),
       updatedAt: String(row.updated_at),
+    };
+  }
+
+  private mapRequirementMemory(row: Record<string, unknown>): RequirementMemoryRecord {
+    return {
+      requirementId: String(row.requirement_id),
+      manual: row.manual_json
+        ? { ...EMPTY_REQUIREMENT_MANUAL_MEMORY, ...(JSON.parse(String(row.manual_json)) as RequirementManualMemoryRecord) }
+        : { ...EMPTY_REQUIREMENT_MANUAL_MEMORY },
+      derived: row.derived_json
+        ? { ...EMPTY_REQUIREMENT_DERIVED_MEMORY, ...(JSON.parse(String(row.derived_json)) as RequirementDerivedMemoryRecord) }
+        : { ...EMPTY_REQUIREMENT_DERIVED_MEMORY },
+      updatedAt: String(row.updated_at),
+      lastRebuiltAt: row.last_rebuilt_at ? String(row.last_rebuilt_at) : undefined,
     };
   }
 
@@ -1515,9 +1706,75 @@ export class HarnessDatabase {
     };
   }
 
+  private listRequirementRelatedProjectIds(requirementId: string): string[] {
+    return (this.db
+      .prepare("SELECT project_id FROM requirement_project_links WHERE requirement_id = ? ORDER BY project_id ASC")
+      .all(requirementId) as Array<{ project_id: string }>)
+      .map((row) => String(row.project_id));
+  }
+
+  private setRequirementRelatedProjects(requirementId: string, projectIds: string[], createdAt: string, updatedAt: string): void {
+    const normalized = [...new Set(projectIds.filter(Boolean))];
+    this.db.prepare("DELETE FROM requirement_project_links WHERE requirement_id = ?").run(requirementId);
+
+    if (normalized.length === 0) {
+      return;
+    }
+
+    const statement = this.db.prepare(
+      "INSERT INTO requirement_project_links(requirement_id, project_id, created_at, updated_at) VALUES(?, ?, ?, ?)",
+    );
+
+    for (const projectId of normalized) {
+      statement.run(requirementId, projectId, createdAt, updatedAt);
+    }
+  }
+
   private migrate(): void {
+    if (!this.tableExists("requirements")) {
+      this.db.exec(`
+        CREATE TABLE requirements (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          status TEXT NOT NULL,
+          primary_project_id TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          archived_at TEXT
+        )
+      `);
+    }
+
+    if (!this.tableExists("requirement_project_links")) {
+      this.db.exec(`
+        CREATE TABLE requirement_project_links (
+          requirement_id TEXT NOT NULL,
+          project_id TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (requirement_id, project_id)
+        )
+      `);
+    }
+
+    if (!this.tableExists("requirement_memories")) {
+      this.db.exec(`
+        CREATE TABLE requirement_memories (
+          requirement_id TEXT PRIMARY KEY,
+          manual_json TEXT NOT NULL,
+          derived_json TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          last_rebuilt_at TEXT
+        )
+      `);
+    }
+
     if (!this.columnExists("threads", "project_id")) {
       this.db.exec("ALTER TABLE threads ADD COLUMN project_id TEXT");
+    }
+
+    if (!this.columnExists("threads", "requirement_id")) {
+      this.db.exec("ALTER TABLE threads ADD COLUMN requirement_id TEXT");
     }
 
     if (!this.columnExists("threads", "sandbox_mode")) {
@@ -1550,6 +1807,14 @@ export class HarnessDatabase {
 
     if (!this.columnExists("agent_tasks", "summary_json")) {
       this.db.exec("ALTER TABLE agent_tasks ADD COLUMN summary_json TEXT");
+    }
+
+    if (!this.columnExists("worktrees", "requirement_id")) {
+      this.db.exec("ALTER TABLE worktrees ADD COLUMN requirement_id TEXT");
+    }
+
+    if (!this.columnExists("environments", "requirement_id")) {
+      this.db.exec("ALTER TABLE environments ADD COLUMN requirement_id TEXT");
     }
 
     if (!this.columnExists("plugins", "sandbox_mode")) {
@@ -1622,6 +1887,7 @@ export class HarnessDatabase {
         CREATE TABLE execution_contexts (
           id TEXT PRIMARY KEY,
           project_id TEXT NOT NULL,
+          requirement_id TEXT,
           kind TEXT NOT NULL,
           thread_id TEXT,
           agent_id TEXT,
@@ -1635,6 +1901,14 @@ export class HarnessDatabase {
           updated_at TEXT NOT NULL
         )
       `);
+    }
+
+    if (!this.columnExists("execution_contexts", "requirement_id")) {
+      this.db.exec("ALTER TABLE execution_contexts ADD COLUMN requirement_id TEXT");
+    }
+
+    if (!this.columnExists("workflow_runs", "requirement_id")) {
+      this.db.exec("ALTER TABLE workflow_runs ADD COLUMN requirement_id TEXT");
     }
 
     if (!this.columnExists("terminal_sessions", "backend")) {
@@ -1739,6 +2013,7 @@ export class HarnessDatabase {
         CREATE TABLE reviews (
           id TEXT PRIMARY KEY,
           project_id TEXT NOT NULL,
+          requirement_id TEXT,
           thread_id TEXT,
           execution_context_id TEXT,
           status TEXT NOT NULL,
@@ -1752,6 +2027,10 @@ export class HarnessDatabase {
           completed_at TEXT
         )
       `);
+    }
+
+    if (!this.columnExists("reviews", "requirement_id")) {
+      this.db.exec("ALTER TABLE reviews ADD COLUMN requirement_id TEXT");
     }
 
     const config = this.getConfig();

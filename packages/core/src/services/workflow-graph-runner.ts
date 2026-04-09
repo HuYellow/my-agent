@@ -65,7 +65,13 @@ export async function executeWorkflowGraph(
 
     const batchResults = await Promise.all(
       readySteps.map(async (step) => {
-        const resources = executionUnitRunner.prepareResources(step, context.project, context.threadId, getRunStep(run, step.id));
+        const resources = executionUnitRunner.prepareResources(
+          step,
+          context.project,
+          context.run.requirementId,
+          context.threadId,
+          getRunStep(run, step.id),
+        );
         const result = await executionUnitRunner.run(step, context, resources);
         return {
           ...result,
