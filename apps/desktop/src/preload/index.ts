@@ -1,9 +1,11 @@
 import { contextBridge, ipcRenderer } from "electron";
 import {
   type ApprovalResponseParams,
+  type AgentTaskRecord,
   type CommandExecParams,
   type ConfigWriteParams,
   type CreateProjectParams,
+  type ExecutionContextRecord,
   type HarnessEvent,
   type InterruptTurnParams,
   type ProviderActionParams,
@@ -75,12 +77,15 @@ const api = {
   listEnvironments: (projectId?: string) => ipcRenderer.invoke("environment:list", { projectId }) as Promise<{ environments: EnvironmentRecord[] }>,
   detectEnvironment: (params: { projectId: string; threadId?: string; worktreeId?: string; cwd?: string }) =>
     ipcRenderer.invoke("environment:detect", params) as Promise<{ environment: EnvironmentRecord }>,
+  listExecutionContexts: (projectId?: string) =>
+    ipcRenderer.invoke("executionContext:list", { projectId }) as Promise<{ executionContexts: ExecutionContextRecord[] }>,
   listWorkflows: (projectId?: string) => ipcRenderer.invoke("workflow:list", { projectId }) as Promise<{ workflows: WorkflowRecord[] }>,
   runWorkflow: (params: { workflowId: string; projectId: string; threadId?: string; nonInteractive?: boolean }) =>
     ipcRenderer.invoke("workflow:run", params),
   listWorkflowRuns: (workflowId?: string) => ipcRenderer.invoke("workflow:runs", { workflowId }) as Promise<{ runs: WorkflowRunRecord[] }>,
   resumeWorkflow: (params: { runId: string; approvePausedSteps?: boolean; retryFailedStepIds?: string[] }) =>
     ipcRenderer.invoke("workflow:resume", params),
+  listAgentTasks: (projectId?: string) => ipcRenderer.invoke("agent:list", { projectId }) as Promise<{ tasks: AgentTaskRecord[] }>,
   listPlugins: () => ipcRenderer.invoke("plugin:list") as Promise<{ plugins: PluginRecord[] }>,
   listMcpMounts: () => ipcRenderer.invoke("mcp:list") as Promise<{ mounts: McpMountRecord[] }>,
   listMcpSessions: () => ipcRenderer.invoke("mcp:sessions") as Promise<{ sessions: McpSessionRecord[] }>,

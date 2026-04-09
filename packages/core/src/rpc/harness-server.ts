@@ -313,6 +313,8 @@ export class HarnessServer {
         return this.waitAgent(message.params as AgentWaitParams);
       case "agent/close":
         return this.closeAgent(message.params as AgentCloseParams);
+      case "agent/list":
+        return this.listAgentTasks((message.params as { projectId?: string } | undefined)?.projectId);
       case "worktree/create":
         return this.createWorktree(message.params as WorktreeCreateParams);
       case "worktree/list":
@@ -323,6 +325,8 @@ export class HarnessServer {
         return this.detectEnvironment(message.params as EnvironmentDetectParams);
       case "environment/list":
         return { environments: this.database.listEnvironments((message.params as { projectId?: string } | undefined)?.projectId) };
+      case "executionContext/list":
+        return { executionContexts: this.database.listExecutionContexts((message.params as { projectId?: string } | undefined)?.projectId) };
       case "workflow/list":
         return { workflows: this.listWorkflows((message.params as { projectId?: string } | undefined)?.projectId) };
       case "workflow/run":
@@ -376,6 +380,9 @@ export class HarnessServer {
       terminalCapabilities: this.terminalManager.listCapabilities(),
       terminalOutputArchives: this.database.listTerminalOutputArchives(),
       reviews: this.reviewManager.list(config.selectedProjectId),
+      workflows: this.listWorkflows(config.selectedProjectId),
+      workflowRuns: this.workflowManager.listRuns(),
+      agentTasks: this.database.listAgentTasks(config.selectedProjectId),
     };
   }
 
@@ -1088,6 +1095,12 @@ export class HarnessServer {
   private closeAgent(params: AgentCloseParams) {
     const task = this.agentTaskManager.close(params.agentId);
     return { task };
+  }
+
+  private listAgentTasks(projectId?: string) {
+    return {
+      tasks: this.database.listAgentTasks(projectId),
+    };
   }
 
   private writeSkillConfig(params: { disabledSkillIds: string[] }): { skills: ReturnType<HarnessServer["refreshSkills"]> } {

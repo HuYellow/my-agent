@@ -44,7 +44,9 @@ import {
 } from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
+  type AgentTaskRecord,
   type ApprovalPolicy,
+  type ExecutionContextRecord,
   type ItemKind,
   type ItemRecord,
   type ModelReasoningEffort,
@@ -60,6 +62,7 @@ import {
   type SkillDescriptor,
   type TerminalBackendCapability,
   type TerminalSessionRecord,
+  type ThreadRecord,
   type TurnInputAttachment,
   type TurnRecord,
   type WorktreeRecord,
@@ -196,6 +199,12 @@ export function App() {
     threads,
     threadSessions,
     reviews,
+    worktrees,
+    environments,
+    executionContexts,
+    workflows,
+    workflowRuns,
+    agentTasks,
     terminals,
     terminalOutputs,
     terminalOutputArchives,
@@ -235,10 +244,6 @@ export function App() {
   const [skillDocument, setSkillDocument] = useState("");
   const [skillDocumentLoading, setSkillDocumentLoading] = useState(false);
   const [skillDocumentError, setSkillDocumentError] = useState<string | null>(null);
-  const [runtimeWorktrees, setRuntimeWorktrees] = useState<WorktreeRecord[]>([]);
-  const [runtimeEnvironments, setRuntimeEnvironments] = useState<EnvironmentRecord[]>([]);
-  const [runtimeWorkflows, setRuntimeWorkflows] = useState<WorkflowRecord[]>([]);
-  const [runtimeWorkflowRuns, setRuntimeWorkflowRuns] = useState<WorkflowRunRecord[]>([]);
   const [runtimePlugins, setRuntimePlugins] = useState<PluginRecord[]>([]);
   const [runtimeMcpMounts, setRuntimeMcpMounts] = useState<McpMountRecord[]>([]);
   const [runtimeMcpSessions, setRuntimeMcpSessions] = useState<McpSessionRecord[]>([]);
@@ -674,22 +679,6 @@ export function App() {
       cancelled = true;
     };
   }, [currentSkillDetail]);
-
-  useEffect(() => {
-    if (!activeProjectId) {
-      setRuntimeWorktrees([]);
-      setRuntimeEnvironments([]);
-      setRuntimeWorkflows([]);
-      return;
-    }
-
-    void Promise.all([
-      window.myAgent.listWorktrees(activeProjectId).then((result) => setRuntimeWorktrees(result.worktrees)),
-      window.myAgent.listEnvironments(activeProjectId).then((result) => setRuntimeEnvironments(result.environments)),
-      window.myAgent.listWorkflows(activeProjectId).then((result) => setRuntimeWorkflows(result.workflows)),
-      window.myAgent.listWorkflowRuns().then((result) => setRuntimeWorkflowRuns(result.runs)),
-    ]).catch(() => undefined);
-  }, [activeProjectId]);
 
   useEffect(() => {
     void Promise.all([
@@ -1247,62 +1236,70 @@ export function App() {
                   </button>
 
                   {reviewMenuOpen && (
-                    <div className="review-popover">
-                      <div className="review-popover__header">
-                        <strong>Review source</strong>
-                        <small>Choose which diff to review before launching.</small>
-                      </div>
+                    <>
+                      <button
+                        type="button"
+                        className="review-popover-scrim"
+                        aria-label="Close review source menu"
+                        onClick={() => setReviewMenuOpen(false)}
+                      />
+                      <div className="review-popover">
+                        <div className="review-popover__header">
+                          <strong>Review source</strong>
+                          <small>Choose which diff to review before launching.</small>
+                        </div>
 
-                      <div className="review-popover__options">
-                        {REVIEW_SOURCE_OPTIONS.map((option) => (
-                          <button
-                            key={option.value}
-                            type="button"
-                            className={`review-popover__option ${option.value === reviewSourceKind ? "review-popover__option--active" : ""}`}
-                            onClick={() => setReviewSourceKind(option.value)}
-                          >
-                            <span className="review-popover__option-body">
-                              <strong>{option.label}</strong>
-                              <small>{option.hint}</small>
-                            </span>
-                            {option.value === reviewSourceKind && <Check size={14} />}
+                        <div className="review-popover__options">
+                          {REVIEW_SOURCE_OPTIONS.map((option) => (
+                            <button
+                              key={option.value}
+                              type="button"
+                              className={`review-popover__option ${option.value === reviewSourceKind ? "review-popover__option--active" : ""}`}
+                              onClick={() => setReviewSourceKind(option.value)}
+                            >
+                              <span className="review-popover__option-body">
+                                <strong>{option.label}</strong>
+                                <small>{option.hint}</small>
+                              </span>
+                              {option.value === reviewSourceKind && <Check size={14} />}
+                            </button>
+                          ))}
+                        </div>
+
+                        {reviewSourceKind === "base_branch" && (
+                          <label className="review-popover__field">
+                            <span>Base branch</span>
+                            <input
+                              type="text"
+                              value={reviewBaseBranch}
+                              onChange={(event) => setReviewBaseBranch(event.target.value)}
+                              placeholder="main"
+                            />
+                          </label>
+                        )}
+
+                        {reviewSourceKind === "commit" && (
+                          <label className="review-popover__field">
+                            <span>Commit SHA</span>
+                            <input
+                              type="text"
+                              value={reviewCommit}
+                              onChange={(event) => setReviewCommit(event.target.value)}
+                              placeholder="abc1234"
+                            />
+                          </label>
+                        )}
+
+                        <div className="review-popover__footer">
+                          <button type="button" className="review-popover__cancel" onClick={() => setReviewMenuOpen(false)}>
+                            Cancel
                           </button>
-                        ))}
+                          <button type="button" className="review-popover__submit" onClick={() => void triggerReview()} disabled={!canStartReview}>
+                            Start review
+                          </button>
+                        </div>
                       </div>
-
-                      {reviewSourceKind === "base_branch" && (
-                        <label className="review-popover__field">
-                          <span>Base branch</span>
-                          <input
-                            type="text"
-                            value={reviewBaseBranch}
-                            onChange={(event) => setReviewBaseBranch(event.target.value)}
-                            placeholder="main"
-                          />
-                        </label>
-                      )}
-
-                      {reviewSourceKind === "commit" && (
-                        <label className="review-popover__field">
-                          <span>Commit SHA</span>
-                          <input
-                            type="text"
-                            value={reviewCommit}
-                            onChange={(event) => setReviewCommit(event.target.value)}
-                            placeholder="abc1234"
-                          />
-                        </label>
-                      )}
-
-                      <div className="review-popover__footer">
-                        <button type="button" className="review-popover__cancel" onClick={() => setReviewMenuOpen(false)}>
-                          Cancel
-                        </button>
-                        <button type="button" className="review-popover__submit" onClick={() => void triggerReview()} disabled={!canStartReview}>
-                          Start review
-                        </button>
-                      </div>
-                    </div>
+                    </>
                   )}
                 </div>
               </div>
@@ -1473,20 +1470,19 @@ export function App() {
         ) : activeView === "automation" ? (
           <RuntimeAutomationPanel
             projectId={activeProjectId}
-            workflows={runtimeWorkflows}
-            runs={runtimeWorkflowRuns}
+            threads={threads}
+            workflows={workflows}
+            runs={workflowRuns}
+            worktrees={worktrees}
+            environments={environments}
+            executionContexts={executionContexts}
+            agentTasks={agentTasks}
             onRunWorkflow={(workflowId) =>
               activeProjectId
-                ? window.myAgent.runWorkflow({ workflowId, projectId: activeProjectId }).then(() =>
-                    window.myAgent.listWorkflowRuns().then((result) => setRuntimeWorkflowRuns(result.runs)),
-                  )
+                ? window.myAgent.runWorkflow({ workflowId, projectId: activeProjectId })
                 : Promise.resolve(null)
             }
-            onResumeWorkflow={(params) =>
-              window.myAgent.resumeWorkflow(params).then(() =>
-                window.myAgent.listWorkflowRuns().then((result) => setRuntimeWorkflowRuns(result.runs)),
-              )
-            }
+            onResumeWorkflow={(params) => window.myAgent.resumeWorkflow(params)}
           />
         ) : (
             <SettingsPanel
@@ -1499,8 +1495,8 @@ export function App() {
               providerModelsError={providerModelsError}
               onTestProvider={() => testProvider(buildProviderProfileFromForm(config?.provider, providerForm))}
               onRefreshProviderModels={() => refreshProviderModels(buildProviderProfileFromForm(config?.provider, providerForm))}
-              worktrees={runtimeWorktrees}
-              environments={runtimeEnvironments}
+              worktrees={worktrees}
+              environments={environments}
             onSaveConfig={() =>
               void Promise.all([
                 updateConfig({
@@ -1915,9 +1911,10 @@ function ThreadsPanel({
             <span>Create a project to get started</span>
           </div>
         )}
-      </div>
-    </div>
-  );
+                    </div>
+                    <RuntimeContextLineage nodes={contextLineage} />
+                  </div>
+                );
 }
 
 function SkillsPanel({
@@ -2102,19 +2099,41 @@ function RuntimePluginsPanel({
 
 function RuntimeAutomationPanel({
   projectId,
+  threads,
   workflows,
   runs,
+  worktrees,
+  environments,
+  executionContexts,
+  agentTasks,
   onRunWorkflow,
   onResumeWorkflow,
 }: {
   projectId?: string;
+  threads: ThreadRecord[];
   workflows: WorkflowRecord[];
   runs: WorkflowRunRecord[];
+  worktrees: WorktreeRecord[];
+  environments: EnvironmentRecord[];
+  executionContexts: ExecutionContextRecord[];
+  agentTasks: AgentTaskRecord[];
   onRunWorkflow: (workflowId: string) => Promise<unknown>;
   onResumeWorkflow: (params: { runId: string; approvePausedSteps?: boolean; retryFailedStepIds?: string[] }) => Promise<unknown>;
 }) {
   const [pendingActionKey, setPendingActionKey] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const projectAgentTasks = useMemo(
+    () =>
+      projectId
+        ? agentTasks.filter((task) => threads.find((thread) => thread.id === task.parentThreadId)?.projectId === projectId)
+        : agentTasks,
+    [agentTasks, projectId, threads],
+  );
+  const runningRuns = useMemo(() => runs.filter((run) => run.status === "running" || run.status === "paused"), [runs]);
+  const activeAgents = useMemo(
+    () => projectAgentTasks.filter((task) => task.status === "running" || task.status === "awaiting_approval"),
+    [projectAgentTasks],
+  );
 
   async function handleResumeWorkflow(params: { runId: string; approvePausedSteps?: boolean; retryFailedStepIds?: string[] }) {
     const actionKey = [
@@ -2141,6 +2160,20 @@ function RuntimeAutomationPanel({
         <h2 className="skills-page__title">Workflows</h2>
         <span className="skills-page__count">{workflows.length} available</span>
       </div>
+      <div className="workflow-dashboard">
+        <div className="workflow-dashboard__card">
+          <strong>{runningRuns.length}</strong>
+          <span>Active runs</span>
+        </div>
+        <div className="workflow-dashboard__card">
+          <strong>{activeAgents.length}</strong>
+          <span>Live agents</span>
+        </div>
+        <div className="workflow-dashboard__card">
+          <strong>{executionContexts.length}</strong>
+          <span>Execution contexts</span>
+        </div>
+      </div>
       {actionError ? <div className="settings-panel__message workflow-panel__message">{actionError}</div> : null}
       <div className="skills-grid">
         {workflows.map((workflow) => (
@@ -2166,6 +2199,39 @@ function RuntimeAutomationPanel({
                 const visibleSteps = run.steps.filter((step) => step.status !== "pending").slice(0, 4);
                 const failedSteps = run.steps.filter((step) => step.status === "failed");
                 const pausedActionKey = `${run.id}:paused:`;
+                const relatedExecutionContextIds = new Set(
+                  run.steps.map((step) => step.executionContextId).filter((value): value is string => Boolean(value)),
+                );
+                const relatedEnvironmentIds = new Set(
+                  run.steps.map((step) => step.environmentId).filter((value): value is string => Boolean(value)),
+                );
+                const relatedWorktreeIds = new Set(
+                  run.steps.map((step) => step.worktreeId).filter((value): value is string => Boolean(value)),
+                );
+                const relatedAgentIds = new Set(
+                  run.steps.map((step) => step.agentId).filter((value): value is string => Boolean(value)),
+                );
+                const relatedExecutionContexts = executionContexts.filter((entry) => relatedExecutionContextIds.has(entry.id)).slice(0, 4);
+                const relatedEnvironments = environments.filter((entry) => relatedEnvironmentIds.has(entry.id)).slice(0, 4);
+                const relatedWorktrees = worktrees.filter((entry) => relatedWorktreeIds.has(entry.id)).slice(0, 4);
+                const relatedAgents = projectAgentTasks.filter((entry) => relatedAgentIds.has(entry.id)).slice(0, 4);
+                const relatedAgentTree = buildAgentTree(projectAgentTasks, relatedAgentIds);
+                const contextLineage = buildExecutionContextLineage({
+                  workflow,
+                  run,
+                  executionContexts,
+                  environments,
+                  worktrees,
+                  agentTree: relatedAgentTree,
+                });
+                const contextLineage = buildExecutionContextLineage({
+                  workflow,
+                  run,
+                  executionContexts,
+                  environments,
+                  worktrees,
+                  agentTree: relatedAgentTree,
+                });
 
                 return (
                   <div key={run.id} className="workflow-run-card">
@@ -2244,6 +2310,37 @@ function RuntimeAutomationPanel({
                         );
                       })}
                     </div>
+                    <div className="workflow-runtime-grid">
+                      <RuntimeAgentTree roots={relatedAgentTree} />
+                      <RuntimeMetaSection
+                        title="Execution Contexts"
+                        emptyLabel="No execution contexts."
+                        items={relatedExecutionContexts.map((executionContext) => ({
+                          id: executionContext.id,
+                          title: `${executionContext.kind} · ${executionContext.cwd}`,
+                          detail: executionContext.id,
+                        }))}
+                      />
+                      <RuntimeMetaSection
+                        title="Worktrees"
+                        emptyLabel="No workflow worktrees."
+                        items={relatedWorktrees.map((worktree) => ({
+                          id: worktree.id,
+                          title: `${worktree.branch} · ${worktree.status}`,
+                          detail: worktree.path,
+                        }))}
+                      />
+                      <RuntimeMetaSection
+                        title="Environments"
+                        emptyLabel="No runtime environments."
+                        items={relatedEnvironments.map((environment) => ({
+                          id: environment.id,
+                          title: `${environment.shell} · ${environment.cwd}`,
+                          detail: environment.id,
+                        }))}
+                      />
+                    </div>
+                    <RuntimeContextLineage nodes={contextLineage} />
                   </div>
                 );
               })}
@@ -2252,6 +2349,266 @@ function RuntimeAutomationPanel({
       </div>
     </div>
   );
+}
+
+function RuntimeContextLineage({ nodes }: { nodes: ContextLineageNode[] }) {
+  return (
+    <div className="workflow-runtime-section workflow-runtime-section--lineage">
+      <strong>Execution Context Lineage</strong>
+      {nodes.length === 0 ? (
+        <span className="workflow-runtime-section__empty">No linked execution contexts.</span>
+      ) : (
+        <div className="context-lineage">
+          {nodes.map((node) => (
+            <RuntimeContextLineageNode key={node.id} node={node} depth={0} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RuntimeContextLineageNode({ node, depth }: { node: ContextLineageNode; depth: number }) {
+  return (
+    <div className="context-lineage__node">
+      <div className="context-lineage__row" style={{ paddingLeft: `${depth * 16}px` }}>
+        <div className="context-lineage__title">
+          <span>{node.title}</span>
+          {node.subtitle ? <small>{node.subtitle}</small> : null}
+        </div>
+        {node.details.length > 0 ? (
+          <div className="context-lineage__details">
+            {node.details.map((detail) => (
+              <code key={`${node.id}:${detail}`}>{detail}</code>
+            ))}
+          </div>
+        ) : null}
+      </div>
+      {node.children.length > 0 ? (
+        <div className="context-lineage__children">
+          {node.children.map((child) => (
+            <RuntimeContextLineageNode key={child.id} node={child} depth={depth + 1} />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function RuntimeAgentTree({ roots }: { roots: AgentTreeNode[] }) {
+  return (
+    <div className="workflow-runtime-section workflow-runtime-section--tree">
+      <strong>Sub-agents</strong>
+      {roots.length === 0 ? (
+        <span className="workflow-runtime-section__empty">No delegated agents.</span>
+      ) : (
+        <div className="agent-tree">
+          {roots.map((root) => (
+            <RuntimeAgentTreeNode key={root.task.id} node={root} depth={0} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RuntimeAgentTreeNode({ node, depth }: { node: AgentTreeNode; depth: number }) {
+  return (
+    <div className="agent-tree__node">
+      <div className="agent-tree__row" style={{ paddingLeft: `${depth * 16}px` }}>
+        <div className="agent-tree__title">
+          <span>{node.task.title}</span>
+          <small>{node.task.status}</small>
+        </div>
+        <div className="agent-tree__meta">
+          {node.task.executionContextId && <code>{node.task.executionContextId}</code>}
+          {node.task.childThreadId && <code>{node.task.childThreadId}</code>}
+        </div>
+      </div>
+      {node.task.summary?.finalMessage ? <small className="agent-tree__summary">{node.task.summary.finalMessage}</small> : null}
+      {node.children.length > 0 ? (
+        <div className="agent-tree__children">
+          {node.children.map((child) => (
+            <RuntimeAgentTreeNode key={child.task.id} node={child} depth={depth + 1} />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function RuntimeMetaSection({
+  title,
+  emptyLabel,
+  items,
+}: {
+  title: string;
+  emptyLabel: string;
+  items: Array<{ id: string; title: string; detail: string }>;
+}) {
+  return (
+    <div className="workflow-runtime-section">
+      <strong>{title}</strong>
+      {items.length === 0 ? (
+        <span className="workflow-runtime-section__empty">{emptyLabel}</span>
+      ) : (
+        items.map((item) => (
+          <div key={item.id} className="workflow-runtime-section__item">
+            <span>{item.title}</span>
+            <code>{item.detail}</code>
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
+interface AgentTreeNode {
+  task: AgentTaskRecord;
+  children: AgentTreeNode[];
+}
+
+interface ContextLineageNode {
+  id: string;
+  title: string;
+  subtitle?: string;
+  details: string[];
+  children: ContextLineageNode[];
+}
+
+function buildAgentTree(agentTasks: AgentTaskRecord[], seedAgentIds: Set<string>): AgentTreeNode[] {
+  const tasksById = new Map(agentTasks.map((task) => [task.id, task]));
+  const reachableAgentIds = new Set<string>();
+  const queue = [...seedAgentIds].filter((agentId) => tasksById.has(agentId));
+
+  while (queue.length > 0) {
+    const currentId = queue.shift()!;
+
+    if (reachableAgentIds.has(currentId)) {
+      continue;
+    }
+
+    reachableAgentIds.add(currentId);
+    const currentTask = tasksById.get(currentId);
+
+    if (!currentTask?.childThreadId) {
+      continue;
+    }
+
+    for (const candidate of agentTasks) {
+      if (candidate.parentThreadId === currentTask.childThreadId) {
+        queue.push(candidate.id);
+      }
+    }
+  }
+
+  const includedTasks = agentTasks.filter((task) => reachableAgentIds.has(task.id));
+  const parentById = new Map<string, string>();
+
+  for (const task of includedTasks) {
+    const parent = includedTasks.find((candidate) => candidate.childThreadId && candidate.childThreadId === task.parentThreadId);
+
+    if (parent) {
+      parentById.set(task.id, parent.id);
+    }
+  }
+
+  const childrenByParentId = new Map<string, AgentTaskRecord[]>();
+  for (const task of includedTasks) {
+    const parentId = parentById.get(task.id);
+
+    if (!parentId) {
+      continue;
+    }
+
+    childrenByParentId.set(parentId, [...(childrenByParentId.get(parentId) ?? []), task]);
+  }
+
+  const roots = includedTasks.filter((task) => !parentById.has(task.id));
+  return roots.map((task) => buildAgentTreeNode(task, childrenByParentId));
+}
+
+function buildAgentTreeNode(
+  task: AgentTaskRecord,
+  childrenByParentId: Map<string, AgentTaskRecord[]>,
+): AgentTreeNode {
+  const children = (childrenByParentId.get(task.id) ?? [])
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+    .map((child) => buildAgentTreeNode(child, childrenByParentId));
+
+  return {
+    task,
+    children,
+  };
+}
+
+function buildExecutionContextLineage(params: {
+  workflow: WorkflowRecord;
+  run: WorkflowRunRecord;
+  executionContexts: ExecutionContextRecord[];
+  environments: EnvironmentRecord[];
+  worktrees: WorktreeRecord[];
+  agentTree: AgentTreeNode[];
+}): ContextLineageNode[] {
+  const workflowStepById = new Map(params.workflow.steps.map((step) => [step.id, step]));
+  const executionContextById = new Map(params.executionContexts.map((entry) => [entry.id, entry]));
+  const environmentById = new Map(params.environments.map((entry) => [entry.id, entry]));
+  const worktreeById = new Map(params.worktrees.map((entry) => [entry.id, entry]));
+  const rootAgentById = new Map(params.agentTree.map((entry) => [entry.task.id, entry]));
+
+  return params.run.steps
+    .filter((step) => step.status !== "pending")
+    .map((step) => {
+      const workflowStep = workflowStepById.get(step.stepId);
+      const executionContext = step.executionContextId ? executionContextById.get(step.executionContextId) : undefined;
+      const environment = executionContext?.environmentId ? environmentById.get(executionContext.environmentId) : undefined;
+      const worktree =
+        step.worktreeId ? worktreeById.get(step.worktreeId) : executionContext?.worktreeId ? worktreeById.get(executionContext.worktreeId) : undefined;
+      const rootAgent = step.agentId ? rootAgentById.get(step.agentId) : undefined;
+
+      return {
+        id: `step:${step.stepId}`,
+        title: `${step.stepId} · ${workflowStep?.type ?? "step"}`,
+        subtitle: executionContext ? `${executionContext.kind} · ${executionContext.cwd}` : step.status,
+        details: buildContextDetailTokens(executionContext, environment, worktree),
+        children: rootAgent
+          ? rootAgent.children.map((child) => buildAgentContextLineageNode(child, executionContextById, environmentById, worktreeById))
+          : [],
+      } satisfies ContextLineageNode;
+    });
+}
+
+function buildAgentContextLineageNode(
+  node: AgentTreeNode,
+  executionContextById: Map<string, ExecutionContextRecord>,
+  environmentById: Map<string, EnvironmentRecord>,
+  worktreeById: Map<string, WorktreeRecord>,
+): ContextLineageNode {
+  const executionContext = node.task.executionContextId ? executionContextById.get(node.task.executionContextId) : undefined;
+  const environment = executionContext?.environmentId ? environmentById.get(executionContext.environmentId) : undefined;
+  const worktree =
+    node.task.worktreeId ? worktreeById.get(node.task.worktreeId) : executionContext?.worktreeId ? worktreeById.get(executionContext.worktreeId) : undefined;
+
+  return {
+    id: `agent:${node.task.id}`,
+    title: node.task.title,
+    subtitle: executionContext ? `${executionContext.kind} · ${executionContext.cwd}` : node.task.status,
+    details: buildContextDetailTokens(executionContext, environment, worktree),
+    children: node.children.map((child) => buildAgentContextLineageNode(child, executionContextById, environmentById, worktreeById)),
+  };
+}
+
+function buildContextDetailTokens(
+  executionContext?: ExecutionContextRecord,
+  environment?: EnvironmentRecord,
+  worktree?: WorktreeRecord,
+): string[] {
+  return [
+    executionContext?.id ? `ctx:${executionContext.id}` : null,
+    environment?.id ? `env:${environment.id}` : null,
+    worktree?.branch ? `wt:${worktree.branch}` : null,
+    environment?.shell ? `shell:${environment.shell}` : null,
+  ].filter((value): value is string => Boolean(value));
 }
 
 function SettingsNavItem({

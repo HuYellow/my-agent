@@ -438,6 +438,8 @@ ipcMain.handle("command:exec", (_event, params: CommandExecParams) => harness.re
     (_event, params: { runId: string; approvePausedSteps?: boolean; retryFailedStepIds?: string[] }) =>
       harness.request("workflow/resume", params),
   );
+  ipcMain.handle("executionContext:list", (_event, params: { projectId?: string }) => harness.request("executionContext/list", params));
+  ipcMain.handle("agent:list", (_event, params: { projectId?: string }) => harness.request("agent/list", params));
   ipcMain.handle("plugin:list", () => harness.request("plugin/list"));
   ipcMain.handle("mcp:list", () => harness.request("mcp/list"));
   ipcMain.handle("mcp:sessions", () => harness.request("mcp/sessions"));

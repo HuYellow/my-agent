@@ -65,7 +65,7 @@ export async function executeWorkflowGraph(
 
     const batchResults = await Promise.all(
       readySteps.map(async (step) => {
-        const resources = executionUnitRunner.prepareResources(step, context.project, context.threadId);
+        const resources = executionUnitRunner.prepareResources(step, context.project, context.threadId, getRunStep(run, step.id));
         const result = await executionUnitRunner.run(step, context, resources);
         return {
           ...result,
@@ -174,7 +174,7 @@ export function retryWorkflowRunSteps(
     }
   }
 
-  const affectedStepIds = collectRetryAffectedStepIds(workflowSteps, retryTargets);
+  const affectedStepIds = getRetryAffectedStepIds(workflowSteps, retryTargets);
   const nextPending = new Set(run.pendingStepIds);
   const nextPaused = new Set(run.pausedStepIds);
   const nextCompleted = new Set(run.completedStepIds);
@@ -345,7 +345,7 @@ function getRunStep(run: WorkflowRunRecord, stepId: string): WorkflowRunStepReco
   };
 }
 
-function collectRetryAffectedStepIds(workflowSteps: WorkflowStep[], retryTargets: Set<string>): Set<string> {
+export function getRetryAffectedStepIds(workflowSteps: WorkflowStep[], retryTargets: Set<string>): Set<string> {
   const affected = new Set(retryTargets);
   const queue = [...retryTargets];
 

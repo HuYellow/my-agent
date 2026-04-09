@@ -23,7 +23,12 @@ import {
   ExecutionUnitRunner,
   type ExecutionUnitContext as WorkflowExecutionContext,
 } from "./execution-unit.js";
-import { approvePausedWorkflowRun, executeWorkflowGraph, retryWorkflowRunSteps } from "./workflow-graph-runner.js";
+import {
+  approvePausedWorkflowRun,
+  executeWorkflowGraph,
+  getRetryAffectedStepIds,
+  retryWorkflowRunSteps,
+} from "./workflow-graph-runner.js";
 import { WorktreeManager } from "./worktree-manager.js";
 
 export class WorkflowManager {
@@ -88,7 +93,7 @@ export class WorkflowManager {
       run: initialRun,
     };
 
-    return executeWorkflowGraph(
+    const result = await executeWorkflowGraph(
       context,
       this.database,
       new ExecutionUnitRunner(
@@ -101,6 +106,30 @@ export class WorkflowManager {
       ),
       this.emitRun,
     );
+
+    const cleanedRun = this.cleanupWorkflowWorktrees(workflow, result.run);
+    const finalRun = cleanedRun.id === result.run.id ? this.database.updateWorkflowRun(cleanedRun) : cleanedRun;
+    this.emitRun?.(finalRun);
+
+    return {
+      ...result,
+      run: finalRun,
+      stepsRun: finalRun.steps
+        .filter((step): step is typeof step & { status: "completed" | "failed" | "skipped" } =>
+          step.status === "completed" || step.status === "failed" || step.status === "skipped",
+        )
+        .map((step) => ({
+          stepId: step.stepId,
+          status: step.status,
+          output: step.output,
+          artifactSummary: step.artifactSummary,
+          worktreeId: step.worktreeId,
+          environmentId: step.environmentId,
+          executionContextId: step.executionContextId,
+          agentId: step.agentId,
+          retainedFailures: step.retainedFailures,
+        })),
+    };
   }
 
   async resume(params: {
@@ -126,6 +155,8 @@ export class WorkflowManager {
     let resumedRun = params.approvePausedSteps === false ? run : approvePausedWorkflowRun(run);
 
     if (params.retryFailedStepIds && params.retryFailedStepIds.length > 0) {
+      const retryAffectedStepIds = getRetryAffectedStepIds(workflow.steps, new Set(params.retryFailedStepIds));
+      resumedRun = this.cleanupRetriedWorkflowWorktrees(resumedRun, retryAffectedStepIds);
       resumedRun = retryWorkflowRunSteps(resumedRun, workflow.steps, params.retryFailedStepIds);
     }
 
@@ -167,6 +198,61 @@ export class WorkflowManager {
       createdAt: now,
       updatedAt: now,
     };
+  }
+
+  private cleanupWorkflowWorktrees(workflow: WorkflowRecord, run: WorkflowRunRecord): WorkflowRunRecord {
+    const cleanupStatuses =
+      run.status === "completed"
+        ? new Set<WorkflowRunRecord["steps"][number]["status"]>(["completed", "failed", "skipped"])
+        : new Set<WorkflowRunRecord["steps"][number]["status"]>(["completed", "skipped"]);
+    const workflowStepMap = new Map(workflow.steps.map((step) => [step.id, step]));
+    const cleanedWorktreeIds = new Set<string>();
+
+    for (const step of run.steps) {
+      const workflowStep = workflowStepMap.get(step.stepId);
+
+      if (workflowStep?.worktreeStrategy !== "new" || !step.worktreeId || !cleanupStatuses.has(step.status)) {
+        continue;
+      }
+
+      if (cleanedWorktreeIds.has(step.worktreeId)) {
+        continue;
+      }
+
+      this.tryRemoveWorktree(step.worktreeId);
+      cleanedWorktreeIds.add(step.worktreeId);
+    }
+
+    return run;
+  }
+
+  private cleanupRetriedWorkflowWorktrees(run: WorkflowRunRecord, affectedStepIds: Set<string>): WorkflowRunRecord {
+    const cleanedWorktreeIds = new Set<string>();
+
+    for (const step of run.steps) {
+      if (!affectedStepIds.has(step.stepId) || !step.worktreeId || cleanedWorktreeIds.has(step.worktreeId)) {
+        continue;
+      }
+
+      this.tryRemoveWorktree(step.worktreeId);
+      cleanedWorktreeIds.add(step.worktreeId);
+    }
+
+    return run;
+  }
+
+  private tryRemoveWorktree(worktreeId: string): void {
+    const worktree = this.worktreeManager.get(worktreeId);
+
+    if (!worktree || worktree.status === "removed") {
+      return;
+    }
+
+    try {
+      this.worktreeManager.remove(worktreeId);
+    } catch {
+      // best effort cleanup; retained state in the database is still useful for debugging
+    }
   }
 }
 

@@ -5508,6 +5508,18 @@ html[data-theme="dark"] .runtime-stat__indicator {
 
 .review-popover-anchor {
   position: relative;
+  isolation: isolate;
+}
+
+.review-popover-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 29;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: default;
+  -webkit-app-region: no-drag;
 }
 
 .review-popover {
@@ -5517,12 +5529,14 @@ html[data-theme="dark"] .runtime-stat__indicator {
   z-index: 30;
   width: min(360px, calc(100vw - 48px));
   padding: 14px;
-  border: 1px solid var(--line);
+  border: 1px solid rgba(205, 191, 176, 0.92);
   border-radius: 16px;
-  background: color-mix(in srgb, var(--surface-elevated) 99%, var(--surface-strong));
+  background: #f7efe6;
   box-shadow:
-    var(--shadow-edge),
-    0 24px 48px color-mix(in srgb, var(--accent) 8%, transparent);
+    0 18px 40px rgba(120, 74, 24, 0.16),
+    0 2px 8px rgba(70, 42, 10, 0.08);
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
 }
 
 .review-popover__header {
@@ -5556,16 +5570,17 @@ html[data-theme="dark"] .runtime-stat__indicator {
   gap: 10px;
   width: 100%;
   padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--line) 90%, transparent);
+  border: 1px solid rgba(214, 202, 189, 0.96);
   border-radius: 12px;
-  background: color-mix(in srgb, var(--surface) 94%, var(--surface-strong));
+  background: #fffaf5;
   color: var(--text);
   text-align: left;
+  -webkit-app-region: no-drag;
 }
 
 .review-popover__option--active {
-  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
-  background: color-mix(in srgb, var(--accent-soft) 82%, var(--surface-strong));
+  border-color: rgba(240, 128, 52, 0.7);
+  background: #f8e5d4;
 }
 
 .review-popover__option-body {
@@ -5588,10 +5603,11 @@ html[data-theme="dark"] .runtime-stat__indicator {
 .review-popover__field input {
   width: 100%;
   padding: 10px 12px;
-  border: 1px solid var(--line);
+  border: 1px solid rgba(214, 202, 189, 0.96);
   border-radius: 12px;
-  background: var(--surface);
+  background: #fffaf6;
   color: var(--text);
+  -webkit-app-region: no-drag;
 }
 
 .review-popover__footer {
@@ -5610,9 +5626,37 @@ html[data-theme="dark"] .runtime-stat__indicator {
 }
 
 .review-popover__cancel {
-  border: 1px solid var(--line);
-  background: transparent;
+  border: 1px solid rgba(214, 202, 189, 0.96);
+  background: #fff8f1;
   color: var(--text);
+}
+
+html[data-theme="dark"] .review-popover {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: #191614;
+  box-shadow:
+    0 18px 40px rgba(0, 0, 0, 0.42),
+    0 2px 10px rgba(0, 0, 0, 0.2);
+}
+
+html[data-theme="dark"] .review-popover__option {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: #221d1a;
+}
+
+html[data-theme="dark"] .review-popover__option--active {
+  border-color: rgba(240, 128, 52, 0.48);
+  background: #34271f;
+}
+
+html[data-theme="dark"] .review-popover__field input {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: #201b18;
+}
+
+html[data-theme="dark"] .review-popover__cancel {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: #221d1a;
 }
 
 .review-popover__submit {
@@ -5827,6 +5871,196 @@ html[data-theme="dark"] .runtime-stat__indicator {
 
 .workflow-panel__message {
   margin-bottom: 16px;
+}
+
+.workflow-dashboard {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.workflow-dashboard__card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface-card-top) 88%, transparent);
+}
+
+.workflow-dashboard__card strong {
+  color: var(--text);
+  font-size: 20px;
+}
+
+.workflow-dashboard__card span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.workflow-runtime-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.workflow-runtime-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+}
+
+.workflow-runtime-section strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.workflow-runtime-section__empty {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.workflow-runtime-section__item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.workflow-runtime-section__item span {
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.workflow-runtime-section__item code {
+  font-size: 11px;
+  word-break: break-all;
+}
+
+.workflow-runtime-section--tree {
+  gap: 10px;
+}
+
+.agent-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.agent-tree__node {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.agent-tree__row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-elevated) 78%, transparent);
+  border: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
+}
+
+.agent-tree__title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.agent-tree__title span {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.agent-tree__title small,
+.agent-tree__summary {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.agent-tree__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agent-tree__meta code {
+  font-size: 11px;
+}
+
+.agent-tree__children {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.workflow-runtime-section--lineage {
+  margin-top: 10px;
+}
+
+.context-lineage {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.context-lineage__node {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.context-lineage__row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
+  background: color-mix(in srgb, var(--surface-elevated) 80%, transparent);
+}
+
+.context-lineage__title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.context-lineage__title span {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.context-lineage__title small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.context-lineage__details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.context-lineage__details code {
+  font-size: 11px;
+}
+
+.context-lineage__children {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .review-card,

@@ -45,14 +45,25 @@ export class ExecutionUnitRunner {
     private readonly database: HarnessDatabase,
   ) {}
 
-  prepareResources(step: WorkflowStep, project: ProjectRecord, threadId: string | undefined): ExecutionUnitResources {
+  prepareResources(
+    step: WorkflowStep,
+    project: ProjectRecord,
+    threadId: string | undefined,
+    stepRunRecord?: WorkflowRunStepRecord,
+  ): ExecutionUnitResources {
+    const existingWorktree =
+      step.worktreeStrategy === "new" && stepRunRecord?.worktreeId
+        ? this.worktreeManager.get(stepRunRecord.worktreeId)
+        : undefined;
     const worktree =
       step.worktreeStrategy === "new"
-        ? this.worktreeManager.create({
-            project,
-            threadId,
-            branch: `workflow/${step.id}`,
-          })
+        ? existingWorktree?.status === "ready"
+          ? existingWorktree
+          : this.worktreeManager.create({
+              project,
+              threadId,
+              branch: `workflow/${step.id}`,
+            })
         : undefined;
     const environment = this.environmentManager.detect({
       project,
@@ -159,10 +170,12 @@ async function executeExecutionUnitInternal(
   }
 
   if (step.type === "agent" && step.prompt) {
+    const scopedWorkspace = scopeWorkspaceToWorktree(context.workspace, resources.worktree?.path);
+    const scopedProject = scopeProjectToWorktree(context.project, resources.worktree?.path);
     const task = agentTaskManager.spawn({
       provider: context.provider,
-      workspace: context.workspace,
-      project: context.project,
+      workspace: scopedWorkspace,
+      project: scopedProject,
       parentThreadId: context.threadId ?? createId("workflow_thread"),
       title: step.title,
       input: step.prompt,
@@ -174,7 +187,7 @@ async function executeExecutionUnitInternal(
       status: finalTask.status === "completed" ? "completed" : "failed",
       output: finalTask.finalOutput,
       artifactSummary: summarizeExecutionUnitOutput(finalTask.summary?.finalMessage ?? finalTask.finalOutput),
-      worktreeId: finalTask.worktreeId ?? resources.worktree?.id,
+      worktreeId: resources.worktree?.id ?? finalTask.worktreeId,
       environmentId: finalTask.environmentId ?? resources.environment.id,
       executionContextId: finalTask.executionContextId ?? resources.executionContext.id,
       agentId: finalTask.id,
@@ -185,8 +198,9 @@ async function executeExecutionUnitInternal(
   }
 
   if (step.type === "review") {
+    const scopedProject = scopeProjectToWorktree(context.project, resources.worktree?.path);
     const review = reviewManager.start({
-      project: context.project,
+      project: scopedProject,
       provider: context.provider,
       threadId: context.threadId,
       source: step.reviewSource,
@@ -249,4 +263,26 @@ async function waitForReviewCompletion(database: HarnessDatabase, reviewId: stri
   }
 
   throw new Error(`Timed out waiting for review completion: ${reviewId}`);
+}
+
+function scopeWorkspaceToWorktree(workspace: WorkspaceProfile, worktreePath?: string): WorkspaceProfile {
+  if (!worktreePath) {
+    return workspace;
+  }
+
+  return {
+    ...workspace,
+    rootPath: worktreePath,
+  };
+}
+
+function scopeProjectToWorktree(project: ProjectRecord, worktreePath?: string): ProjectRecord {
+  if (!worktreePath) {
+    return project;
+  }
+
+  return {
+    ...project,
+    rootPath: worktreePath,
+  };
 }

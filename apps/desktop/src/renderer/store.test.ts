@@ -13,12 +13,18 @@ const initialSession = {
 
 afterEach(() => {
   useAppStore.setState({
+    agentTasks: [],
+    environments: [],
+    executionContexts: [],
     reviews: [],
     terminals: [],
     terminalOutputArchives: [],
     terminalCapabilities: [],
     terminalOutputs: {},
     threadSessions: {},
+    workflows: [],
+    workflowRuns: [],
+    worktrees: [],
   } as never);
 });
 
@@ -165,6 +171,89 @@ describe("desktop thread smoke", () => {
       },
     });
     expect(useAppStore.getState().terminalOutputs["terminal-1"]).toBe("");
+
+    useAppStore.getState().handleEvent({
+      type: "agent/updated",
+      payload: {
+        task: {
+          id: "agent-1",
+          parentThreadId: "thread-1",
+          title: "Delegate fix",
+          status: "running",
+          executionContextId: "exec-1",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+    useAppStore.getState().handleEvent({
+      type: "executionContext/updated",
+      payload: {
+        executionContext: {
+          id: "exec-1",
+          projectId: "project-1",
+          kind: "workflow",
+          threadId: "thread-1",
+          cwd: "/workspace",
+          shell: "bash",
+          envJson: {},
+          detectedTools: ["git"],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+    useAppStore.getState().handleEvent({
+      type: "workflow/run",
+      payload: {
+        run: {
+          id: "workflow-run-1",
+          workflowId: "workflow-1",
+          projectId: "project-1",
+          status: "running",
+          pendingStepIds: [],
+          pausedStepIds: [],
+          completedStepIds: ["step-1"],
+          failedStepIds: [],
+          steps: [
+            {
+              stepId: "step-1",
+              status: "completed",
+              attempts: 1,
+              artifactSummary: "Prepared output",
+              executionContextId: "exec-1",
+            },
+          ],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    const runtimeState = useAppStore.getState();
+    expect(runtimeState.agentTasks).toMatchObject([
+      {
+        id: "agent-1",
+        executionContextId: "exec-1",
+      },
+    ]);
+    expect(runtimeState.executionContexts).toMatchObject([
+      {
+        id: "exec-1",
+        kind: "workflow",
+      },
+    ]);
+    expect(runtimeState.workflowRuns).toMatchObject([
+      {
+        id: "workflow-run-1",
+        steps: [
+          {
+            stepId: "step-1",
+            executionContextId: "exec-1",
+          },
+        ],
+      },
+    ]);
   });
 
   it("renders review and steer entrypoints in the thread view source", () => {
@@ -190,6 +279,15 @@ describe("desktop thread smoke", () => {
     expect(source).toContain("Failure artifacts");
     expect(source).toContain("Retry step");
     expect(source).toContain("retainedFailures");
+    expect(source).toContain("RuntimeMetaSection");
+    expect(source).toContain("RuntimeAgentTree");
+    expect(source).toContain("RuntimeContextLineage");
+    expect(source).toContain("buildExecutionContextLineage");
+    expect(source).toContain("buildAgentTree");
+    expect(source).toContain("workflow-runtime-grid");
+    expect(source).toContain("Execution Context Lineage");
+    expect(source).toContain("executionContexts");
+    expect(source).toContain("agentTasks");
     expect(source).not.toContain('window.setInterval(() => {\n      void readOutput();');
   });
 
@@ -212,6 +310,8 @@ describe("desktop thread smoke", () => {
     expect(preloadSource).toContain("archiveTerminal");
     expect(preloadSource).toContain("clearTerminal");
     expect(preloadSource).toContain("retryFailedStepIds");
+    expect(preloadSource).toContain("listExecutionContexts");
+    expect(preloadSource).toContain("listAgentTasks");
     expect(envSource).toContain("steerTurn");
     expect(envSource).toContain("startReview");
     expect(envSource).toContain("listReviews");
@@ -223,6 +323,8 @@ describe("desktop thread smoke", () => {
     expect(envSource).toContain("archiveTerminal");
     expect(envSource).toContain("clearTerminal");
     expect(envSource).toContain("retryFailedStepIds");
+    expect(envSource).toContain("listExecutionContexts");
+    expect(envSource).toContain("listAgentTasks");
     expect(mainSource).toContain('"terminal:approval:respond"');
     expect(mainSource).toContain('"terminal:create"');
     expect(mainSource).toContain('"terminal:write"');
@@ -232,5 +334,7 @@ describe("desktop thread smoke", () => {
     expect(mainSource).toContain('"terminal:clear"');
     expect(mainSource).toContain('"workflow:resume"');
     expect(mainSource).toContain("retryFailedStepIds");
+    expect(mainSource).toContain('"executionContext:list"');
+    expect(mainSource).toContain('"agent:list"');
   });
 });

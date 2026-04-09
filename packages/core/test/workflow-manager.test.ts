@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -776,5 +776,334 @@ describe("WorkflowManager", () => {
         retryFailedStepIds: ["step-1"],
       }),
     ).rejects.toThrow("is not in a failed state");
+  });
+
+  it("cleans up workflow-owned worktrees after successful runs", async () => {
+    const root = mkdtempSync(join(tmpdir(), "my-agent-workflow-"));
+    const database = new HarnessDatabase(join(root, "app.db"));
+    const project = database.listProjects()[0]!;
+    const now = new Date().toISOString();
+    const worktrees = new Map<string, { id: string; projectId: string; branch: string; path: string; status: "ready" | "removed"; createdAt: string; updatedAt: string }>();
+    const remove = vi.fn((worktreeId: string) => {
+      const current = worktrees.get(worktreeId);
+
+      if (!current) {
+        throw new Error(`Unknown worktree: ${worktreeId}`);
+      }
+
+      const removed = {
+        ...current,
+        status: "removed" as const,
+        updatedAt: new Date().toISOString(),
+      };
+      worktrees.set(worktreeId, removed);
+      return removed;
+    });
+    let worktreeCounter = 0;
+
+    const manager = new WorkflowManager(
+      database,
+      {
+        create: ({ branch }: { branch?: string }) => {
+          worktreeCounter += 1;
+          const path = join(project.rootPath, ".my-agent", "worktrees", `test-${worktreeCounter}`);
+          mkdirSync(path, { recursive: true });
+          const worktree = {
+            id: `worktree-${worktreeCounter}`,
+            projectId: project.id,
+            branch: branch ?? `workflow-${worktreeCounter}`,
+            path,
+            status: "ready" as const,
+            createdAt: now,
+            updatedAt: now,
+          };
+          worktrees.set(worktree.id, worktree);
+          return worktree;
+        },
+        get: (worktreeId: string) => worktrees.get(worktreeId) ?? null,
+        remove,
+      } as never,
+      {
+        detect: ({ cwd }: { cwd?: string }) => ({
+          id: "env-cleanup-success",
+          projectId: project.id,
+          cwd: cwd ?? root,
+          shell: process.platform === "win32" ? "powershell" : "bash",
+          envJson: {},
+          detectedTools: ["git", "node"],
+          createdAt: now,
+          updatedAt: now,
+        }),
+      } as never,
+      {
+        create: ({ environment, worktree }: { environment: { cwd: string; shell: string; envJson: {}; detectedTools: string[] }; worktree?: { id: string } }) => ({
+          id: "exec-cleanup-success",
+          projectId: project.id,
+          kind: "workflow",
+          worktreeId: worktree?.id,
+          cwd: environment.cwd,
+          shell: environment.shell,
+          envJson: environment.envJson,
+          detectedTools: environment.detectedTools,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      } as never,
+      {
+        start: () => {
+          throw new Error("not needed");
+        },
+      } as never,
+      {
+        spawn: () => {
+          throw new Error("not needed");
+        },
+      } as never,
+      () => undefined,
+      () => undefined,
+    );
+
+    const workflow = database.upsertWorkflow({
+      id: "workflow-cleanup-success",
+      name: "Cleanup success workflow",
+      description: "Clean worktrees after successful runs",
+      path: join(root, "cleanup-success.toml"),
+      source: "user",
+      steps: [
+        {
+          id: "build",
+          type: "command",
+          title: "Build",
+          command: process.platform === "win32" ? "Write-Output built" : "echo built",
+          worktreeStrategy: "new",
+        },
+      ],
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const result = await manager.run({
+      workflowId: workflow.id,
+      project,
+      provider: database.getConfig().provider,
+      workspace: {
+        id: project.id,
+        name: project.name,
+        rootPath: project.rootPath,
+        shell: project.shell,
+        sandboxMode: project.sandboxMode,
+        approvalPolicy: "never",
+      },
+      nonInteractive: true,
+    });
+
+    expect(result.run.status).toBe("completed");
+    expect(result.run.steps.find((step) => step.stepId === "build")?.worktreeId).toBe("worktree-1");
+    expect(remove).toHaveBeenCalledWith("worktree-1");
+    expect(worktrees.get("worktree-1")?.status).toBe("removed");
+  });
+
+  it("retains failed worktrees until retry and then cleans old and new worktrees", async () => {
+    const root = mkdtempSync(join(tmpdir(), "my-agent-workflow-"));
+    const database = new HarnessDatabase(join(root, "app.db"));
+    const project = database.listProjects()[0]!;
+    const now = new Date().toISOString();
+    const worktrees = new Map<string, { id: string; projectId: string; branch: string; path: string; status: "ready" | "removed"; createdAt: string; updatedAt: string }>();
+    const removedWorktreeIds: string[] = [];
+    const remove = vi.fn((worktreeId: string) => {
+      const current = worktrees.get(worktreeId);
+
+      if (!current) {
+        throw new Error(`Unknown worktree: ${worktreeId}`);
+      }
+
+      removedWorktreeIds.push(worktreeId);
+      const removed = {
+        ...current,
+        status: "removed" as const,
+        updatedAt: new Date().toISOString(),
+      };
+      worktrees.set(worktreeId, removed);
+      return removed;
+    });
+    let worktreeCounter = 0;
+
+    const spawn = vi
+      .fn()
+      .mockReturnValueOnce({
+        id: "agent-fail",
+        parentThreadId: "workflow-thread",
+        title: "Verify",
+        status: "running",
+        createdAt: now,
+        updatedAt: now,
+      })
+      .mockReturnValueOnce({
+        id: "agent-retry",
+        parentThreadId: "workflow-thread",
+        title: "Verify",
+        status: "running",
+        createdAt: now,
+        updatedAt: now,
+      });
+    const wait = vi.fn().mockImplementation(async (agentId: string) => {
+      if (agentId === "agent-fail") {
+        return {
+          id: "agent-fail",
+          parentThreadId: "workflow-thread",
+          title: "Verify",
+          status: "failed" as const,
+          finalOutput: "Verification failed.",
+          createdAt: now,
+          updatedAt: now,
+        };
+      }
+
+      if (agentId === "agent-retry") {
+        return {
+          id: "agent-retry",
+          parentThreadId: "workflow-thread",
+          title: "Verify",
+          status: "completed" as const,
+          finalOutput: "Verification succeeded.",
+          executionContextId: "exec-agent-cleanup",
+          createdAt: now,
+          updatedAt: now,
+        };
+      }
+
+      throw new Error(`Unexpected agent id: ${agentId}`);
+    });
+
+    const manager = new WorkflowManager(
+      database,
+      {
+        create: ({ branch }: { branch?: string }) => {
+          worktreeCounter += 1;
+          const path = join(project.rootPath, ".my-agent", "worktrees", `retry-${worktreeCounter}`);
+          mkdirSync(path, { recursive: true });
+          const worktree = {
+            id: `worktree-${worktreeCounter}`,
+            projectId: project.id,
+            branch: branch ?? `workflow-${worktreeCounter}`,
+            path,
+            status: "ready" as const,
+            createdAt: now,
+            updatedAt: now,
+          };
+          worktrees.set(worktree.id, worktree);
+          return worktree;
+        },
+        get: (worktreeId: string) => worktrees.get(worktreeId) ?? null,
+        remove,
+      } as never,
+      {
+        detect: ({ cwd }: { cwd?: string }) => ({
+          id: "env-cleanup-retry",
+          projectId: project.id,
+          cwd: cwd ?? root,
+          shell: process.platform === "win32" ? "powershell" : "bash",
+          envJson: {},
+          detectedTools: ["git", "node"],
+          createdAt: now,
+          updatedAt: now,
+        }),
+      } as never,
+      {
+        create: ({ environment, worktree }: { environment: { cwd: string; shell: string; envJson: {}; detectedTools: string[] }; worktree?: { id: string } }) => ({
+          id: `exec-${Math.random().toString(36).slice(2, 8)}`,
+          projectId: project.id,
+          kind: "workflow",
+          worktreeId: worktree?.id,
+          cwd: environment.cwd,
+          shell: environment.shell,
+          envJson: environment.envJson,
+          detectedTools: environment.detectedTools,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      } as never,
+      {
+        start: () => {
+          throw new Error("not needed");
+        },
+      } as never,
+      {
+        spawn,
+        wait,
+      } as never,
+      () => undefined,
+      () => undefined,
+    );
+
+    const workflow = database.upsertWorkflow({
+      id: "workflow-cleanup-retry",
+      name: "Cleanup retry workflow",
+      description: "Retain failed worktrees until retry",
+      path: join(root, "cleanup-retry.toml"),
+      source: "user",
+      steps: [
+        {
+          id: "prepare",
+          type: "command",
+          title: "Prepare",
+          command: 'node -e "console.log(\'prepared\')"',
+          worktreeStrategy: "new",
+        },
+        {
+          id: "verify",
+          type: "agent",
+          title: "Verify",
+          prompt: "Verify the prepared output.",
+          dependsOn: ["prepare"],
+          worktreeStrategy: "new",
+        },
+      ],
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const initial = await manager.run({
+      workflowId: workflow.id,
+      project,
+      provider: database.getConfig().provider,
+      workspace: {
+        id: project.id,
+        name: project.name,
+        rootPath: project.rootPath,
+        shell: project.shell,
+        sandboxMode: project.sandboxMode,
+        approvalPolicy: "never",
+      },
+      nonInteractive: true,
+    });
+
+    expect(initial.run.status).toBe("failed");
+    expect(initial.run.steps.find((step) => step.stepId === "prepare")?.worktreeId).toBe("worktree-1");
+    expect(initial.run.steps.find((step) => step.stepId === "verify")?.worktreeId).toBe("worktree-2");
+    expect(removedWorktreeIds).toEqual(["worktree-1"]);
+    expect(worktrees.get("worktree-1")?.status).toBe("removed");
+    expect(worktrees.get("worktree-2")?.status).toBe("ready");
+
+    const resumed = await manager.resume({
+      runId: initial.run.id,
+      project,
+      provider: database.getConfig().provider,
+      workspace: {
+        id: project.id,
+        name: project.name,
+        rootPath: project.rootPath,
+        shell: project.shell,
+        sandboxMode: project.sandboxMode,
+        approvalPolicy: "never",
+      },
+      retryFailedStepIds: ["verify"],
+    });
+
+    expect(resumed.run.status).toBe("completed");
+    expect(removedWorktreeIds).toEqual(["worktree-1", "worktree-2", "worktree-3"]);
+    expect(resumed.run.steps.find((step) => step.stepId === "verify")?.worktreeId).toBe("worktree-3");
+    expect(worktrees.get("worktree-2")?.status).toBe("removed");
+    expect(worktrees.get("worktree-3")?.status).toBe("removed");
   });
 });

@@ -853,6 +853,24 @@ export class HarnessDatabase {
     return row ? this.mapAgentTask(row) : null;
   }
 
+  listAgentTasks(projectId?: string): AgentTaskRecord[] {
+    const rows = projectId
+      ? (this.db
+          .prepare(
+            `
+              SELECT agent_tasks.*
+              FROM agent_tasks
+              INNER JOIN threads ON threads.id = agent_tasks.parent_thread_id
+              WHERE threads.project_id = ?
+              ORDER BY agent_tasks.created_at DESC
+            `,
+          )
+          .all(projectId) as Record<string, unknown>[])
+      : (this.db.prepare("SELECT * FROM agent_tasks ORDER BY created_at DESC").all() as Record<string, unknown>[]);
+
+    return rows.map((row) => this.mapAgentTask(row));
+  }
+
   getAgentTaskByChildThreadId(threadId: string): AgentTaskRecord | null {
     const row = this.db.prepare("SELECT * FROM agent_tasks WHERE child_thread_id = ? ORDER BY created_at DESC LIMIT 1").get(threadId) as
       | Record<string, unknown>

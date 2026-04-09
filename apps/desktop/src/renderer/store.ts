@@ -1,7 +1,10 @@
 import { create } from "zustand";
 import {
+  type AgentTaskRecord,
   type AppConfig,
   type CreateProjectParams,
+  type EnvironmentRecord,
+  type ExecutionContextRecord,
   type HarnessEvent,
   type InitializeResult,
   type ItemRecord,
@@ -18,6 +21,9 @@ import {
   type ThreadRecord,
   type TurnSteerRecord,
   type TurnRecord,
+  type WorkflowRecord,
+  type WorkflowRunRecord,
+  type WorktreeRecord,
 } from "@my-agent/protocol";
 
 let bootstrapPromise: Promise<void> | null = null;
@@ -38,6 +44,12 @@ interface AppState {
   threads: ThreadRecord[];
   threadSessions: Record<string, ThreadSessionState>;
   reviews: ReviewRecord[];
+  worktrees: WorktreeRecord[];
+  environments: EnvironmentRecord[];
+  executionContexts: ExecutionContextRecord[];
+  workflows: WorkflowRecord[];
+  workflowRuns: WorkflowRunRecord[];
+  agentTasks: AgentTaskRecord[];
   terminals: TerminalSessionRecord[];
   terminalOutputs: Record<string, string>;
   terminalOutputArchives: TerminalOutputArchiveRecord[];
@@ -66,6 +78,7 @@ interface AppState {
   updateConfig: (config: Partial<AppConfig>) => Promise<void>;
   testProvider: (provider?: Partial<ProviderProfile>) => Promise<void>;
   refreshProviderModels: (provider?: Partial<ProviderProfile>) => Promise<void>;
+  refreshRuntimeProjectState: (projectId?: string) => Promise<void>;
   handleEvent: (event: HarnessEvent) => void;
 }
 
@@ -77,6 +90,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   threads: [],
   threadSessions: {},
   reviews: [],
+  worktrees: [],
+  environments: [],
+  executionContexts: [],
+  workflows: [],
+  workflowRuns: [],
+  agentTasks: [],
   terminals: [],
   terminalOutputs: {},
   terminalOutputArchives: [],
@@ -110,6 +129,12 @@ export const useAppStore = create<AppState>((set, get) => ({
           threads: initial.threads,
           threadSessions: Object.fromEntries(initial.threads.map((thread) => [thread.id, createEmptyThreadSession()])),
           reviews: initial.reviews ?? [],
+          worktrees: initial.worktrees ?? [],
+          environments: initial.environments ?? [],
+          executionContexts: initial.executionContexts ?? [],
+          workflows: initial.workflows ?? [],
+          workflowRuns: initial.workflowRuns ?? [],
+          agentTasks: initial.agentTasks ?? [],
           terminals: initial.terminals ?? [],
           terminalOutputArchives: initial.terminalOutputArchives ?? [],
           terminalCapabilities: initial.terminalCapabilities ?? [],
@@ -124,6 +149,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
 
         await get().refreshProviderModels();
+        await get().refreshRuntimeProjectState(activeProjectId);
 
         if (!detachEventListener) {
           detachEventListener = window.myAgent.onEvent((event) => get().handleEvent(event));
@@ -148,6 +174,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       config: state.config ? { ...state.config, selectedProjectId: result.project.id } : state.config,
       activeThreadId: undefined,
     }));
+    await get().refreshRuntimeProjectState(result.project.id);
   },
   updateProject: async (projectId, patch) => {
     const result = (await window.myAgent.updateProject({ projectId, patch })) as { project: ProjectRecord };
@@ -182,6 +209,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       activeProjectId: projectId,
       activeThreadId: undefined,
     });
+    await get().refreshRuntimeProjectState(projectId);
   },
   createThread: async (title, projectId) => {
     const ensuredProjectId = projectId ?? get().activeProjectId ?? get().config?.selectedProjectId;
@@ -389,6 +417,39 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
     }
   },
+  refreshRuntimeProjectState: async (projectId) => {
+    const activeProjectId = projectId ?? get().activeProjectId ?? get().config?.selectedProjectId;
+
+    if (!activeProjectId) {
+      set({
+        worktrees: [],
+        environments: [],
+        executionContexts: [],
+        workflows: [],
+        workflowRuns: [],
+        agentTasks: [],
+      });
+      return;
+    }
+
+    const [worktrees, environments, executionContexts, workflows, workflowRuns, agentTasks] = await Promise.all([
+      window.myAgent.listWorktrees(activeProjectId).then((result) => result.worktrees),
+      window.myAgent.listEnvironments(activeProjectId).then((result) => result.environments),
+      window.myAgent.listExecutionContexts(activeProjectId).then((result) => result.executionContexts),
+      window.myAgent.listWorkflows(activeProjectId).then((result) => result.workflows),
+      window.myAgent.listWorkflowRuns().then((result) => result.runs),
+      window.myAgent.listAgentTasks(activeProjectId).then((result) => result.tasks),
+    ]);
+
+    set({
+      worktrees,
+      environments,
+      executionContexts,
+      workflows,
+      workflowRuns,
+      agentTasks,
+    });
+  },
   handleEvent: (event) => {
     switch (event.type) {
       case "thread/started":
@@ -490,6 +551,36 @@ export const useAppStore = create<AppState>((set, get) => ({
           reviews: upsertReview(state.reviews, event.payload.review),
         }));
         break;
+      case "agent/updated":
+        set((state) => ({
+          agentTasks: upsertAgentTask(state.agentTasks, event.payload.task),
+        }));
+        break;
+      case "worktree/updated":
+        set((state) => ({
+          worktrees: upsertWorktree(state.worktrees, event.payload.worktree),
+        }));
+        break;
+      case "environment/updated":
+        set((state) => ({
+          environments: upsertEnvironment(state.environments, event.payload.environment),
+        }));
+        break;
+      case "executionContext/updated":
+        set((state) => ({
+          executionContexts: upsertExecutionContext(state.executionContexts, event.payload.executionContext),
+        }));
+        break;
+      case "workflow/updated":
+        set((state) => ({
+          workflows: upsertWorkflow(state.workflows, event.payload.workflow),
+        }));
+        break;
+      case "workflow/run":
+        set((state) => ({
+          workflowRuns: upsertWorkflowRun(state.workflowRuns, event.payload.run),
+        }));
+        break;
       case "terminal/updated":
         set((state) => ({
           terminals: upsertTerminal(state.terminals, event.payload.session),
@@ -522,6 +613,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           activeProjectId: event.payload.config.selectedProjectId ?? state.activeProjectId,
         }));
         void get().refreshProviderModels();
+        void get().refreshRuntimeProjectState(event.payload.config.selectedProjectId ?? get().activeProjectId);
         break;
       case "skills/changed":
         set({ skills: event.payload.skills });
@@ -542,6 +634,35 @@ function upsertTurn(turns: TurnRecord[], turn: TurnRecord): TurnRecord[] {
 
 function upsertReview(reviews: ReviewRecord[], review: ReviewRecord): ReviewRecord[] {
   return [...reviews.filter((entry) => entry.id !== review.id), review].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+}
+
+function upsertAgentTask(tasks: AgentTaskRecord[], task: AgentTaskRecord): AgentTaskRecord[] {
+  return [...tasks.filter((entry) => entry.id !== task.id), task].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+}
+
+function upsertWorktree(worktrees: WorktreeRecord[], worktree: WorktreeRecord): WorktreeRecord[] {
+  return [...worktrees.filter((entry) => entry.id !== worktree.id), worktree].sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+}
+
+function upsertEnvironment(environments: EnvironmentRecord[], environment: EnvironmentRecord): EnvironmentRecord[] {
+  return [...environments.filter((entry) => entry.id !== environment.id), environment].sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+}
+
+function upsertExecutionContext(
+  executionContexts: ExecutionContextRecord[],
+  executionContext: ExecutionContextRecord,
+): ExecutionContextRecord[] {
+  return [...executionContexts.filter((entry) => entry.id !== executionContext.id), executionContext].sort((left, right) =>
+    left.createdAt.localeCompare(right.createdAt),
+  );
+}
+
+function upsertWorkflow(workflows: WorkflowRecord[], workflow: WorkflowRecord): WorkflowRecord[] {
+  return [...workflows.filter((entry) => entry.id !== workflow.id), workflow].sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function upsertWorkflowRun(workflowRuns: WorkflowRunRecord[], run: WorkflowRunRecord): WorkflowRunRecord[] {
+  return [...workflowRuns.filter((entry) => entry.id !== run.id), run].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
 }
 
 function upsertTerminal(terminals: TerminalSessionRecord[], terminal: TerminalSessionRecord): TerminalSessionRecord[] {

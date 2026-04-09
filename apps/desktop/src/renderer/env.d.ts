@@ -1,8 +1,10 @@
 import {
   type ApprovalResponseParams,
+  type AgentTaskRecord,
   type AppConfig,
   type ConfigWriteParams,
   type CreateProjectParams,
+  type ExecutionContextRecord,
   type HarnessEvent,
   type InitializeResult,
   type InterruptTurnParams,
@@ -76,10 +78,12 @@ declare global {
       removeWorktree: (worktreeId: string) => Promise<{ worktree: WorktreeRecord }>;
       listEnvironments: (projectId?: string) => Promise<{ environments: EnvironmentRecord[] }>;
       detectEnvironment: (params: { projectId: string; threadId?: string; worktreeId?: string; cwd?: string }) => Promise<{ environment: EnvironmentRecord }>;
+      listExecutionContexts: (projectId?: string) => Promise<{ executionContexts: ExecutionContextRecord[] }>;
       listWorkflows: (projectId?: string) => Promise<{ workflows: WorkflowRecord[] }>;
       runWorkflow: (params: { workflowId: string; projectId: string; threadId?: string; nonInteractive?: boolean }) => Promise<unknown>;
       listWorkflowRuns: (workflowId?: string) => Promise<{ runs: WorkflowRunRecord[] }>;
       resumeWorkflow: (params: { runId: string; approvePausedSteps?: boolean; retryFailedStepIds?: string[] }) => Promise<unknown>;
+      listAgentTasks: (projectId?: string) => Promise<{ tasks: AgentTaskRecord[] }>;
       listPlugins: () => Promise<{ plugins: PluginRecord[] }>;
       listMcpMounts: () => Promise<{ mounts: McpMountRecord[] }>;
       listMcpSessions: () => Promise<{ sessions: McpSessionRecord[] }>;

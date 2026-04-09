@@ -216,6 +216,9 @@ export interface InitializeResult {
   terminalCapabilities?: TerminalBackendCapability[];
   terminalOutputArchives?: TerminalOutputArchiveRecord[];
   reviews?: ReviewRecord[];
+  workflows?: WorkflowRecord[];
+  workflowRuns?: WorkflowRunRecord[];
+  agentTasks?: AgentTaskRecord[];
 }
 
 export interface StartThreadParams {
@@ -822,6 +825,10 @@ export interface AgentWaitResult {
   task: AgentTaskRecord;
 }
 
+export interface AgentListResult {
+  tasks: AgentTaskRecord[];
+}
+
 export interface AgentCloseParams {
   agentId: string;
 }
@@ -883,6 +890,10 @@ export interface WorkflowResumeParams {
 
 export interface WorkflowRunsResult {
   runs: WorkflowRunRecord[];
+}
+
+export interface ExecutionContextListResult {
+  executionContexts: ExecutionContextRecord[];
 }
 
 export interface McpSessionsResult {

@@ -15,6 +15,10 @@ export class WorktreeManager {
     return this.database.listWorktrees(projectId);
   }
 
+  get(worktreeId: string): WorktreeRecord | null {
+    return this.database.getWorktree(worktreeId);
+  }
+
   create(params: {
     project: ProjectRecord;
     threadId?: string;
