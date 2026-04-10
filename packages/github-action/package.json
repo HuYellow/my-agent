@@ -10,7 +10,7 @@
   },
   "scripts": {
     "build": "npm run build --workspace @my-agent/protocol && npm run build --workspace @my-agent/core && node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
-    "test": "vitest run --passWithNoTests",
+    "test": "npm run build --workspace @my-agent/protocol && npm run build --workspace @my-agent/core && vitest run --passWithNoTests",
     "typecheck": "npm run build --workspace @my-agent/protocol && npm run build --workspace @my-agent/core && tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

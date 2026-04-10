@@ -37,6 +37,7 @@ import {
   type TurnInputAttachment,
   type TurnSteerParams,
   type RunAutomationParams,
+  type ToolListParams,
   type UpdateRequirementParams,
   type UpdateAutomationParams,
   type WorkflowRunParams,
@@ -183,7 +184,7 @@ class HarnessClient {
     this.pending.delete(message.id);
 
     if ("error" in message) {
-      handler.reject(new Error(message.error.message));
+      handler.reject(createHarnessRpcError(message.error));
       return;
     }
 
@@ -269,7 +270,7 @@ class HarnessClient {
     }
     const payload = (await response.json()) as JsonRpcResponse;
     if ("error" in payload) {
-      throw new Error(payload.error.message);
+      throw createHarnessRpcError(payload.error);
     }
     return payload.result as TResult;
   }
@@ -464,6 +465,7 @@ ipcMain.handle("command:exec", (_event, params: CommandExecParams) => harness.re
   );
   ipcMain.handle("executionContext:list", (_event, params: { projectId?: string }) => harness.request("executionContext/list", params));
   ipcMain.handle("agent:list", (_event, params: { projectId?: string }) => harness.request("agent/list", params));
+  ipcMain.handle("tool:list", (_event, params: ToolListParams) => harness.request("tool/list", params));
   ipcMain.handle("plugin:list", () => harness.request("plugin/list"));
   ipcMain.handle("mcp:list", () => harness.request("mcp/list"));
   ipcMain.handle("mcp:sessions", () => harness.request("mcp/sessions"));
@@ -626,6 +628,14 @@ function wrapPipeError(error: unknown, fallbackMessage: string): Error {
   }
 
   return error instanceof Error ? error : new Error(String(error));
+}
+
+function createHarnessRpcError(error: { code: number; message: string; data?: unknown }): Error & { code: number; data?: unknown } {
+  const wrapped = new Error(error.message) as Error & { code: number; data?: unknown };
+  wrapped.name = "HarnessRpcError";
+  wrapped.code = error.code;
+  wrapped.data = error.data;
+  return wrapped;
 }
 
 function parseSseEvent(chunk: string): HarnessEvent | null {

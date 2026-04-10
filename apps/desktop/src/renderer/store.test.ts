@@ -1,12 +1,15 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { ReviewRecord } from "@my-agent/protocol";
+import type { ReviewArtifactRecord, ReviewRecord, ToolCatalogRecord } from "@my-agent/protocol";
 import { useAppStore } from "./store";
 
 const initialSession = {
   turns: [],
   items: [],
+  turnContexts: [],
+  turnPlans: [],
+  turnDiffs: [],
   pendingApproval: null,
   submitting: false,
 };
@@ -19,6 +22,9 @@ afterEach(() => {
     requirementMemories: [],
     requirements: [],
     reviews: [],
+    reviewArtifacts: {},
+    runtimeTools: [],
+    protocolCompatibility: undefined,
     terminals: [],
     terminalOutputArchives: [],
     terminalCapabilities: [],
@@ -79,7 +85,19 @@ describe("desktop thread smoke", () => {
 
     useAppStore.getState().handleEvent({
       type: "review/result",
-      payload: { review },
+      payload: {
+        review,
+        artifact: {
+          sourceLabel: "Workspace diff",
+          findingCounts: {
+            total: 1,
+            critical: 0,
+            high: 0,
+            medium: 1,
+            low: 0,
+          },
+        } satisfies ReviewArtifactRecord,
+      },
     });
 
     const state = useAppStore.getState();
@@ -256,6 +274,119 @@ describe("desktop thread smoke", () => {
         ],
       },
     ]);
+    expect(state.reviewArtifacts["review-1"]).toMatchObject({
+      sourceLabel: "Workspace diff",
+      findingCounts: {
+        total: 1,
+      },
+    });
+
+    useAppStore.getState().handleEvent({
+      type: "turn/planUpdated",
+      payload: {
+        plan: {
+          turnId: "turn-1",
+          threadId: "thread-1",
+          title: "Execution plan",
+          steps: [
+            {
+              id: "step-1",
+              title: "Wire structured events",
+              status: "pending",
+            },
+          ],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+    useAppStore.getState().handleEvent({
+      type: "turn/diffUpdated",
+      payload: {
+        diff: {
+          id: "turn-1",
+          turnId: "turn-1",
+          threadId: "thread-1",
+          label: "Turn 1",
+          stats: {
+            fileCount: 1,
+            additions: 4,
+            deletions: 1,
+          },
+          files: [
+            {
+              itemId: "item-diff-1",
+              turnId: "turn-1",
+              path: "src/runtime.ts",
+              title: "File change: src/runtime.ts",
+              status: "modified",
+              additions: 4,
+              deletions: 1,
+              patch: "@@ -1 +1 @@",
+              updatedAt: new Date().toISOString(),
+            },
+          ],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    expect(useAppStore.getState().threadSessions["thread-1"]?.turnPlans).toMatchObject([
+      {
+        turnId: "turn-1",
+        steps: [
+          {
+            title: "Wire structured events",
+          },
+        ],
+      },
+    ]);
+    expect(useAppStore.getState().threadSessions["thread-1"]?.turnDiffs).toMatchObject([
+      {
+        turnId: "turn-1",
+        files: [
+          {
+            path: "src/runtime.ts",
+            additions: 4,
+          },
+        ],
+      },
+    ]);
+
+    useAppStore.getState().handleEvent({
+      type: "tools/catalogUpdated",
+      payload: {
+        tools: [
+          {
+            name: "read_file",
+            description: "Read a file",
+            enabled: true,
+            source: {
+              type: "local",
+              label: "Local workspace",
+            },
+            capability: {
+              writes: false,
+              network: false,
+              interactive: false,
+              approvalModes: ["none"],
+              riskLevel: "safe_read",
+              streamedOutput: false,
+              resumable: false,
+            },
+          },
+        ] satisfies ToolCatalogRecord[],
+      },
+    });
+    expect(useAppStore.getState().runtimeTools).toMatchObject([
+      {
+        name: "read_file",
+        source: {
+          type: "local",
+        },
+      },
+    ]);
   });
 
   it("renders review and steer entrypoints in the thread view source", () => {
@@ -265,7 +396,17 @@ describe("desktop thread smoke", () => {
     expect(source).toContain("SteerCard");
     expect(source).toContain("TerminalCard");
     expect(source).toContain("DiffPatchPanel");
+    expect(source).toContain("PlanWorkspacePanel");
+    expect(source).toContain("ReviewFindingsPanel");
+    expect(source).toContain("ThreadRuntimePanel");
     expect(source).toContain("threadWorkspaceView");
+    expect(source).toContain("Review Findings");
+    expect(source).toContain("Runtime");
+    expect(source).toContain("Plan");
+    expect(source).toContain("Open Turn");
+    expect(source).toContain("Open Review");
+    expect(source).toContain("Open Child Thread");
+    expect(source).toContain("Runtime Detail");
     expect(source).toContain("Diff / Patch");
     expect(source).toContain("workspace-toggle");
     expect(source).toContain("buildThreadChangeSets");
@@ -304,6 +445,13 @@ describe("desktop thread smoke", () => {
     expect(source).toContain("Execution Context Lineage");
     expect(source).toContain("executionContexts");
     expect(source).toContain("agentTasks");
+    expect(source).toContain("buildThreadExecutionContextLineage");
+    expect(source).toContain("collectAgentTreeIds");
+    expect(source).toContain("findChangeSetSelectionForFile");
+    expect(source).toContain("getConversationEntryAnchor");
+    expect(source).toContain("conversationFocusTarget");
+    expect(source).toContain("requestedSelection");
+    expect(source).toContain("compareReviewSeverity");
     expect(source).not.toContain('window.setInterval(() => {\n      void readOutput();');
   });
 

@@ -1,16 +1,40 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { createMcpServerRuntime } from "../src/index.js";
+
+const runtimes: Array<ReturnType<typeof createMcpServerRuntime>> = [];
+
+afterEach(() => {
+  while (runtimes.length > 0) {
+    runtimes.pop()!.dispose();
+  }
+});
 
 describe("mcp-server tool compatibility", () => {
-  it("exposes steer and review tools that map to the new core RPC methods", () => {
-    const source = readFileSync(join(process.cwd(), "src", "index.ts"), "utf8");
+  it("exposes governed tool catalog and protocol compatibility tools", async () => {
+    const runtime = createMcpServerRuntime();
+    runtimes.push(runtime);
 
-    expect(source).toContain('name: "steer_turn"');
-    expect(source).toContain('method: "turn/steer"');
-    expect(source).toContain('name: "start_review"');
-    expect(source).toContain('method: "review/start"');
-    expect(source).toContain('name: "list_reviews"');
-    expect(source).toContain('method: "review/list"');
+    const toolsList = await runtime.handleMessage({
+      jsonrpc: "2.0",
+      id: "tools-list",
+      method: "tools/list",
+    } as any);
+
+    expect(toolsList && "result" in toolsList && (toolsList as any).result.tools.map((tool: any) => tool.name)).toEqual(
+      expect.arrayContaining(["list_runtime_tools", "get_protocol_compatibility"]),
+    );
+  });
+
+  it("returns tool/list and compatibility data through MCP tool calls", async () => {
+    const runtime = createMcpServerRuntime();
+    runtimes.push(runtime);
+
+    const toolCatalog = JSON.parse(await runtime.callTool("list_runtime_tools", {}));
+    const compatibility = JSON.parse(await runtime.callTool("get_protocol_compatibility", {}));
+
+    expect(toolCatalog.tools.some((tool: any) => tool.source.type === "local")).toBe(true);
+    expect(compatibility.compatibility.structuredEventTypes).toEqual(
+      expect.arrayContaining(["tools/catalogUpdated"]),
+    );
   });
 });

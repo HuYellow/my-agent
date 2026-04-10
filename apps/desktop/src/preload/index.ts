@@ -34,6 +34,9 @@ import {
   type McpMountRecord,
   type McpSessionRecord,
   type WorkflowRunRecord,
+  type ToolCatalogRecord,
+  type ToolListParams,
+  type ProtocolCompatibilityRecord,
   type StartThreadParams,
   type StartTurnParams,
   type TurnInputAttachment,
@@ -116,6 +119,7 @@ const api = {
   resumeWorkflow: (params: { runId: string; approvePausedSteps?: boolean; retryFailedStepIds?: string[] }) =>
     ipcRenderer.invoke("workflow:resume", params),
   listAgentTasks: (projectId?: string) => ipcRenderer.invoke("agent:list", { projectId }) as Promise<{ tasks: AgentTaskRecord[] }>,
+  listTools: (params?: ToolListParams) => ipcRenderer.invoke("tool:list", params ?? {}) as Promise<{ tools: ToolCatalogRecord[] }>,
   listPlugins: () => ipcRenderer.invoke("plugin:list") as Promise<{ plugins: PluginRecord[] }>,
   listMcpMounts: () => ipcRenderer.invoke("mcp:list") as Promise<{ mounts: McpMountRecord[] }>,
   listMcpSessions: () => ipcRenderer.invoke("mcp:sessions") as Promise<{ sessions: McpSessionRecord[] }>,

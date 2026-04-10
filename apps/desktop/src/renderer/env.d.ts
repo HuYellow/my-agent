@@ -36,12 +36,16 @@ import {
   type TerminalResizeParams,
   type TerminalSessionRecord,
   type TerminalWriteParams,
+  type ToolCatalogRecord,
+  type ToolListParams,
   type WorktreeRecord,
   type EnvironmentRecord,
   type WorkflowRecord,
   type WorkflowRunRecord,
   type TurnContextSnapshotRecord,
+  type TurnDiffRecord,
   type TurnInputAttachment,
+  type TurnPlanRecord,
   type ThreadRecord,
   type TurnSteerParams,
   type TurnSteerRecord,
@@ -71,7 +75,15 @@ declare global {
       unassignThreadFromRequirement: (params: { threadId: string }) => Promise<{ thread: ThreadRecord }>;
       updateThread: (params: UpdateThreadParams) => Promise<{ thread: ThreadRecord }>;
       startThread: (params: StartThreadParams) => Promise<{ thread: ThreadRecord }>;
-      resumeThread: (threadId: string) => Promise<{ thread: ThreadRecord; turns: TurnRecord[]; items: ItemRecord[]; turnContexts?: TurnContextSnapshotRecord[]; pendingApproval?: PendingApproval | null }>;
+      resumeThread: (threadId: string) => Promise<{
+        thread: ThreadRecord;
+        turns: TurnRecord[];
+        items: ItemRecord[];
+        turnContexts?: TurnContextSnapshotRecord[];
+        turnPlans?: TurnPlanRecord[];
+        turnDiffs?: TurnDiffRecord[];
+        pendingApproval?: PendingApproval | null;
+      }>;
       startTurn: (params: StartTurnParams) => Promise<{ turn: TurnRecord }>;
       steerTurn: (params: TurnSteerParams) => Promise<{ steer: TurnSteerRecord }>;
       interruptTurn: (params: InterruptTurnParams) => Promise<{ turn: TurnRecord }>;
@@ -104,6 +116,7 @@ declare global {
       listWorkflowRuns: (workflowId?: string) => Promise<{ runs: WorkflowRunRecord[] }>;
       resumeWorkflow: (params: { runId: string; approvePausedSteps?: boolean; retryFailedStepIds?: string[] }) => Promise<unknown>;
       listAgentTasks: (projectId?: string) => Promise<{ tasks: AgentTaskRecord[] }>;
+      listTools: (params?: ToolListParams) => Promise<{ tools: ToolCatalogRecord[] }>;
       listPlugins: () => Promise<{ plugins: PluginRecord[] }>;
       listMcpMounts: () => Promise<{ mounts: McpMountRecord[] }>;
       listMcpSessions: () => Promise<{ sessions: McpSessionRecord[] }>;

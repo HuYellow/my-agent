@@ -15,14 +15,17 @@ import {
   type CommandExecParams,
   type ConfigWriteParams,
   type CreateProjectParams,
+  type DiffStatRecord,
   type ForkThreadParams,
   type HarnessEvent,
   type InitializeResult,
+  type ItemRecord,
   type McpRefreshParams,
   type McpListResult,
   type McpSessionsResult,
   type McpToolsResult,
   type PluginListResult,
+  type ProtocolCompatibilityRecord,
   type RequirementAssignThreadParams,
   type RequirementGetParams,
   type RequirementListParams,
@@ -37,6 +40,7 @@ import {
   type ProviderTestResult,
   type ProviderModelsResult,
   type ReadFileParams,
+  type ReviewArtifactRecord,
   type ReviewListResult,
   type ReviewStartParams,
   type ReviewStartResult,
@@ -55,11 +59,17 @@ import {
   type StartTurnParams,
   type StartTurnResult,
   type ThreadRecord,
+  type TurnDiffFileRecord,
+  type TurnDiffRecord,
   type TurnInputAttachment,
+  type TurnPlanRecord,
+  type TurnPlanStepRecord,
   type TurnSteerParams,
   type TurnSteerRecord,
   type TurnSteerResult,
   type TurnRecord,
+  type ToolListParams,
+  type ToolListResult,
   type WorktreeCreateParams,
   type WorktreeListParams,
   type WorktreeRemoveParams,
@@ -72,6 +82,7 @@ import {
   type WritePatchParams,
   type UpdateThreadParams,
 } from "@my-agent/protocol";
+import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { OpenAiCompatibleRunner } from "../agents/openai-compatible-runner.js";
@@ -93,6 +104,7 @@ import { WorkflowManager } from "../services/workflow-manager.js";
 import { WorktreeManager } from "../services/worktree-manager.js";
 import { HarnessDatabase } from "../store/database.js";
 import { ToolService } from "../tools/tool-service.js";
+import { ToolRuntimeError } from "../tools/types.js";
 import { createId } from "../utils/ids.js";
 
 export class HarnessServer {
@@ -221,19 +233,22 @@ export class HarnessServer {
           payload: { run },
         }),
     );
-    this.pluginManager = new PluginManager(this.database, (plugin) =>
+    this.pluginManager = new PluginManager(this.database, (plugin) => {
       this.emit({
         type: "plugin/updated",
         payload: { plugin },
-      }),
-    );
+      });
+      this.emitToolCatalogUpdated();
+    });
     this.mcpManager = new McpManager(
       this.database,
-      (mount) =>
+      (mount) => {
         this.emit({
           type: "mcp/updated",
           payload: { mount },
-        }),
+        });
+        this.emitToolCatalogUpdated();
+      },
       (session) =>
         this.emit({
           type: "mcp/session",
@@ -275,6 +290,13 @@ export class HarnessServer {
         error: {
           code: -32000,
           message: error instanceof Error ? error.message : String(error),
+          data:
+            error instanceof ToolRuntimeError
+              ? {
+                  kind: "tool_error",
+                  toolError: error.toolError,
+                }
+              : undefined,
         },
       };
     }
@@ -390,6 +412,8 @@ export class HarnessServer {
         return this.listAutomationRuns(message.params as { automationId?: string; projectId?: string } | undefined);
       case "plugin/list":
         return this.listPlugins();
+      case "tool/list":
+        return this.listTools((message.params ?? {}) as ToolListParams);
       case "mcp/list":
         return this.listMcpMounts();
       case "mcp/sessions":
@@ -416,12 +440,14 @@ export class HarnessServer {
   private initialize(): InitializeResult {
     const config = this.syncRequirementSelection(this.syncProjectSelection(this.database.getConfig()), true);
     const skills = this.refreshSkills(config.selectedProjectId);
+    const activeProject = this.resolveWorkspaceByProjectId(config.selectedProjectId);
     return {
       protocolVersion: "0.1.0",
       server: {
         name: "my-agent-core",
         version: "0.1.0",
       },
+      compatibility: buildProtocolCompatibility(),
       config,
       projects: this.database.listProjects(),
       requirements: this.requirementService.list(),
@@ -440,6 +466,7 @@ export class HarnessServer {
       automations: this.database.listAutomations(config.selectedProjectId),
       automationRuns: this.database.listAutomationRuns({ projectId: config.selectedProjectId }),
       agentTasks: this.database.listAgentTasks(config.selectedProjectId),
+      tools: this.buildToolCatalog(activeProject),
     };
   }
 
@@ -650,15 +677,21 @@ export class HarnessServer {
     );
     this.clearThreadSessionApprovals(thread.id);
     this.refreshSkills(thread.projectId);
+    const turns = this.database.listTurns(thread.id);
+    const items = this.database.listItems(thread.id);
+    const pendingApproval =
+      turns
+        .map((turn) => this.database.getPendingApprovalForTurn(turn.id))
+        .find(Boolean) ?? null;
 
     return {
       thread,
-      turns: this.database.listTurns(thread.id),
-      items: this.database.listItems(thread.id),
+      turns,
+      items,
       turnContexts: this.database.listTurnContextSnapshots(thread.id),
-      pendingApproval: this.database.listTurns(thread.id)
-        .map((turn) => this.database.getPendingApprovalForTurn(turn.id))
-        .find(Boolean) ?? null,
+      turnPlans: buildTurnPlans(turns, items),
+      turnDiffs: buildTurnDiffs(this.resolveWorkspace(thread.id), turns, items),
+      pendingApproval: pendingApproval ? this.enrichPendingApproval(this.resolveWorkspace(thread.id), thread.id, pendingApproval) : null,
     };
   }
 
@@ -1597,6 +1630,13 @@ export class HarnessServer {
     };
   }
 
+  private listTools(params?: ToolListParams): ToolListResult {
+    const workspace = params?.threadId ? this.resolveWorkspace(params.threadId) : this.requireProject(params?.projectId ?? this.database.getConfig().selectedProjectId);
+    return {
+      tools: this.buildToolCatalog(workspace),
+    };
+  }
+
   private listMcpMounts(): McpListResult {
     void this.mcpManager.refreshAll();
     return {
@@ -1771,6 +1811,7 @@ export class HarnessServer {
         config: syncedRequirement,
       },
     });
+    this.emitToolCatalogUpdated(syncedRequirement.selectedProjectId);
     this.refreshSkills(syncedRequirement.selectedProjectId);
     return { config: syncedRequirement };
   }
@@ -1912,6 +1953,7 @@ export class HarnessServer {
       method: event.type,
       params: event.payload,
     });
+    this.emitStructuredThreadArtifacts(event);
   }
 
   private refreshRequirementMemoryFromEvent(event: HarnessEvent): void {
@@ -1936,6 +1978,375 @@ export class HarnessServer {
       // best effort refresh; failing to rebuild memory should not block the primary event
     }
   }
+
+  private emitStructuredThreadArtifacts(event: HarnessEvent): void {
+    if (event.type === "item/completed") {
+      const item = event.payload.item;
+
+      if (item.kind === "agentMessage") {
+        const turns = this.database.listTurns(item.threadId);
+        const plans = buildTurnPlans(turns, this.database.listItems(item.threadId));
+        const latest = plans.find((plan) => plan.turnId === item.turnId);
+
+        if (latest) {
+          this.emit({
+            type: "turn/planUpdated",
+            payload: { plan: latest },
+          });
+        }
+      }
+
+      if (item.kind === "fileChange") {
+        const turns = this.database.listTurns(item.threadId);
+        const diffs = buildTurnDiffs(this.resolveWorkspace(item.threadId), turns, this.database.listItems(item.threadId));
+        const latest = diffs.find((diff) => diff.turnId === item.turnId);
+
+        if (latest) {
+          this.emit({
+            type: "turn/diffUpdated",
+            payload: { diff: latest },
+          });
+        }
+      }
+    }
+  }
+
+  private enrichPendingApproval(workspace: ProjectRecord, threadId: string, approval: import("@my-agent/protocol").PendingApproval) {
+    if (approval.tool) {
+      return approval;
+    }
+
+    try {
+      const toolService = new ToolService(workspace, {
+        database: this.database,
+        threadId,
+        mcpManager: this.mcpManager,
+      });
+      const plan = toolService.planExecution(approval.toolName, approval.args);
+      return {
+        ...approval,
+        tool: plan.tool,
+      };
+    } catch {
+      return approval;
+    }
+  }
+
+  private buildToolCatalog(workspace: ProjectRecord) {
+    const toolService = new ToolService(workspace, {
+      database: this.database,
+      mcpManager: this.mcpManager,
+    });
+    return toolService.getCatalog();
+  }
+
+  private emitToolCatalogUpdated(projectId?: string): void {
+    const workspace = this.resolveWorkspaceByProjectId(projectId ?? this.database.getConfig().selectedProjectId);
+    this.emit({
+      type: "tools/catalogUpdated",
+      payload: {
+        tools: this.buildToolCatalog(workspace),
+      },
+    });
+  }
+}
+
+function buildTurnPlans(turns: TurnRecord[], items: ItemRecord[]): TurnPlanRecord[] {
+  const planTurns = turns.filter((turn) => turn.input.includes("[Plan mode]"));
+  const itemsByTurn = new Map<string, ItemRecord[]>();
+
+  for (const item of items) {
+    const current = itemsByTurn.get(item.turnId) ?? [];
+    current.push(item);
+    itemsByTurn.set(item.turnId, current);
+  }
+
+  const plans: TurnPlanRecord[] = [];
+
+  for (const turn of planTurns) {
+      const messageItem = (itemsByTurn.get(turn.id) ?? []).find((item) => item.kind === "agentMessage" && item.status === "completed");
+
+      if (!messageItem) {
+        continue;
+      }
+
+      const parsed = parsePlanText(messageItem.body);
+
+      if (!parsed) {
+        continue;
+      }
+
+      plans.push({
+        turnId: turn.id,
+        threadId: turn.threadId,
+        sourceItemId: messageItem.id,
+        title: parsed.title,
+        summary: parsed.summary,
+        steps: parsed.steps,
+        createdAt: messageItem.createdAt,
+        updatedAt: messageItem.updatedAt,
+      });
+  }
+
+  return plans.sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+}
+
+function parsePlanText(body: string): { title: string; summary?: string; steps: TurnPlanStepRecord[] } | null {
+  const lines = body.split(/\r?\n/);
+  const stepRegex = /^\s*(?:[-*+]\s+|\d+[.)]\s+|\[( |x)\]\s+)(.+?)\s*$/i;
+  const steps: TurnPlanStepRecord[] = [];
+  let firstStepLine = -1;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    const match = line.match(stepRegex);
+
+    if (!match) {
+      continue;
+    }
+
+    if (firstStepLine === -1) {
+      firstStepLine = index;
+    }
+
+    const status =
+      /^\s*\[(x|X)\]/.test(line) ? "completed" : /\bin progress\b/i.test(match[2] ?? "") ? "in_progress" : "pending";
+    steps.push({
+      id: `step_${steps.length + 1}`,
+      title: match[2]!.trim(),
+      status,
+    });
+  }
+
+  if (steps.length < 2) {
+    return null;
+  }
+
+  const summary = lines
+    .slice(0, firstStepLine === -1 ? 0 : firstStepLine)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+
+  return {
+    title: summary || "Execution plan",
+    summary: summary || undefined,
+    steps: steps.slice(0, 12),
+  };
+}
+
+function buildTurnDiffs(workspace: ProjectRecord, turns: TurnRecord[], items: ItemRecord[]): TurnDiffRecord[] {
+  const fileChangeItems = items.filter((item) => item.kind === "fileChange");
+
+  if (fileChangeItems.length === 0) {
+    return [];
+  }
+
+  const turnIndex = new Map(turns.map((turn, index) => [turn.id, { turn, index }]));
+  const uniquePaths = [...new Set(fileChangeItems.map(getChangedFilePath).filter((value): value is string => Boolean(value)))];
+  const gitSnapshot = collectGitDiffSnapshot(workspace.rootPath, uniquePaths);
+  const grouped = new Map<string, TurnDiffRecord>();
+
+  for (const item of fileChangeItems) {
+    const path = getChangedFilePath(item);
+
+    if (!path) {
+      continue;
+    }
+
+    const turnEntry = turnIndex.get(item.turnId);
+    const key = item.turnId || item.id;
+    const current = grouped.get(key) ?? {
+      id: key,
+      turnId: item.turnId,
+      threadId: item.threadId,
+      label: formatTurnDiffLabel(turnEntry?.turn, turnEntry ? turnEntry.index + 1 : grouped.size + 1),
+      createdAt: item.createdAt,
+      updatedAt: item.updatedAt,
+      stats: {
+        fileCount: 0,
+        additions: 0,
+        deletions: 0,
+      },
+      files: [],
+    };
+    const snapshot = gitSnapshot.get(path);
+    const nextFile: TurnDiffFileRecord = {
+      itemId: item.id,
+      turnId: item.turnId,
+      path,
+      title: item.title,
+      status: snapshot?.status ?? "unknown",
+      additions: snapshot?.additions,
+      deletions: snapshot?.deletions,
+      patch: snapshot?.patch,
+      updatedAt: item.updatedAt,
+    };
+    const existingIndex = current.files.findIndex((file) => file.path === path);
+
+    if (existingIndex >= 0) {
+      current.files[existingIndex] = nextFile;
+    } else {
+      current.files.push(nextFile);
+    }
+
+    current.createdAt = current.createdAt < item.createdAt ? current.createdAt : item.createdAt;
+    current.updatedAt = current.updatedAt > item.updatedAt ? current.updatedAt : item.updatedAt;
+    grouped.set(key, current);
+  }
+
+  return [...grouped.values()]
+    .map((record) => {
+      const stats = record.files.reduce<DiffStatRecord>(
+        (current, file) => ({
+          fileCount: record.files.length,
+          additions: current.additions + (file.additions ?? 0),
+          deletions: current.deletions + (file.deletions ?? 0),
+        }),
+        {
+          fileCount: record.files.length,
+          additions: 0,
+          deletions: 0,
+        },
+      );
+
+      return {
+        ...record,
+        stats,
+        files: [...record.files].sort((left, right) => left.path.localeCompare(right.path)),
+      };
+    })
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+}
+
+function collectGitDiffSnapshot(rootPath: string, paths: string[]): Map<string, { additions?: number; deletions?: number; patch?: string; status: TurnDiffFileRecord["status"] }> {
+  const snapshots = new Map<string, { additions?: number; deletions?: number; patch?: string; status: TurnDiffFileRecord["status"] }>();
+
+  if (paths.length === 0 || !isGitWorkspace(rootPath)) {
+    return snapshots;
+  }
+
+  const numstat = runGitMaybe(rootPath, ["diff", "--numstat", "--no-ext-diff", "--", ...paths]);
+  const stats = parseNumstatOutput(numstat ?? "");
+
+  for (const path of paths) {
+    const patch = stripUnifiedDiffPreamble(runGitMaybe(rootPath, ["diff", "--no-ext-diff", "--unified=3", "--", path]) ?? "");
+    snapshots.set(path, {
+      additions: stats[path]?.additions,
+      deletions: stats[path]?.deletions,
+      patch: patch || undefined,
+      status: inferDiffFileStatus(patch),
+    });
+  }
+
+  return snapshots;
+}
+
+function isGitWorkspace(rootPath: string): boolean {
+  const result = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], {
+    cwd: rootPath,
+    encoding: "utf8",
+    windowsHide: true,
+  });
+
+  return result.status === 0 && String(result.stdout ?? "").trim() === "true";
+}
+
+function runGitMaybe(rootPath: string, args: string[]): string | null {
+  const result = spawnSync("git", ["-c", "core.quotepath=false", ...args], {
+    cwd: rootPath,
+    encoding: "utf8",
+    windowsHide: true,
+  });
+
+  return result.status === 0 ? String(result.stdout ?? "") : null;
+}
+
+function parseNumstatOutput(output: string): Record<string, { additions?: number; deletions?: number }> {
+  const summary: Record<string, { additions?: number; deletions?: number }> = {};
+
+  for (const rawLine of output.split(/\r?\n/)) {
+    const line = rawLine.trim();
+
+    if (!line) {
+      continue;
+    }
+
+    const [additions, deletions, ...rest] = rawLine.split("\t");
+    const path = rest.join("\t").trim();
+
+    if (!path) {
+      continue;
+    }
+
+    summary[path] = {
+      additions: parseNumstatValue(additions),
+      deletions: parseNumstatValue(deletions),
+    };
+  }
+
+  return summary;
+}
+
+function parseNumstatValue(value: string | undefined): number | undefined {
+  if (!value || value === "-") {
+    return undefined;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function inferDiffFileStatus(patch: string | undefined): TurnDiffFileRecord["status"] {
+  if (!patch?.trim()) {
+    return "unknown";
+  }
+
+  if (patch.includes("new file mode")) {
+    return "added";
+  }
+
+  if (patch.includes("deleted file mode")) {
+    return "deleted";
+  }
+
+  if (patch.includes("rename from ") || patch.includes("rename to ")) {
+    return "renamed";
+  }
+
+  return "modified";
+}
+
+function stripUnifiedDiffPreamble(diff: string): string {
+  return diff
+    .split(/\r?\n/)
+    .filter((line) => !line.startsWith("diff --git ") && !line.startsWith("index "))
+    .join("\n")
+    .trim();
+}
+
+function getChangedFilePath(item: ItemRecord): string | null {
+  const metadataPath = typeof item.metadata?.path === "string" ? item.metadata.path : null;
+
+  if (metadataPath) {
+    return metadataPath;
+  }
+
+  const match = item.title.match(/^File change:\s+(.+)$/);
+  return match?.[1] ?? null;
+}
+
+function formatTurnDiffLabel(turn?: TurnRecord, ordinal?: number) {
+  const input = turn?.input?.trim() ?? "";
+  const firstLine = input.split(/\r?\n/)[0]?.trim() ?? "";
+  const snippet = firstLine.length > 54 ? `${firstLine.slice(0, 54).trimEnd()}…` : firstLine;
+
+  if (snippet) {
+    return snippet;
+  }
+
+  return `Turn ${ordinal ?? 1}`;
 }
 
 function inferThreadTitle(input: string): string {
@@ -1963,4 +2374,20 @@ function computeNextAutomationRunAt(
   const minutes = Math.max(1, intervalMinutes ?? 60);
   const base = baseTime ? new Date(baseTime).getTime() : Date.now();
   return new Date(base + minutes * 60_000).toISOString();
+}
+
+function buildProtocolCompatibility(): ProtocolCompatibilityRecord {
+  return {
+    protocolVersion: "0.1.0",
+    additiveChangesOnly: true,
+    requiredToolSources: ["local", "plugin", "mcp", "internal"],
+    structuredEventTypes: ["turn/planUpdated", "turn/diffUpdated", "review/started", "review/status", "review/result", "tools/catalogUpdated"],
+    guarantees: [
+      "New protocol fields and event payload fields are additive within the same protocolVersion.",
+      "Tool source kinds are stable across local, plugin, mcp, and internal tools.",
+      "Structured tool errors use ToolErrorRecord and are attached through RPC error.data when available.",
+      "Structured plan, diff, and review events are first-class and should not require parsing item bodies.",
+    ],
+    documentationPath: "docs/protocol-compatibility.md",
+  };
 }

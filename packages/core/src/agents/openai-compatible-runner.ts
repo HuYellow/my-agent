@@ -25,6 +25,7 @@ import {
   type ProviderProfile,
   type RuntimeRunMode,
   type SkillDescriptor,
+  type ToolErrorRecord,
   type ThreadRecord,
   type TurnInputAttachment,
   type TurnContextSectionRecord,
@@ -48,6 +49,7 @@ import { SqliteSession } from "../services/sqlite-session.js";
 import { ToolService } from "../tools/tool-service.js";
 import {
   ToolExecutionAbortedError,
+  ToolRuntimeError,
   type PlannedToolExecution,
   type RuntimeToolDefinition,
   type RuntimeToolParameters,
@@ -224,7 +226,7 @@ export class OpenAiCompatibleRunner {
         errorHandlers: this.createRunErrorHandlers(execution.governor),
       });
 
-      await this.consumeStream(stream, context.turn, context.thread.id, execution.governor);
+      await this.consumeStream(stream, context.turn, context.thread.id, execution.governor, toolService, context.provider);
       return this.finishStream(
         context.turn,
         context.thread.id,
@@ -366,7 +368,7 @@ export class OpenAiCompatibleRunner {
         errorHandlers: this.createRunErrorHandlers(execution.governor),
       });
 
-      await this.consumeStream(stream, runningTurn, context.thread.id, execution.governor);
+      await this.consumeStream(stream, runningTurn, context.thread.id, execution.governor, toolService, context.provider);
       return this.finishStream(
         runningTurn,
         context.thread.id,
@@ -574,6 +576,8 @@ export class OpenAiCompatibleRunner {
     turn: TurnRecord,
     threadId: string,
     governor: RunGovernor,
+    toolService: ToolService,
+    provider: ProviderProfile,
   ): Promise<void> {
     const tracker: StreamTracker = {
       hasCompletedMessage: false,
@@ -582,7 +586,7 @@ export class OpenAiCompatibleRunner {
     try {
       for await (const event of stream) {
         governor.updateProgress(stream.currentTurn, stream.maxTurns);
-        this.handleStreamEvent(event, turn, threadId, tracker);
+        this.handleStreamEvent(event, turn, threadId, tracker, toolService, provider);
       }
 
       await stream.completed;
@@ -622,6 +626,7 @@ export class OpenAiCompatibleRunner {
         metadata: {
           args: approval.args,
           toolName: approval.toolName,
+          tool: approval.tool,
         },
         status: "completed",
       });
@@ -829,7 +834,14 @@ export class OpenAiCompatibleRunner {
     });
   }
 
-  private handleStreamEvent(event: RunStreamEvent, turn: TurnRecord, threadId: string, tracker: StreamTracker): void {
+  private handleStreamEvent(
+    event: RunStreamEvent,
+    turn: TurnRecord,
+    threadId: string,
+    tracker: StreamTracker,
+    toolService: ToolService,
+    provider: ProviderProfile,
+  ): void {
     if (event.type === "raw_model_stream_event" && event.data.type === "output_text_delta") {
       if (!tracker.messageItem) {
         tracker.messageItem = this.createItem({
@@ -892,27 +904,38 @@ export class OpenAiCompatibleRunner {
 
     if (event.name === "tool_called" && event.item instanceof RunToolCallItem) {
       const raw = event.item.rawItem as { name?: string; arguments?: string };
+      const resolved = resolveModelToolCall(provider, raw.name ?? "unknown", parseApprovalArguments(raw.arguments));
+      const plan = safePlan(toolService, resolved.runtimeName, resolved.runtimeArgs);
       this.createItem({
         turn,
         threadId,
         kind: "toolCall",
         title: `Tool call: ${raw.name ?? "unknown"}`,
         body: raw.arguments ?? "",
-        metadata: { toolName: raw.name ?? "unknown" },
+        metadata: {
+          toolName: resolved.runtimeName,
+          tool: plan?.tool,
+          args: resolved.runtimeArgs,
+        },
         status: "completed",
       });
       return;
     }
 
     if (event.name === "tool_output" && event.item instanceof RunToolCallOutputItem) {
-      const raw = event.item.rawItem as { name?: string };
+      const raw = event.item.rawItem as { name?: string; arguments?: string };
+      const resolved = resolveModelToolCall(provider, raw.name ?? "unknown", parseApprovalArguments(raw.arguments));
+      const plan = safePlan(toolService, resolved.runtimeName, resolved.runtimeArgs);
       this.createItem({
         turn,
         threadId,
         kind: "toolResult",
         title: `Tool result: ${raw.name ?? "unknown"}`,
         body: stringifyUnknown(event.item.output),
-        metadata: { toolName: raw.name ?? "unknown" },
+        metadata: {
+          toolName: resolved.runtimeName,
+          tool: plan?.tool,
+        },
         status: "completed",
       });
     }
@@ -993,6 +1016,7 @@ export class OpenAiCompatibleRunner {
         metadata: {
           args: plan.args,
           approvalKey: plan.permission.approvalKey,
+          tool: plan.tool,
         },
         status: "in_progress",
       });
@@ -1016,6 +1040,10 @@ export class OpenAiCompatibleRunner {
         this.completeItem(commandItem, {
           status: "failed",
           body: commandItem.body ? `${commandItem.body}\n\n${message}` : message,
+          metadata: {
+            ...commandItem.metadata,
+            toolError: serializeToolError(error),
+          },
         });
         throw error;
       }
@@ -1037,6 +1065,7 @@ export class OpenAiCompatibleRunner {
           metadata: {
             path: plan.args.path,
             approvalKey: plan.permission.approvalKey,
+            tool: plan.tool,
           },
           status: "completed",
         });
@@ -1049,7 +1078,11 @@ export class OpenAiCompatibleRunner {
           kind: "error",
           title: `File change failed: ${String(plan.args.path)}`,
           body: error instanceof Error ? error.message : String(error),
-          metadata: { path: plan.args.path },
+          metadata: {
+            path: plan.args.path,
+            tool: plan.tool,
+            toolError: serializeToolError(error),
+          },
           status: "failed",
         });
         throw error;
@@ -1083,6 +1116,7 @@ export class OpenAiCompatibleRunner {
       turnId: turn.id,
       threadId,
       toolName: resolved.runtimeName,
+      tool: plan?.tool,
       reason:
         plan?.permission.approvalReason ??
         ToolService.approvalReason(
@@ -1451,6 +1485,10 @@ function stringifyUnknown(value: unknown): string {
   }
 
   return JSON.stringify(value, null, 2);
+}
+
+function serializeToolError(error: unknown): ToolErrorRecord | undefined {
+  return error instanceof ToolRuntimeError ? error.toolError : undefined;
 }
 
 function parseApprovalArguments(rawArguments: string | undefined): Record<string, unknown> {

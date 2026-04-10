@@ -1,8 +1,10 @@
 import { spawnSync } from "node:child_process";
 import {
+  type DiffStatRecord,
   type HarnessEvent,
   type ProjectRecord,
   type ProviderProfile,
+  type ReviewArtifactRecord,
   type ReviewFinding,
   type ReviewRecord,
   type ReviewSource,
@@ -66,8 +68,9 @@ export class ReviewManager {
     };
 
     this.database.createReview(review);
-    this.emit({ type: "review/started", payload: { review } });
-    this.emit({ type: "review/status", payload: { review } });
+    const artifact = buildReviewArtifact(review);
+    this.emit({ type: "review/started", payload: { review, artifact } });
+    this.emit({ type: "review/status", payload: { review, artifact } });
 
     void this.runReview(
       review,
@@ -84,12 +87,21 @@ export class ReviewManager {
     cwd: string,
     requirementContext?: string,
   ): Promise<void> {
+    let diff: string | undefined;
+
     try {
       if (!provider.baseUrl || !provider.model) {
         throw new Error("Provider is not configured yet. Configure baseUrl and model before starting review.");
       }
 
-      const diff = loadReviewDiff(cwd, review.source);
+      diff = loadReviewDiff(cwd, review.source);
+      this.emit({
+        type: "review/status",
+        payload: {
+          review,
+          artifact: buildReviewArtifact(review, diff),
+        },
+      });
 
       if (!diff.trim()) {
         const completed = this.database.updateReview({
@@ -100,7 +112,7 @@ export class ReviewManager {
           updatedAt: new Date().toISOString(),
           completedAt: new Date().toISOString(),
         });
-        this.emit({ type: "review/result", payload: { review: completed } });
+        this.emit({ type: "review/result", payload: { review: completed, artifact: buildReviewArtifact(completed, diff) } });
         return;
       }
 
@@ -122,7 +134,7 @@ export class ReviewManager {
         updatedAt: timestamp,
         completedAt: timestamp,
       });
-      this.emit({ type: "review/result", payload: { review: completed } });
+      this.emit({ type: "review/result", payload: { review: completed, artifact: buildReviewArtifact(completed, diff) } });
     } catch (error) {
       const failed = this.database.updateReview({
         ...review,
@@ -131,7 +143,7 @@ export class ReviewManager {
         updatedAt: new Date().toISOString(),
         completedAt: new Date().toISOString(),
       });
-      this.emit({ type: "review/result", payload: { review: failed } });
+      this.emit({ type: "review/result", payload: { review: failed, artifact: buildReviewArtifact(failed, diff) } });
     }
   }
 }
@@ -267,4 +279,67 @@ function extractJsonObject(content: string): string {
   }
 
   return content.slice(start, end + 1).trim();
+}
+
+function buildReviewArtifact(review: ReviewRecord, diff?: string): ReviewArtifactRecord {
+  const findingCounts = review.findings.reduce(
+    (counts, finding) => {
+      counts.total += 1;
+      counts[finding.severity] += 1;
+      return counts;
+    },
+    {
+      total: 0,
+      critical: 0,
+      high: 0,
+      medium: 0,
+      low: 0,
+    },
+  );
+
+  return {
+    sourceLabel: formatReviewSource(review.source),
+    diffStats: diff ? summarizeDiff(diff) : undefined,
+    findingCounts,
+  };
+}
+
+function summarizeDiff(diff: string): DiffStatRecord {
+  const stats = new Map<string, { additions: number; deletions: number }>();
+  let currentFile: string | null = null;
+
+  for (const line of diff.split(/\r?\n/)) {
+    if (line.startsWith("+++ b/")) {
+      currentFile = line.slice("+++ b/".length).trim();
+
+      if (!stats.has(currentFile)) {
+        stats.set(currentFile, { additions: 0, deletions: 0 });
+      }
+      continue;
+    }
+
+    if (!currentFile) {
+      continue;
+    }
+
+    if (line.startsWith("+") && !line.startsWith("+++")) {
+      stats.get(currentFile)!.additions += 1;
+    } else if (line.startsWith("-") && !line.startsWith("---")) {
+      stats.get(currentFile)!.deletions += 1;
+    }
+  }
+
+  let additions = 0;
+  let deletions = 0;
+
+  for (const value of stats.values()) {
+    additions += value.additions;
+    deletions += value.deletions;
+  }
+
+  return {
+    fileCount: stats.size,
+    additions,
+    deletions,
+  };
 }

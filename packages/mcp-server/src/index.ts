@@ -1,52 +1,35 @@
 #!/usr/bin/env node
 
-import { createRuntimeKernel } from "@my-agent/core/runtime-kernel";
+import { pathToFileURL } from "node:url";
+import { createRuntimeKernel, type RuntimeKernel } from "@my-agent/core/runtime-kernel";
+import { type InitializeResult } from "@my-agent/protocol";
 
-const runtime = createRuntimeKernel({
-  emitEvent: () => undefined,
-});
+type McpMessage = { id?: string | number; method?: string; params?: any };
+type McpResponse = { jsonrpc: "2.0"; id?: string | number; result?: unknown; error?: { code: number; message: string } };
 
-let buffer = "";
-process.stdin.on("data", async (chunk) => {
-  buffer += chunk.toString();
+export interface McpServerRuntime {
+  runtime: RuntimeKernel;
+  handleMessage: (message: McpMessage) => Promise<McpResponse | null>;
+  callTool: (name: string, args: Record<string, unknown>) => Promise<string>;
+  dispose: () => void;
+}
 
-  while (true) {
-    const separatorIndex = buffer.indexOf("\r\n\r\n");
+export function createMcpServerRuntime(options: { runtime?: RuntimeKernel } = {}): McpServerRuntime {
+  const runtime =
+    options.runtime ??
+    createRuntimeKernel({
+      emitEvent: () => undefined,
+    });
 
-    if (separatorIndex === -1) {
-      break;
-    }
+  return {
+    runtime,
+    handleMessage: (message) => handleMcpMessage(runtime, message),
+    callTool: (name, args) => callTool(runtime, name, args),
+    dispose: () => runtime.dispose(),
+  };
+}
 
-    const header = buffer.slice(0, separatorIndex);
-    const match = header.match(/Content-Length:\s*(\d+)/i);
-
-    if (!match) {
-      buffer = "";
-      break;
-    }
-
-    const contentLength = Number(match[1]);
-    const totalLength = separatorIndex + 4 + contentLength;
-
-    if (buffer.length < totalLength) {
-      break;
-    }
-
-    const payload = buffer.slice(separatorIndex + 4, totalLength);
-    buffer = buffer.slice(totalLength);
-
-    const message = JSON.parse(payload) as { id?: string | number; method?: string; params?: any };
-    const response = await handleMcpMessage(message);
-    if (response) {
-      writeMessage(response);
-    }
-  }
-});
-
-process.on("SIGINT", () => runtime.dispose());
-process.on("SIGTERM", () => runtime.dispose());
-
-async function handleMcpMessage(message: { id?: string | number; method?: string; params?: any }) {
+export async function handleMcpMessage(runtime: RuntimeKernel, message: McpMessage): Promise<McpResponse | null> {
   switch (message.method) {
     case "initialize":
       return {
@@ -114,6 +97,23 @@ async function handleMcpMessage(message: { id?: string | number; method?: string
               },
             },
             {
+              name: "list_runtime_tools",
+              description: "List the governed runtime tool catalog with structured source and capability metadata.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  projectId: { type: "string" },
+                  threadId: { type: "string" },
+                },
+                additionalProperties: false,
+              },
+            },
+            {
+              name: "get_protocol_compatibility",
+              description: "Read protocol compatibility guarantees and structured event support from initialize.",
+              inputSchema: { type: "object", properties: {}, additionalProperties: false },
+            },
+            {
               name: "start_review",
               description: "Start a structured code review against a diff source.",
               inputSchema: {
@@ -172,7 +172,7 @@ async function handleMcpMessage(message: { id?: string | number; method?: string
           content: [
             {
               type: "text",
-              text: await callTool(message.params?.name, message.params?.arguments ?? {}),
+              text: await callTool(runtime, message.params?.name, message.params?.arguments ?? {}),
             },
           ],
         },
@@ -189,7 +189,7 @@ async function handleMcpMessage(message: { id?: string | number; method?: string
   }
 }
 
-async function callTool(name: string, args: Record<string, unknown>): Promise<string> {
+export async function callTool(runtime: RuntimeKernel, name: string, args: Record<string, unknown>): Promise<string> {
   switch (name) {
     case "list_threads": {
       const response = await runtime.server.handle({
@@ -226,6 +226,35 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
       });
       return JSON.stringify("result" in response ? response.result : response.error, null, 2);
     }
+    case "list_runtime_tools": {
+      const response = await runtime.server.handle({
+        jsonrpc: "2.0",
+        id: "tool-list",
+        method: "tool/list",
+        params: args,
+      });
+      return JSON.stringify("result" in response ? response.result : response.error, null, 2);
+    }
+    case "get_protocol_compatibility": {
+      const response = await runtime.server.handle({
+        jsonrpc: "2.0",
+        id: "initialize",
+        method: "initialize",
+      });
+      const initialize = "result" in response ? (response.result as InitializeResult) : null;
+      return JSON.stringify(
+        initialize
+          ? {
+              protocolVersion: initialize.protocolVersion,
+              compatibility: initialize.compatibility,
+            }
+          : "error" in response
+            ? response.error
+            : { code: -32000, message: "Unknown initialize failure." },
+        null,
+        2,
+      );
+    }
     case "start_review": {
       const response = await runtime.server.handle({
         jsonrpc: "2.0",
@@ -261,4 +290,52 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
 function writeMessage(payload: unknown): void {
   const json = JSON.stringify(payload);
   process.stdout.write(`Content-Length: ${Buffer.byteLength(json, "utf8")}\r\n\r\n${json}`);
+}
+
+async function main(): Promise<void> {
+  const server = createMcpServerRuntime();
+  let buffer = "";
+
+  process.stdin.on("data", async (chunk) => {
+    buffer += chunk.toString();
+
+    while (true) {
+      const separatorIndex = buffer.indexOf("\r\n\r\n");
+
+      if (separatorIndex === -1) {
+        break;
+      }
+
+      const header = buffer.slice(0, separatorIndex);
+      const match = header.match(/Content-Length:\s*(\d+)/i);
+
+      if (!match) {
+        buffer = "";
+        break;
+      }
+
+      const contentLength = Number(match[1]);
+      const totalLength = separatorIndex + 4 + contentLength;
+
+      if (buffer.length < totalLength) {
+        break;
+      }
+
+      const payload = buffer.slice(separatorIndex + 4, totalLength);
+      buffer = buffer.slice(totalLength);
+
+      const message = JSON.parse(payload) as McpMessage;
+      const response = await server.handleMessage(message);
+      if (response) {
+        writeMessage(response);
+      }
+    }
+  });
+
+  process.on("SIGINT", () => server.dispose());
+  process.on("SIGTERM", () => server.dispose());
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).toString()) {
+  void main();
 }

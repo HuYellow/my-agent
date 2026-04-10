@@ -165,6 +165,7 @@ export class HarnessDatabase {
         thread_id TEXT NOT NULL,
         turn_id TEXT NOT NULL,
         tool_name TEXT NOT NULL,
+        tool_json TEXT,
         reason TEXT NOT NULL,
         args_json TEXT NOT NULL,
         scope TEXT NOT NULL,
@@ -847,9 +848,20 @@ export class HarnessDatabase {
   putPendingApproval(approval: PendingApproval, runtime: Record<string, unknown>): PendingApproval {
     this.db
       .prepare(
-        "INSERT INTO approvals(id, thread_id, turn_id, tool_name, reason, args_json, scope, runtime_json, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO approvals(id, thread_id, turn_id, tool_name, tool_json, reason, args_json, scope, runtime_json, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       )
-      .run(approval.id, approval.threadId, approval.turnId, approval.toolName, approval.reason, JSON.stringify(approval.args), approval.scope, JSON.stringify(runtime), approval.createdAt);
+      .run(
+        approval.id,
+        approval.threadId,
+        approval.turnId,
+        approval.toolName,
+        approval.tool ? JSON.stringify(approval.tool) : null,
+        approval.reason,
+        JSON.stringify(approval.args),
+        approval.scope,
+        JSON.stringify(runtime),
+        approval.createdAt,
+      );
     return approval;
   }
 
@@ -1724,6 +1736,7 @@ export class HarnessDatabase {
       threadId: String(row.thread_id),
       turnId: String(row.turn_id),
       toolName: String(row.tool_name),
+      tool: row.tool_json ? (JSON.parse(String(row.tool_json)) as PendingApproval["tool"]) : undefined,
       reason: String(row.reason),
       args: JSON.parse(String(row.args_json)) as Record<string, unknown>,
       scope: row.scope as PendingApproval["scope"],
@@ -2374,6 +2387,10 @@ export class HarnessDatabase {
 
     if (!this.columnExists("reviews", "requirement_id")) {
       this.db.exec("ALTER TABLE reviews ADD COLUMN requirement_id TEXT");
+    }
+
+    if (!this.columnExists("approvals", "tool_json")) {
+      this.db.exec("ALTER TABLE approvals ADD COLUMN tool_json TEXT");
     }
 
     const config = this.getConfig();

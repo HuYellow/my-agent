@@ -13,18 +13,23 @@ import {
   type InitializeResult,
   type ItemRecord,
   type PendingApproval,
+  type ProtocolCompatibilityRecord,
   type ProjectRecord,
   type ProviderProfile,
   type ProviderModelRecord,
   type RequirementMemoryRecord,
   type RequirementRecord,
+  type ReviewArtifactRecord,
   type ReviewRecord,
   type SkillDescriptor,
   type TerminalBackendCapability,
   type TerminalOutputArchiveRecord,
   type TerminalSessionRecord,
+  type ToolCatalogRecord,
+  type TurnDiffRecord,
   type TurnInputAttachment,
   type TurnContextSnapshotRecord,
+  type TurnPlanRecord,
   type ThreadRecord,
   type TurnSteerRecord,
   type TurnRecord,
@@ -42,6 +47,8 @@ export interface ThreadSessionState {
   turns: TurnRecord[];
   items: ItemRecord[];
   turnContexts: TurnContextSnapshotRecord[];
+  turnPlans: TurnPlanRecord[];
+  turnDiffs: TurnDiffRecord[];
   pendingApproval?: PendingApproval | null;
   submitting: boolean;
 }
@@ -56,6 +63,7 @@ interface AppState {
   threads: ThreadRecord[];
   threadSessions: Record<string, ThreadSessionState>;
   reviews: ReviewRecord[];
+  reviewArtifacts: Record<string, ReviewArtifactRecord>;
   automations: AutomationRecord[];
   automationRuns: AutomationRunRecord[];
   worktrees: WorktreeRecord[];
@@ -68,6 +76,8 @@ interface AppState {
   terminalOutputs: Record<string, string>;
   terminalOutputArchives: TerminalOutputArchiveRecord[];
   terminalCapabilities: TerminalBackendCapability[];
+  protocolCompatibility?: ProtocolCompatibilityRecord;
+  runtimeTools: ToolCatalogRecord[];
   skills: SkillDescriptor[];
   activeProjectId?: string;
   activeRequirementId?: string;
@@ -101,6 +111,7 @@ interface AppState {
   updateConfig: (config: Partial<AppConfig>) => Promise<void>;
   testProvider: (provider?: Partial<ProviderProfile>) => Promise<void>;
   refreshProviderModels: (provider?: Partial<ProviderProfile>) => Promise<void>;
+  refreshToolCatalog: (params?: { projectId?: string; threadId?: string }) => Promise<void>;
   refreshRuntimeProjectState: (projectId?: string) => Promise<void>;
   handleEvent: (event: HarnessEvent) => void;
 }
@@ -115,6 +126,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   threads: [],
   threadSessions: {},
   reviews: [],
+  reviewArtifacts: {},
   automations: [],
   automationRuns: [],
   worktrees: [],
@@ -127,6 +139,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   terminalOutputs: {},
   terminalOutputArchives: [],
   terminalCapabilities: [],
+  protocolCompatibility: undefined,
+  runtimeTools: [],
   skills: [],
   activeRequirementId: undefined,
   providerModels: [],
@@ -156,12 +170,14 @@ export const useAppStore = create<AppState>((set, get) => ({
           bootstrapped: true,
           loading: false,
           bootError: undefined,
+          protocolCompatibility: initial.compatibility,
           projects: initial.projects,
           requirements: initial.requirements ?? [],
           requirementMemories: initial.requirementMemories ?? [],
           threads: initial.threads,
           threadSessions: Object.fromEntries(initial.threads.map((thread) => [thread.id, createEmptyThreadSession()])),
           reviews: initial.reviews ?? [],
+          reviewArtifacts: Object.fromEntries((initial.reviews ?? []).map((review) => [review.id, buildReviewArtifactView(review)])),
           automations: initial.automations ?? [],
           automationRuns: initial.automationRuns ?? [],
           worktrees: initial.worktrees ?? [],
@@ -173,6 +189,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           terminals: initial.terminals ?? [],
           terminalOutputArchives: initial.terminalOutputArchives ?? [],
           terminalCapabilities: initial.terminalCapabilities ?? [],
+          runtimeTools: initial.tools ?? [],
           skills: initial.skills,
           config: initial.config,
           activeProjectId,
@@ -211,6 +228,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       config: state.config ? { ...state.config, selectedProjectId: result.project.id } : state.config,
       activeThreadId: undefined,
     }));
+    await get().refreshToolCatalog({ projectId: result.project.id });
     await get().refreshRuntimeProjectState(result.project.id);
   },
   createAutomation: async (params) => {
@@ -308,6 +326,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       activeRequirementId: undefined,
       activeThreadId: undefined,
     });
+    await get().refreshToolCatalog({ projectId });
     await get().refreshRuntimeProjectState(projectId);
   },
   selectRequirement: async (requirementId) => {
@@ -328,6 +347,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       activeThreadId: undefined,
     });
 
+    await get().refreshToolCatalog({ projectId: selectedProjectId });
     await get().refreshRuntimeProjectState(selectedProjectId);
   },
   createThread: async (title, projectId, requirementId) => {
@@ -414,6 +434,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       turns: TurnRecord[];
       items: ItemRecord[];
       turnContexts?: TurnContextSnapshotRecord[];
+      turnPlans?: TurnPlanRecord[];
+      turnDiffs?: TurnDiffRecord[];
       pendingApproval?: PendingApproval | null;
     };
     set((state) => ({
@@ -425,6 +447,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         turns: result.turns,
         items: result.items,
         turnContexts: result.turnContexts ?? [],
+        turnPlans: result.turnPlans ?? [],
+        turnDiffs: result.turnDiffs ?? [],
         pendingApproval: result.pendingApproval ?? null,
         submitting: false,
       })),
@@ -436,6 +460,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           }
         : state.config,
     }));
+    await get().refreshToolCatalog({ threadId });
   },
   sendTurn: async (input, selectedSkillIds, attachments, includeIdeContext) => {
     let threadId = get().activeThreadId;
@@ -604,6 +629,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
     }
   },
+  refreshToolCatalog: async (params) => {
+    const result = await window.myAgent.listTools(params);
+    set({
+      runtimeTools: result.tools,
+    });
+  },
   refreshRuntimeProjectState: async (projectId) => {
     const activeProjectId = projectId ?? get().activeProjectId ?? get().config?.selectedProjectId;
 
@@ -752,6 +783,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       case "review/result":
         set((state) => ({
           reviews: upsertReview(state.reviews, event.payload.review),
+          reviewArtifacts: {
+            ...state.reviewArtifacts,
+            [event.payload.review.id]: event.payload.artifact,
+          },
         }));
         break;
       case "turn/contextUpdated":
@@ -759,6 +794,22 @@ export const useAppStore = create<AppState>((set, get) => ({
           threadSessions: updateThreadSession(state.threadSessions, event.payload.snapshot.threadId, (session) => ({
             ...session,
             turnContexts: upsertTurnContext(session.turnContexts, event.payload.snapshot),
+          })),
+        }));
+        break;
+      case "turn/planUpdated":
+        set((state) => ({
+          threadSessions: updateThreadSession(state.threadSessions, event.payload.plan.threadId, (session) => ({
+            ...session,
+            turnPlans: upsertTurnPlan(session.turnPlans, event.payload.plan),
+          })),
+        }));
+        break;
+      case "turn/diffUpdated":
+        set((state) => ({
+          threadSessions: updateThreadSession(state.threadSessions, event.payload.diff.threadId, (session) => ({
+            ...session,
+            turnDiffs: upsertTurnDiff(session.turnDiffs, event.payload.diff),
           })),
         }));
         break;
@@ -835,7 +886,13 @@ export const useAppStore = create<AppState>((set, get) => ({
           activeRequirementId: event.payload.config.selectedRequirementId,
         }));
         void get().refreshProviderModels();
+        void get().refreshToolCatalog({ projectId: event.payload.config.selectedProjectId ?? get().activeProjectId });
         void get().refreshRuntimeProjectState(event.payload.config.selectedProjectId ?? get().activeProjectId);
+        break;
+      case "tools/catalogUpdated":
+        set({
+          runtimeTools: event.payload.tools,
+        });
         break;
       case "skills/changed":
         set({ skills: event.payload.skills });
@@ -887,6 +944,18 @@ function upsertTurnContext(
 ): TurnContextSnapshotRecord[] {
   return [...snapshots.filter((entry) => entry.turnId !== snapshot.turnId), snapshot].sort((left, right) =>
     left.createdAt.localeCompare(right.createdAt),
+  );
+}
+
+function upsertTurnPlan(plans: TurnPlanRecord[], plan: TurnPlanRecord): TurnPlanRecord[] {
+  return [...plans.filter((entry) => entry.turnId !== plan.turnId), plan].sort((left, right) =>
+    left.createdAt.localeCompare(right.createdAt),
+  );
+}
+
+function upsertTurnDiff(diffs: TurnDiffRecord[], diff: TurnDiffRecord): TurnDiffRecord[] {
+  return [...diffs.filter((entry) => entry.turnId !== diff.turnId), diff].sort((left, right) =>
+    right.updatedAt.localeCompare(left.updatedAt),
   );
 }
 
@@ -943,6 +1012,8 @@ function createEmptyThreadSession(): ThreadSessionState {
     turns: [],
     items: [],
     turnContexts: [],
+    turnPlans: [],
+    turnDiffs: [],
     pendingApproval: null,
     submitting: false,
   };
@@ -988,4 +1059,36 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string)
       },
     );
   });
+}
+
+function buildReviewArtifactView(review: ReviewRecord): ReviewArtifactRecord {
+  return {
+    sourceLabel: formatReviewSourceLabel(review.source),
+    findingCounts: review.findings.reduce(
+      (counts, finding) => {
+        counts.total += 1;
+        counts[finding.severity] += 1;
+        return counts;
+      },
+      {
+        total: 0,
+        critical: 0,
+        high: 0,
+        medium: 0,
+        low: 0,
+      },
+    ),
+  };
+}
+
+function formatReviewSourceLabel(source: ReviewRecord["source"]): string {
+  if (source.kind === "base_branch") {
+    return `Base ${source.baseBranch ?? "branch"}`;
+  }
+
+  if (source.kind === "commit") {
+    return source.commit ? `Commit ${source.commit.slice(0, 12)}` : "Commit";
+  }
+
+  return source.kind === "workspace" ? "Workspace diff" : "Staged diff";
 }

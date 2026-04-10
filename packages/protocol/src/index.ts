@@ -44,6 +44,66 @@ export type RequirementStatus = "active" | "paused" | "completed" | "archived";
 export type AutomationStatus = "active" | "paused";
 export type AutomationKind = "workflow" | "prompt";
 export type AutomationScheduleType = "manual" | "interval";
+export type ToolSource = "local" | "plugin" | "mcp" | "internal";
+export type ToolApprovalMode = "none" | "preflight" | "deferred";
+export type ToolRiskLevel = "safe_read" | "write" | "interactive" | "network" | "privileged";
+export type ToolErrorCode =
+  | "timeout"
+  | "approval_required"
+  | "blocked"
+  | "validation_error"
+  | "execution_failed"
+  | "aborted";
+
+export interface ToolSourceRecord {
+  type: ToolSource;
+  id?: string;
+  label?: string;
+  path?: string;
+  details?: Record<string, string>;
+}
+
+export interface ToolCapabilityRecord {
+  writes: boolean;
+  network: boolean;
+  interactive: boolean;
+  approvalModes: ToolApprovalMode[];
+  riskLevel: ToolRiskLevel;
+  timeoutMs?: number;
+  streamedOutput: boolean;
+  resumable: boolean;
+}
+
+export interface ToolReferenceRecord {
+  name: string;
+  source: ToolSourceRecord;
+  capability: ToolCapabilityRecord;
+}
+
+export interface ToolCatalogRecord extends ToolReferenceRecord {
+  description: string;
+  enabled: boolean;
+  parametersSchema?: Record<string, unknown>;
+}
+
+export interface ProtocolCompatibilityRecord {
+  protocolVersion: string;
+  additiveChangesOnly: boolean;
+  requiredToolSources: ToolSource[];
+  structuredEventTypes: string[];
+  guarantees: string[];
+  documentationPath?: string;
+}
+
+export interface ToolErrorRecord {
+  code: ToolErrorCode;
+  message: string;
+  retryable: boolean;
+  tool?: ToolReferenceRecord;
+  approvalMode?: ToolApprovalMode;
+  details?: Record<string, unknown>;
+}
+
 export type ItemKind =
   | "userMessage"
   | "agentMessage"
@@ -255,6 +315,7 @@ export interface PendingApproval {
   turnId: string;
   threadId: string;
   toolName: string;
+  tool?: ToolReferenceRecord;
   reason: string;
   args: Record<string, unknown>;
   createdAt: string;
@@ -280,6 +341,7 @@ export interface InitializeResult {
     name: string;
     version: string;
   };
+  compatibility?: ProtocolCompatibilityRecord;
   config: AppConfig;
   projects: ProjectRecord[];
   requirements?: RequirementRecord[];
@@ -298,6 +360,7 @@ export interface InitializeResult {
   automations?: AutomationRecord[];
   automationRuns?: AutomationRunRecord[];
   agentTasks?: AgentTaskRecord[];
+  tools?: ToolCatalogRecord[];
 }
 
 export interface StartThreadParams {
@@ -321,6 +384,8 @@ export interface ResumeThreadResult {
   turns: TurnRecord[];
   items: ItemRecord[];
   turnContexts?: TurnContextSnapshotRecord[];
+  turnPlans?: TurnPlanRecord[];
+  turnDiffs?: TurnDiffRecord[];
   pendingApproval?: PendingApproval | null;
 }
 
@@ -563,6 +628,15 @@ export interface ConfigReadResult {
   config: AppConfig;
 }
 
+export interface ToolListParams {
+  projectId?: string;
+  threadId?: string;
+}
+
+export interface ToolListResult {
+  tools: ToolCatalogRecord[];
+}
+
 export interface ConfigWriteParams {
   config: Partial<AppConfig>;
 }
@@ -592,6 +666,53 @@ export interface TurnContextSnapshotRecord {
   sections: TurnContextSectionRecord[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface TurnPlanStepRecord {
+  id: string;
+  title: string;
+  detail?: string;
+  status: "pending" | "in_progress" | "completed" | "blocked";
+}
+
+export interface TurnPlanRecord {
+  turnId: string;
+  threadId: string;
+  sourceItemId?: string;
+  title: string;
+  summary?: string;
+  steps: TurnPlanStepRecord[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DiffStatRecord {
+  fileCount: number;
+  additions: number;
+  deletions: number;
+}
+
+export interface TurnDiffFileRecord {
+  itemId: string;
+  turnId: string;
+  path: string;
+  title: string;
+  status: "added" | "modified" | "deleted" | "renamed" | "unknown";
+  additions?: number;
+  deletions?: number;
+  patch?: string;
+  updatedAt: string;
+}
+
+export interface TurnDiffRecord {
+  id: string;
+  turnId: string;
+  threadId: string;
+  label: string;
+  createdAt: string;
+  updatedAt: string;
+  stats: DiffStatRecord;
+  files: TurnDiffFileRecord[];
 }
 
 export interface TerminalSessionRecord {
@@ -837,6 +958,18 @@ export interface AutomationRunRecord {
   completedAt?: string;
 }
 
+export interface ReviewArtifactRecord {
+  sourceLabel: string;
+  diffStats?: DiffStatRecord;
+  findingCounts: {
+    total: number;
+    critical: number;
+    high: number;
+    medium: number;
+    low: number;
+  };
+}
+
 export interface PluginRecord {
   id: string;
   name: string;
@@ -901,6 +1034,8 @@ export type HarnessEvent =
   | EventEnvelope<"requirement/memoryUpdated", { memory: RequirementMemoryRecord }>
   | EventEnvelope<"turn/started", { turn: TurnRecord }>
   | EventEnvelope<"turn/contextUpdated", { snapshot: TurnContextSnapshotRecord }>
+  | EventEnvelope<"turn/planUpdated", { plan: TurnPlanRecord }>
+  | EventEnvelope<"turn/diffUpdated", { diff: TurnDiffRecord }>
   | EventEnvelope<"turn/steered", { steer: TurnSteerRecord }>
   | EventEnvelope<"item/started", { item: ItemRecord }>
   | EventEnvelope<"item/delta", { itemId: string; delta: string }>
@@ -910,9 +1045,9 @@ export type HarnessEvent =
   | EventEnvelope<"turn/completed", { turn: TurnRecord }>
   | EventEnvelope<"turn/cancelled", { turn: TurnRecord; message: string }>
   | EventEnvelope<"turn/failed", { turn: TurnRecord; message: string }>
-  | EventEnvelope<"review/started", { review: ReviewRecord }>
-  | EventEnvelope<"review/status", { review: ReviewRecord }>
-  | EventEnvelope<"review/result", { review: ReviewRecord }>
+  | EventEnvelope<"review/started", { review: ReviewRecord; artifact: ReviewArtifactRecord }>
+  | EventEnvelope<"review/status", { review: ReviewRecord; artifact: ReviewArtifactRecord }>
+  | EventEnvelope<"review/result", { review: ReviewRecord; artifact: ReviewArtifactRecord }>
   | EventEnvelope<"config/changed", { config: AppConfig }>
   | EventEnvelope<"skills/changed", { skills: SkillDescriptor[] }>
   | EventEnvelope<"terminal/updated", { session: TerminalSessionRecord }>
@@ -929,6 +1064,7 @@ export type HarnessEvent =
   | EventEnvelope<"plugin/updated", { plugin: PluginRecord }>
   | EventEnvelope<"mcp/updated", { mount: McpMountRecord }>
   | EventEnvelope<"mcp/session", { session: McpSessionRecord }>
+  | EventEnvelope<"tools/catalogUpdated", { tools: ToolCatalogRecord[] }>
   | EventEnvelope<"workflow/run", { run: WorkflowRunRecord }>;
 
 export interface CommandExecParams {

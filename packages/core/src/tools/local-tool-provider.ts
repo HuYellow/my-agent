@@ -2,6 +2,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { type WorkspaceProfile } from "@my-agent/protocol";
 import { z } from "zod";
 import {
+  type RuntimeToolCapability,
+  type RuntimeToolSourceMetadata,
   type RuntimeToolDefinition,
   type ToolActionDescriptor,
   type ToolProvider,
@@ -95,6 +97,11 @@ const GIT_COMMIT_SCHEMA = z.object({
   message: z.string().min(1),
 });
 
+const LOCAL_TOOL_SOURCE: RuntimeToolSourceMetadata = {
+  type: "local",
+  label: "Local workspace",
+};
+
 export class LocalToolProvider implements ToolProvider {
   listTools(workspace: WorkspaceProfile): RuntimeToolDefinition[] {
     return [
@@ -103,12 +110,13 @@ export class LocalToolProvider implements ToolProvider {
         description: "Read a text file from the current workspace.",
         parameters: READ_FILE_SCHEMA,
         strict: true,
-        source: "local",
+        source: LOCAL_TOOL_SOURCE,
+        capability: buildCapability(),
         parseArgs: (input) => READ_FILE_SCHEMA.parse(input),
         buildDescriptor: (args) => {
           const absolute = resolveWorkspacePath(workspace.rootPath, String(args.path));
           return {
-            source: "local",
+            source: LOCAL_TOOL_SOURCE,
             preview: `Read ${absolute}`,
             scopeKey: absolute,
             paths: collectPathCandidates(absolute),
@@ -121,12 +129,13 @@ export class LocalToolProvider implements ToolProvider {
         description: "Read a line range from a text file in the current workspace.",
         parameters: READ_FILE_RANGE_SCHEMA,
         strict: true,
-        source: "local",
+        source: LOCAL_TOOL_SOURCE,
+        capability: buildCapability(),
         parseArgs: (input) => READ_FILE_RANGE_SCHEMA.parse(input),
         buildDescriptor: (args) => {
           const absolute = resolveWorkspacePath(workspace.rootPath, String(args.path));
           return {
-            source: "local",
+            source: LOCAL_TOOL_SOURCE,
             preview: `Read ${absolute}:${args.startLine}-${args.endLine ?? args.startLine}`,
             scopeKey: `${absolute}:${args.startLine}:${args.endLine ?? args.startLine}`,
             paths: collectPathCandidates(absolute),
@@ -144,12 +153,13 @@ export class LocalToolProvider implements ToolProvider {
         description: "Check whether a file or directory exists in the current workspace.",
         parameters: EXISTS_PATH_SCHEMA,
         strict: true,
-        source: "local",
+        source: LOCAL_TOOL_SOURCE,
+        capability: buildCapability(),
         parseArgs: (input) => EXISTS_PATH_SCHEMA.parse(input),
         buildDescriptor: (args) => {
           const absolute = resolveWorkspacePath(workspace.rootPath, String(args.path));
           return {
-            source: "local",
+            source: LOCAL_TOOL_SOURCE,
             preview: `Exists ${absolute}`,
             scopeKey: absolute,
             paths: collectPathCandidates(absolute),
@@ -170,12 +180,13 @@ export class LocalToolProvider implements ToolProvider {
         description: "Read file or directory metadata for a workspace path.",
         parameters: STAT_PATH_SCHEMA,
         strict: true,
-        source: "local",
+        source: LOCAL_TOOL_SOURCE,
+        capability: buildCapability(),
         parseArgs: (input) => STAT_PATH_SCHEMA.parse(input),
         buildDescriptor: (args) => {
           const absolute = resolveWorkspacePath(workspace.rootPath, String(args.path));
           return {
-            source: "local",
+            source: LOCAL_TOOL_SOURCE,
             preview: `Stat ${absolute}`,
             scopeKey: absolute,
             paths: collectPathCandidates(absolute),
@@ -188,12 +199,13 @@ export class LocalToolProvider implements ToolProvider {
         description: "Find files by glob-style pattern in the current workspace.",
         parameters: FIND_FILES_SCHEMA,
         strict: true,
-        source: "local",
+        source: LOCAL_TOOL_SOURCE,
+        capability: buildCapability(),
         parseArgs: (input) => FIND_FILES_SCHEMA.parse(input),
         buildDescriptor: (args) => {
           const target = args.path ? resolveWorkspacePath(workspace.rootPath, String(args.path)) : workspace.rootPath;
           return {
-            source: "local",
+            source: LOCAL_TOOL_SOURCE,
             preview: `Find files in ${target} matching ${args.pattern}`,
             scopeKey: `${target}:${args.pattern}:${args.limit ?? 200}`,
             paths: collectPathCandidates(target),
@@ -216,7 +228,8 @@ export class LocalToolProvider implements ToolProvider {
         description: "Search code and filenames in the current workspace for a query string.",
         parameters: SEARCH_CODE_SCHEMA,
         strict: true,
-        source: "local",
+        source: LOCAL_TOOL_SOURCE,
+        capability: buildCapability(),
         parseArgs: (input) => SEARCH_CODE_SCHEMA.parse(input),
         buildDescriptor: (args) => buildSearchDescriptor(workspace, args),
         execute: async (args) => JSON.stringify(searchWorkspace(workspace.rootPath, normalizeSearchArgs(args)), null, 2),
@@ -226,7 +239,8 @@ export class LocalToolProvider implements ToolProvider {
         description: "Search code with optional regex support and file filters.",
         parameters: SEARCH_CODE_SCHEMA,
         strict: true,
-        source: "local",
+        source: LOCAL_TOOL_SOURCE,
+        capability: buildCapability(),
         parseArgs: (input) => SEARCH_CODE_SCHEMA.parse(input),
         buildDescriptor: (args) => buildSearchDescriptor(workspace, args),
         execute: async (args) => JSON.stringify(searchWorkspace(workspace.rootPath, normalizeSearchArgs(args)), null, 2),
@@ -236,12 +250,13 @@ export class LocalToolProvider implements ToolProvider {
         description: "List files and directories in the workspace or a subdirectory.",
         parameters: LIST_REPO_TREE_SCHEMA,
         strict: true,
-        source: "local",
+        source: LOCAL_TOOL_SOURCE,
+        capability: buildCapability(),
         parseArgs: (input) => LIST_REPO_TREE_SCHEMA.parse(input),
         buildDescriptor: (args) => {
           const target = args.path ? resolveWorkspacePath(workspace.rootPath, String(args.path)) : workspace.rootPath;
           return {
-            source: "local",
+            source: LOCAL_TOOL_SOURCE,
             preview: `List ${target}`,
             scopeKey: `${target}:${args.recursive ?? true}:${args.maxDepth ?? 3}:${args.includeHidden ?? false}`,
             paths: collectPathCandidates(target),
@@ -265,11 +280,11 @@ export class LocalToolProvider implements ToolProvider {
         description: "Get git status for the workspace.",
         parameters: EMPTY_SCHEMA,
         strict: true,
-        source: "local",
-        capabilities: { streamedOutput: true },
+        source: LOCAL_TOOL_SOURCE,
+        capability: buildCapability({ streamedOutput: true }),
         parseArgs: (input) => EMPTY_SCHEMA.parse(input),
         buildDescriptor: () => ({
-          source: "local",
+          source: LOCAL_TOOL_SOURCE,
           preview: "git status --short --branch",
           scopeKey: "git:status",
           paths: [workspace.rootPath],
@@ -281,11 +296,11 @@ export class LocalToolProvider implements ToolProvider {
         description: "Get git diff for the workspace.",
         parameters: EMPTY_SCHEMA,
         strict: true,
-        source: "local",
-        capabilities: { streamedOutput: true },
+        source: LOCAL_TOOL_SOURCE,
+        capability: buildCapability({ streamedOutput: true }),
         parseArgs: (input) => EMPTY_SCHEMA.parse(input),
         buildDescriptor: () => ({
-          source: "local",
+          source: LOCAL_TOOL_SOURCE,
           preview: "git diff",
           scopeKey: "git:diff",
           paths: [workspace.rootPath],
@@ -297,11 +312,11 @@ export class LocalToolProvider implements ToolProvider {
         description: "Get git diff for staged changes.",
         parameters: EMPTY_SCHEMA,
         strict: true,
-        source: "local",
-        capabilities: { streamedOutput: true },
+        source: LOCAL_TOOL_SOURCE,
+        capability: buildCapability({ streamedOutput: true }),
         parseArgs: (input) => EMPTY_SCHEMA.parse(input),
         buildDescriptor: () => ({
-          source: "local",
+          source: LOCAL_TOOL_SOURCE,
           preview: "git diff --staged",
           scopeKey: "git:diff:staged",
           paths: [workspace.rootPath],
@@ -313,13 +328,13 @@ export class LocalToolProvider implements ToolProvider {
         description: "Stage files for commit.",
         parameters: GIT_ADD_SCHEMA,
         strict: true,
-        source: "local",
-        capabilities: { streamedOutput: true, deferApproval: true },
+        source: LOCAL_TOOL_SOURCE,
+        capability: buildCapability({ writes: true, streamedOutput: true, approvalModes: ["preflight", "deferred"], riskLevel: "write" }),
         parseArgs: (input) => GIT_ADD_SCHEMA.parse(input),
         buildDescriptor: (args) => {
           const paths = normalizeStringArray(args.paths);
           return {
-            source: "local",
+            source: LOCAL_TOOL_SOURCE,
             preview: `git add ${paths.join(" ")}`,
             scopeKey: `git:add:${paths.join("|")}`,
             paths: [workspace.rootPath, ...paths.flatMap((entry) => collectPathCandidates(resolveWorkspacePath(workspace.rootPath, entry)))],
@@ -336,11 +351,11 @@ export class LocalToolProvider implements ToolProvider {
         description: "Create a non-interactive git commit.",
         parameters: GIT_COMMIT_SCHEMA,
         strict: true,
-        source: "local",
-        capabilities: { streamedOutput: true, deferApproval: true },
+        source: LOCAL_TOOL_SOURCE,
+        capability: buildCapability({ writes: true, streamedOutput: true, approvalModes: ["preflight", "deferred"], riskLevel: "write" }),
         parseArgs: (input) => GIT_COMMIT_SCHEMA.parse(input),
         buildDescriptor: (args) => ({
-          source: "local",
+          source: LOCAL_TOOL_SOURCE,
           preview: `git commit -m ${args.message}`,
           scopeKey: `git:commit:${args.message}`,
           paths: [workspace.rootPath],
@@ -355,8 +370,15 @@ export class LocalToolProvider implements ToolProvider {
         description: "Run a shell command inside the workspace.",
         parameters: RUN_SHELL_SCHEMA,
         strict: true,
-        source: "local",
-        capabilities: { streamedOutput: true, deferApproval: true },
+        source: LOCAL_TOOL_SOURCE,
+        capability: buildCapability({
+          writes: true,
+          network: true,
+          interactive: true,
+          streamedOutput: true,
+          approvalModes: ["preflight", "deferred"],
+          riskLevel: "privileged",
+        }),
         parseArgs: (input) => RUN_SHELL_SCHEMA.parse(input),
         buildDescriptor: (args) => buildShellDescriptor(workspace, args),
         execute: async (args, context) => {
@@ -369,13 +391,13 @@ export class LocalToolProvider implements ToolProvider {
         description: "Write a full file content to a path, creating parent directories when needed.",
         parameters: WRITE_PATCH_SCHEMA,
         strict: true,
-        source: "local",
-        capabilities: { deferApproval: true },
+        source: LOCAL_TOOL_SOURCE,
+        capability: buildCapability({ writes: true, approvalModes: ["preflight", "deferred"], riskLevel: "write" }),
         parseArgs: (input) => WRITE_PATCH_SCHEMA.parse(input),
         buildDescriptor: (args) => {
           const absolute = resolveWorkspacePath(workspace.rootPath, String(args.path));
           return {
-            source: "local",
+            source: LOCAL_TOOL_SOURCE,
             preview: `Write ${absolute}`,
             scopeKey: absolute,
             paths: collectPathCandidates(absolute),
@@ -391,13 +413,13 @@ export class LocalToolProvider implements ToolProvider {
         description: "Apply a structured patch document to the workspace.",
         parameters: APPLY_PATCH_SCHEMA,
         strict: true,
-        source: "local",
-        capabilities: { deferApproval: true },
+        source: LOCAL_TOOL_SOURCE,
+        capability: buildCapability({ writes: true, approvalModes: ["preflight", "deferred"], riskLevel: "write" }),
         parseArgs: (input) => APPLY_PATCH_SCHEMA.parse(input),
         buildDescriptor: (args) => {
           const operations = planPatchOperations(workspace.rootPath, String(args.patch));
           return {
-            source: "local",
+            source: LOCAL_TOOL_SOURCE,
             preview: "apply_patch",
             scopeKey: operations.map((entry) => `${entry.action}:${entry.path}${entry.moveTo ? `->${entry.moveTo}` : ""}`).join("|"),
             paths: operations.flatMap((entry) => {
@@ -419,14 +441,14 @@ export class LocalToolProvider implements ToolProvider {
         description: "Move or rename a file or directory in the workspace.",
         parameters: MOVE_PATH_SCHEMA,
         strict: true,
-        source: "local",
-        capabilities: { deferApproval: true },
+        source: LOCAL_TOOL_SOURCE,
+        capability: buildCapability({ writes: true, approvalModes: ["preflight", "deferred"], riskLevel: "write" }),
         parseArgs: (input) => MOVE_PATH_SCHEMA.parse(input),
         buildDescriptor: (args) => {
           const from = resolveWorkspacePath(workspace.rootPath, String(args.from));
           const to = resolveWorkspacePath(workspace.rootPath, String(args.to));
           return {
-            source: "local",
+            source: LOCAL_TOOL_SOURCE,
             preview: `Move ${from} -> ${to}`,
             scopeKey: `${from}->${to}`,
             paths: [...collectPathCandidates(from), ...collectPathCandidates(to)],
@@ -442,13 +464,13 @@ export class LocalToolProvider implements ToolProvider {
         description: "Delete a file or directory in the workspace.",
         parameters: DELETE_PATH_SCHEMA,
         strict: true,
-        source: "local",
-        capabilities: { deferApproval: true },
+        source: LOCAL_TOOL_SOURCE,
+        capability: buildCapability({ writes: true, approvalModes: ["preflight", "deferred"], riskLevel: "write" }),
         parseArgs: (input) => DELETE_PATH_SCHEMA.parse(input),
         buildDescriptor: (args) => {
           const absolute = resolveWorkspacePath(workspace.rootPath, String(args.path));
           return {
-            source: "local",
+            source: LOCAL_TOOL_SOURCE,
             preview: `Delete ${absolute}`,
             scopeKey: `${absolute}:${args.recursive ?? true}`,
             paths: collectPathCandidates(absolute),
@@ -470,7 +492,7 @@ function buildShellDescriptor(workspace: WorkspaceProfile, args: Record<string, 
   const analysis = buildShellAnalysis(command, cwd, workspace.rootPath);
 
   return {
-    source: "local",
+    source: LOCAL_TOOL_SOURCE,
     preview: command,
     scopeKey: `${cwd}::${analysis.scopeKey}`,
     paths: [cwd, ...analysis.paths],
@@ -489,7 +511,7 @@ function buildSearchDescriptor(workspace: WorkspaceProfile, args: Record<string,
   const target = args.path ? resolveWorkspacePath(workspace.rootPath, String(args.path)) : workspace.rootPath;
 
   return {
-    source: "local",
+    source: LOCAL_TOOL_SOURCE,
     preview: `Search ${target} for "${String(args.query)}"`,
     scopeKey: `${target}:${String(args.query).trim().toLowerCase()}:${String(args.regex ?? false)}:${String(args.filePattern ?? "")}:${String(args.limit ?? 100)}`,
     paths: collectPathCandidates(target),
@@ -516,4 +538,17 @@ function normalizeStringArray(value: unknown): string[] {
   }
 
   return value.map((entry) => String(entry));
+}
+
+function buildCapability(overrides: Partial<RuntimeToolCapability> = {}): RuntimeToolCapability {
+  return {
+    writes: false,
+    network: false,
+    interactive: false,
+    approvalModes: ["none"],
+    riskLevel: "safe_read",
+    streamedOutput: false,
+    resumable: false,
+    ...overrides,
+  };
 }

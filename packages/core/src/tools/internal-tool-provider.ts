@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { type WorkspaceProfile } from "@my-agent/protocol";
 import { z } from "zod";
 import { findGitRoot } from "../utils/path-utils.js";
-import { type JsonSchemaObject, type RuntimeToolDefinition, type ToolProvider } from "./types.js";
+import { type JsonSchemaObject, type RuntimeToolCapability, type RuntimeToolDefinition, type RuntimeToolSourceMetadata, type ToolProvider } from "./types.js";
 
 const INTERNAL_TOOL_MANIFEST_SCHEMA = z.object({
   name: z.string().min(1),
@@ -42,34 +42,42 @@ const INTERNAL_TOOL_MANIFEST_SCHEMA = z.object({
 
 type InternalToolManifest = z.infer<typeof INTERNAL_TOOL_MANIFEST_SCHEMA>;
 
+interface LoadedInternalToolManifest {
+  manifest: InternalToolManifest;
+  manifestPath: string;
+}
+
 export class InternalToolProvider implements ToolProvider {
   constructor(private readonly homeDir = process.env.MY_AGENT_HOME ?? join(homedir(), ".my-agent")) {}
 
   listTools(workspace: WorkspaceProfile): RuntimeToolDefinition[] {
-    return this.loadManifests(workspace).map((manifest) => ({
-      name: manifest.name,
-      description: manifest.description,
-      parameters: manifest.parameters as JsonSchemaObject,
-      strict: true,
-      source: "internal" as const,
-      capabilities: {
-        deferApproval: false,
-      },
-      parseArgs: (input) => parseManifestArgs(manifest, input),
-      buildDescriptor: (args) => ({
-        source: "internal",
-        preview: `${manifest.name} -> ${manifest.endpoint}`,
-        scopeKey: `${manifest.name}:${JSON.stringify(args)}`,
-        risky: manifest.approval.required,
-        writes: manifest.approval.writes,
-        network: manifest.approval.network,
-        approvalReason: manifest.approval.reason ?? `Internal tool ${manifest.name} requires approval.`,
-      }),
-      execute: async (args, context) => executeManifest(manifest, args, context.signal),
-    }));
+    return this.loadManifests(workspace).map(({ manifest, manifestPath }) => {
+      const source = buildInternalSource(manifest, manifestPath);
+
+      return {
+        name: manifest.name,
+        description: manifest.description,
+        parameters: manifest.parameters as JsonSchemaObject,
+        strict: true,
+        source,
+        capability: buildInternalCapability(manifest),
+        parseArgs: (input) => parseManifestArgs(manifest, input),
+        buildDescriptor: (args) => ({
+          source,
+          preview: `${manifest.name} -> ${manifest.endpoint}`,
+          scopeKey: `${manifest.name}:${JSON.stringify(args)}`,
+          risky: manifest.approval.required,
+          writes: manifest.approval.writes,
+          network: manifest.approval.network,
+          timeoutMs: manifest.timeoutMs ?? 30_000,
+          approvalReason: manifest.approval.reason ?? `Internal tool ${manifest.name} requires approval.`,
+        }),
+        execute: async (args, context) => executeManifest(manifest, args, context.signal),
+      };
+    });
   }
 
-  private loadManifests(workspace: WorkspaceProfile): InternalToolManifest[] {
+  private loadManifests(workspace: WorkspaceProfile): LoadedInternalToolManifest[] {
     const roots = new Set<string>([join(this.homeDir, "internal-tools")]);
     const repoRoot = findGitRoot(workspace.rootPath);
 
@@ -79,7 +87,7 @@ export class InternalToolProvider implements ToolProvider {
       roots.add(join(workspace.rootPath, ".agents", "internal-tools"));
     }
 
-    const manifests: InternalToolManifest[] = [];
+    const manifests: LoadedInternalToolManifest[] = [];
 
     for (const root of roots) {
       if (!existsSync(root)) {
@@ -95,7 +103,10 @@ export class InternalToolProvider implements ToolProvider {
 
         try {
           const parsed = INTERNAL_TOOL_MANIFEST_SCHEMA.parse(JSON.parse(readFileSync(absolute, "utf8")));
-          manifests.push(parsed);
+          manifests.push({
+            manifest: parsed,
+            manifestPath: absolute,
+          });
         } catch (error) {
           console.warn(`[internal-tools] Skipping invalid manifest ${absolute}: ${error instanceof Error ? error.message : String(error)}`);
         }
@@ -147,12 +158,25 @@ async function executeManifest(manifest: InternalToolManifest, args: Record<stri
 
   const timeoutSignal = AbortSignal.timeout(manifest.timeoutMs ?? 30_000);
   const combined = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
-  const response = await fetch(url, {
-    method: manifest.method,
-    headers,
-    body,
-    signal: combined,
-  });
+  let response: Response;
+
+  try {
+    response = await fetch(url, {
+      method: manifest.method,
+      headers,
+      body,
+      signal: combined,
+    });
+  } catch (error) {
+    if (timeoutSignal.aborted && !signal?.aborted) {
+      const timeoutError = new Error(`Internal tool ${manifest.name} timed out after ${manifest.timeoutMs ?? 30_000}ms.`);
+      timeoutError.name = "TimeoutError";
+      throw timeoutError;
+    }
+
+    throw error;
+  }
+
   const text = await response.text();
 
   if (!response.ok) {
@@ -168,4 +192,30 @@ function stringifyQueryValue(value: unknown): string {
   }
 
   return JSON.stringify(value);
+}
+
+function buildInternalSource(manifest: InternalToolManifest, manifestPath: string): RuntimeToolSourceMetadata {
+  return {
+    type: "internal",
+    id: manifest.name,
+    label: manifest.name,
+    path: manifestPath,
+    details: {
+      endpoint: manifest.endpoint,
+      method: manifest.method,
+    },
+  };
+}
+
+function buildInternalCapability(manifest: InternalToolManifest): RuntimeToolCapability {
+  return {
+    writes: manifest.approval.writes,
+    network: manifest.approval.network,
+    interactive: false,
+    approvalModes: manifest.approval.required ? ["preflight"] : ["none"],
+    riskLevel: manifest.approval.network ? "network" : manifest.approval.writes ? "write" : "safe_read",
+    timeoutMs: manifest.timeoutMs ?? 30_000,
+    streamedOutput: false,
+    resumable: false,
+  };
 }

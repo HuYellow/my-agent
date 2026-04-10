@@ -62,14 +62,20 @@ import {
   type ProviderModelRecord,
   type RequirementMemoryRecord,
   type RequirementRecord,
+  type ReviewArtifactRecord,
   type ReviewRecord,
   type SandboxMode,
   type SkillDescriptor,
   type TerminalBackendCapability,
   type TerminalSessionRecord,
+  type ToolErrorRecord,
+  type ToolReferenceRecord,
   type ThreadRecord,
+  type TurnDiffFileRecord,
+  type TurnDiffRecord,
   type TurnInputAttachment,
   type TurnContextSnapshotRecord,
+  type TurnPlanRecord,
   type TurnRecord,
   type WorktreeRecord,
   type EnvironmentRecord,
@@ -92,7 +98,7 @@ type NavView = "threads" | "skills" | "plugins" | "automation" | "settings";
 type ComposerAttachment = TurnInputAttachment;
 type ThemeMode = "light" | "dark";
 type ReviewSourceKind = ReviewRecord["source"]["kind"];
-type ThreadWorkspaceView = "conversation" | "diff";
+type ThreadWorkspaceView = "conversation" | "plan" | "review" | "diff" | "runtime";
 
 const SIDEBAR_WIDTH_STORAGE_KEY = "my-agent-sidebar-width-ratio";
 const SIDEBAR_MIN_RATIO = 0.18;
@@ -181,23 +187,33 @@ interface ChangedFileReview {
   error?: string;
 }
 
-interface ThreadChangeFile {
-  itemId: string;
-  turnId: string;
-  path: string;
-  title: string;
-  body: string;
-  createdAt: string;
-  updatedAt: string;
+type ThreadChangeFile = TurnDiffFileRecord;
+type ThreadChangeSet = TurnDiffRecord;
+
+interface ConversationFocusTarget {
+  token: number;
+  turnId?: string;
+  itemId?: string;
 }
 
-interface ThreadChangeSet {
+interface DiffFocusTarget {
+  token: number;
+  changeSetId?: string;
+  filePath?: string;
+}
+
+interface ReviewFocusTarget {
+  token: number;
+  reviewId?: string;
+  findingId?: string;
+}
+
+type RuntimeSelectionKind = "agent" | "executionContext" | "worktree" | "environment";
+
+interface RuntimeFocusTarget {
+  token: number;
+  kind: RuntimeSelectionKind;
   id: string;
-  turnId: string;
-  createdAt: string;
-  updatedAt: string;
-  label: string;
-  files: ThreadChangeFile[];
 }
 
 interface ComposerDraftState {
@@ -246,6 +262,7 @@ export function App() {
     threads,
     threadSessions,
     reviews,
+    reviewArtifacts,
     worktrees,
     environments,
     executionContexts,
@@ -258,6 +275,8 @@ export function App() {
     terminalOutputs,
     terminalOutputArchives,
     terminalCapabilities,
+    protocolCompatibility,
+    runtimeTools,
     skills,
     activeProjectId,
     activeRequirementId,
@@ -290,6 +309,7 @@ export function App() {
     updateConfig,
     testProvider,
     refreshProviderModels,
+    refreshToolCatalog,
   } = useAppStore();
 
   const [activeView, setActiveView] = useState<NavView>("threads");
@@ -320,6 +340,10 @@ export function App() {
   const [reviewBaseBranch, setReviewBaseBranch] = useState("main");
   const [reviewCommit, setReviewCommit] = useState("");
   const [threadWorkspaceView, setThreadWorkspaceView] = useState<ThreadWorkspaceView>("conversation");
+  const [conversationFocusTarget, setConversationFocusTarget] = useState<ConversationFocusTarget | null>(null);
+  const [diffFocusTarget, setDiffFocusTarget] = useState<DiffFocusTarget | null>(null);
+  const [reviewFocusTarget, setReviewFocusTarget] = useState<ReviewFocusTarget | null>(null);
+  const [runtimeFocusTarget, setRuntimeFocusTarget] = useState<RuntimeFocusTarget | null>(null);
   const [steerInput, setSteerInput] = useState("");
   const [selectedTerminalId, setSelectedTerminalId] = useState<string | null>(null);
   const [terminalInput, setTerminalInput] = useState("");
@@ -543,8 +567,8 @@ export function App() {
     [orderedItems],
   );
   const threadChangeSets = useMemo(
-    () => buildThreadChangeSets({ items: orderedItems, turns: activeSession?.turns ?? [] }),
-    [activeSession?.turns, orderedItems],
+    () => activeSession?.turnDiffs ?? [],
+    [activeSession?.turnDiffs],
   );
   const threadChangedFileCount = useMemo(
     () => new Set(threadChangeSets.flatMap((changeSet) => changeSet.files.map((file) => file.path))).size,
@@ -611,6 +635,19 @@ export function App() {
 
     return contexts.at(-1) ?? null;
   }, [activeSession?.turnContexts, activeTurn]);
+  const latestTurnPlan = useMemo(() => {
+    const plans = activeSession?.turnPlans ?? [];
+
+    if (plans.length === 0) {
+      return null;
+    }
+
+    if (activeTurn) {
+      return plans.find((plan) => plan.turnId === activeTurn.id) ?? plans.at(-1) ?? null;
+    }
+
+    return plans.at(-1) ?? null;
+  }, [activeSession?.turnPlans, activeTurn]);
   const showingThreadWorkspace = Boolean(activeThreadId && activeThread);
   const interruptibleTurnId = useMemo(() => {
     const candidate = [...(activeSession?.turns ?? [])]
@@ -644,6 +681,75 @@ export function App() {
     [activeProjectId, activeThreadId, reviews],
   );
   const latestReview = activeReviews[0] ?? null;
+  const latestReviewArtifact = latestReview ? reviewArtifacts[latestReview.id] ?? buildReviewArtifactFallback(latestReview) : null;
+  const threadAgentTree = useMemo(() => {
+    if (!activeThreadId) {
+      return [] as AgentTreeNode[];
+    }
+
+    const seedAgentIds = new Set(agentTasks.filter((task) => task.parentThreadId === activeThreadId).map((task) => task.id));
+    return buildAgentTree(agentTasks, seedAgentIds);
+  }, [activeThreadId, agentTasks]);
+  const threadAgentIds = useMemo(() => new Set(collectAgentTreeIds(threadAgentTree)), [threadAgentTree]);
+  const threadExecutionContexts = useMemo(() => {
+    if (!activeThreadId) {
+      return [] as ExecutionContextRecord[];
+    }
+
+    return [...executionContexts]
+      .filter((executionContext) => executionContext.threadId === activeThreadId || (executionContext.agentId && threadAgentIds.has(executionContext.agentId)))
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  }, [activeThreadId, executionContexts, threadAgentIds]);
+  const threadWorktrees = useMemo(() => {
+    if (!activeThreadId) {
+      return [] as WorktreeRecord[];
+    }
+
+    const executionContextWorktreeIds = new Set(
+      threadExecutionContexts.map((executionContext) => executionContext.worktreeId).filter((value): value is string => Boolean(value)),
+    );
+
+    return [...worktrees]
+      .filter(
+        (worktree) =>
+          worktree.threadId === activeThreadId ||
+          executionContextWorktreeIds.has(worktree.id) ||
+          (worktree.agentId ? threadAgentIds.has(worktree.agentId) : false),
+      )
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  }, [activeThreadId, threadAgentIds, threadExecutionContexts, worktrees]);
+  const threadEnvironments = useMemo(() => {
+    if (!activeThreadId) {
+      return [] as EnvironmentRecord[];
+    }
+
+    const executionContextEnvironmentIds = new Set(
+      threadExecutionContexts.map((executionContext) => executionContext.environmentId).filter((value): value is string => Boolean(value)),
+    );
+    const threadWorktreeIds = new Set(threadWorktrees.map((worktree) => worktree.id));
+
+    return [...environments]
+      .filter(
+        (environment) =>
+          environment.threadId === activeThreadId ||
+          executionContextEnvironmentIds.has(environment.id) ||
+          (environment.worktreeId ? threadWorktreeIds.has(environment.worktreeId) : false),
+      )
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  }, [activeThreadId, environments, threadExecutionContexts, threadWorktrees]);
+  const threadContextLineage = useMemo(
+    () =>
+      activeThreadId
+        ? buildThreadExecutionContextLineage({
+            thread: activeThread ?? null,
+            executionContexts: threadExecutionContexts,
+            environments: threadEnvironments,
+            worktrees: threadWorktrees,
+            agentTree: threadAgentTree,
+          })
+        : ([] as ContextLineageNode[]),
+    [activeThread, activeThreadId, threadAgentTree, threadEnvironments, threadExecutionContexts, threadWorktrees],
+  );
   const reviewRunning = activeReviews.some((review) => review.status === "running");
   const reviewSourceLabel = useMemo(() => {
     switch (reviewSourceKind) {
@@ -735,6 +841,10 @@ export function App() {
 
   useEffect(() => {
     setThreadWorkspaceView("conversation");
+    setConversationFocusTarget(null);
+    setDiffFocusTarget(null);
+    setReviewFocusTarget(null);
+    setRuntimeFocusTarget(null);
   }, [activeThreadId]);
 
   useEffect(() => {
@@ -805,6 +915,61 @@ export function App() {
     });
   };
 
+  const focusConversationTarget = (target: Omit<ConversationFocusTarget, "token">) => {
+    setThreadWorkspaceView("conversation");
+    setConversationFocusTarget({
+      ...target,
+      token: Date.now(),
+    });
+  };
+
+  const focusReviewTarget = (target: Omit<ReviewFocusTarget, "token">) => {
+    setThreadWorkspaceView("review");
+    setReviewFocusTarget({
+      ...target,
+      token: Date.now(),
+    });
+  };
+
+  const focusDiffTarget = (target: Omit<DiffFocusTarget, "token">) => {
+    setThreadWorkspaceView("diff");
+    setDiffFocusTarget({
+      ...target,
+      token: Date.now(),
+    });
+  };
+
+  const focusRuntimeTarget = (target: Omit<RuntimeFocusTarget, "token">) => {
+    setThreadWorkspaceView("runtime");
+    setRuntimeFocusTarget({
+      ...target,
+      token: Date.now(),
+    });
+  };
+
+  const openPlanTurn = (plan: TurnPlanRecord) => {
+    focusConversationTarget({
+      turnId: plan.turnId,
+      itemId: plan.sourceItemId,
+    });
+  };
+
+  const openReviewTarget = (params: { reviewId: string; findingId?: string; filePath?: string }) => {
+    if (params.filePath) {
+      const selection = findChangeSetSelectionForFile(threadChangeSets, params.filePath);
+      focusDiffTarget({
+        changeSetId: selection?.changeSetId,
+        filePath: params.filePath,
+      });
+      return;
+    }
+
+    focusReviewTarget({
+      reviewId: params.reviewId,
+      findingId: params.findingId,
+    });
+  };
+
   useEffect(() => {
     if (!currentSkillDetail) {
       setSkillDocument("");
@@ -856,11 +1021,12 @@ export function App() {
 
   useEffect(() => {
     void Promise.all([
+      refreshToolCatalog(),
       window.myAgent.listPlugins().then((result) => setRuntimePlugins(result.plugins)),
       window.myAgent.listMcpMounts().then((result) => setRuntimeMcpMounts(result.mounts)),
       window.myAgent.listMcpSessions().then((result) => setRuntimeMcpSessions(result.sessions)),
     ]).catch(() => undefined);
-  }, []);
+  }, [refreshToolCatalog]);
 
   useEffect(() => {
     setBranchMenuOpen(false);
@@ -1484,6 +1650,28 @@ export function App() {
                       <button
                         type="button"
                         role="tab"
+                        aria-selected={threadWorkspaceView === "plan"}
+                        className={`workspace-toggle__button ${threadWorkspaceView === "plan" ? "workspace-toggle__button--active" : ""}`}
+                        onClick={() => setThreadWorkspaceView("plan")}
+                      >
+                        <Grid3X3 size={14} />
+                        <span>Plan</span>
+                        {latestTurnPlan && <span className="workspace-toggle__badge">{latestTurnPlan.steps.length}</span>}
+                      </button>
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={threadWorkspaceView === "review"}
+                        className={`workspace-toggle__button ${threadWorkspaceView === "review" ? "workspace-toggle__button--active" : ""}`}
+                        onClick={() => setThreadWorkspaceView("review")}
+                      >
+                        <Shield size={14} />
+                        <span>Review Findings</span>
+                        {latestReviewArtifact && <span className="workspace-toggle__badge">{latestReviewArtifact.findingCounts.total}</span>}
+                      </button>
+                      <button
+                        type="button"
+                        role="tab"
                         aria-selected={threadWorkspaceView === "diff"}
                         className={`workspace-toggle__button ${threadWorkspaceView === "diff" ? "workspace-toggle__button--active" : ""}`}
                         onClick={() => setThreadWorkspaceView("diff")}
@@ -1492,6 +1680,19 @@ export function App() {
                         <FileText size={14} />
                         <span>Diff / Patch</span>
                         {threadChangedFileCount > 0 && <span className="workspace-toggle__badge">{threadChangedFileCount}</span>}
+                      </button>
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={threadWorkspaceView === "runtime"}
+                        className={`workspace-toggle__button ${threadWorkspaceView === "runtime" ? "workspace-toggle__button--active" : ""}`}
+                        onClick={() => setThreadWorkspaceView("runtime")}
+                      >
+                        <Cpu size={14} />
+                        <span>Runtime</span>
+                        {(threadAgentIds.size > 0 || threadExecutionContexts.length > 0) && (
+                          <span className="workspace-toggle__badge">{threadAgentIds.size + threadExecutionContexts.length}</span>
+                        )}
                       </button>
                     </div>
                     <div className="review-popover-anchor" ref={reviewMenuRef}>
@@ -1592,15 +1793,49 @@ export function App() {
             <div className="message-area" ref={messageAreaRef}>
               {showingThreadWorkspace ? (
                 threadWorkspaceView === "diff" ? (
-                  <DiffPatchPanel threadId={activeThreadId} changeSets={threadChangeSets} latestReview={latestReview} />
+                  <DiffPatchPanel
+                    changeSets={threadChangeSets}
+                    latestReview={latestReview}
+                    latestReviewArtifact={latestReviewArtifact}
+                    requestedSelection={diffFocusTarget}
+                  />
+                ) : threadWorkspaceView === "plan" ? (
+                  <PlanWorkspacePanel plan={latestTurnPlan} onOpenTurn={openPlanTurn} />
+                ) : threadWorkspaceView === "review" ? (
+                  <ReviewFindingsPanel
+                    reviews={activeReviews}
+                    reviewArtifacts={reviewArtifacts}
+                    requestedFocus={reviewFocusTarget}
+                    onOpenReview={focusReviewTarget}
+                    onOpenFile={openReviewTarget}
+                  />
+                ) : threadWorkspaceView === "runtime" ? (
+                  <ThreadRuntimePanel
+                    snapshot={latestTurnContext}
+                    agentTree={threadAgentTree}
+                    executionContexts={threadExecutionContexts}
+                    worktrees={threadWorktrees}
+                    environments={threadEnvironments}
+                    lineage={threadContextLineage}
+                    requestedSelection={runtimeFocusTarget}
+                    onOpenThread={(threadId) => void handleSelectThread(threadId)}
+                  />
                 ) : (
                   <>
                     {latestTurnContext && <RunContextCard snapshot={latestTurnContext} />}
-                    {latestReview && <ReviewSummaryCard review={latestReview} />}
+                    {latestTurnPlan && <PlanSummaryCard plan={latestTurnPlan} onOpenTurn={openPlanTurn} />}
+                    {latestReview && (
+                      <ReviewSummaryCard
+                        review={latestReview}
+                        artifact={latestReviewArtifact}
+                        onOpenReview={(reviewId) => focusReviewTarget({ reviewId })}
+                        onOpenFile={(reviewId, findingId, filePath) => openReviewTarget({ reviewId, findingId, filePath })}
+                      />
+                    )}
                     {orderedItems.length === 0 ? (
                       <EmptyState />
                     ) : (
-                      <ConversationFeed entries={conversationEntries} threadId={activeThreadId} />
+                      <ConversationFeed entries={conversationEntries} threadId={activeThreadId} focusTarget={conversationFocusTarget} />
                     )}
                     {pendingApproval && (
                       <ApprovalRequest
@@ -1763,6 +1998,8 @@ export function App() {
           />
         ) : activeView === "plugins" ? (
           <RuntimePluginsPanel
+            compatibility={protocolCompatibility}
+            tools={runtimeTools}
             plugins={runtimePlugins}
             mcpMounts={runtimeMcpMounts}
             mcpSessions={runtimeMcpSessions}
@@ -2749,6 +2986,8 @@ function SkillsPanel({
 }
 
 function RuntimePluginsPanel({
+  compatibility,
+  tools,
   plugins,
   mcpMounts,
   mcpSessions,
@@ -2758,6 +2997,8 @@ function RuntimePluginsPanel({
   onRespondTerminalApproval,
   onRefreshMount,
 }: {
+  compatibility?: import("@my-agent/protocol").ProtocolCompatibilityRecord;
+  tools: import("@my-agent/protocol").ToolCatalogRecord[];
   plugins: PluginRecord[];
   mcpMounts: McpMountRecord[];
   mcpSessions: McpSessionRecord[];
@@ -2770,16 +3011,68 @@ function RuntimePluginsPanel({
   const visibleTerminalSessions = activeProjectId
     ? terminalSessions.filter((session) => session.workspaceId === activeProjectId)
     : terminalSessions;
+  const toolsBySource = useMemo(
+    () =>
+      tools.reduce<Record<string, number>>((counts, tool) => {
+        counts[tool.source.type] = (counts[tool.source.type] ?? 0) + 1;
+        return counts;
+      }, {}),
+    [tools],
+  );
 
   return (
     <div className="skills-page">
       <div className="skills-page__header">
         <h2 className="skills-page__title">Runtime Surfaces</h2>
         <span className="skills-page__count">
-          {plugins.length} plugins · {mcpMounts.length} MCP mounts · {visibleTerminalSessions.length} terminal sessions
+          {tools.length} tools · {plugins.length} plugins · {mcpMounts.length} MCP mounts · {visibleTerminalSessions.length} terminal sessions
         </span>
       </div>
       <div className="skills-grid">
+        {compatibility ? (
+          <div className="skill-card">
+            <div className="skill-card__header">
+              <div>
+                <h3>Protocol Compatibility</h3>
+                <span>{compatibility.protocolVersion}</span>
+              </div>
+              <span className="skill-card__status skill-card__status--enabled">Stable</span>
+            </div>
+            <p>{compatibility.documentationPath ?? "No protocol documentation path configured."}</p>
+            <pre>
+              additiveChangesOnly={String(compatibility.additiveChangesOnly)}
+              {`\n`}requiredToolSources={compatibility.requiredToolSources.join(", ")}
+              {`\n`}structuredEvents={compatibility.structuredEventTypes.join(", ")}
+            </pre>
+          </div>
+        ) : null}
+        {tools.length > 0 ? (
+          <div className="skill-card">
+            <div className="skill-card__header">
+              <div>
+                <h3>Governed Tool Catalog</h3>
+                <span>{Object.entries(toolsBySource).map(([source, count]) => `${source}:${count}`).join(" · ")}</span>
+              </div>
+              <span className="skill-card__status skill-card__status--enabled">Unified</span>
+            </div>
+            <p>All runtime tools are cataloged with a stable source kind and capability summary.</p>
+            <div className="runtime-tool-catalog">
+              {tools.map((tool) => (
+                <div key={`${tool.source.type}:${tool.name}`} className="runtime-tool-row">
+                  <strong>{tool.name}</strong>
+                  <small>{tool.description}</small>
+                  <pre>
+                    source={tool.source.type}
+                    {tool.source.label ? `:${tool.source.label}` : ""}
+                    {`\n`}risk={tool.capability.riskLevel}
+                    {`\n`}writes={String(tool.capability.writes)} network={String(tool.capability.network)} interactive={String(tool.capability.interactive)}
+                    {`\n`}approvalModes={tool.capability.approvalModes.join(", ")}
+                  </pre>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
         {terminalCapabilities.map((capability) => (
           <div key={`terminal-cap:${capability.kind}`} className="skill-card">
             <div className="skill-card__header">
@@ -3394,7 +3687,7 @@ function RuntimeAutomationPanel({
   );
 }
 
-function RuntimeContextLineage({ nodes }: { nodes: ContextLineageNode[] }) {
+function RuntimeContextLineage({ nodes, selectedNodeId }: { nodes: ContextLineageNode[]; selectedNodeId?: string }) {
   return (
     <div className="workflow-runtime-section workflow-runtime-section--lineage">
       <strong>Execution Context Lineage</strong>
@@ -3403,7 +3696,7 @@ function RuntimeContextLineage({ nodes }: { nodes: ContextLineageNode[] }) {
       ) : (
         <div className="context-lineage">
           {nodes.map((node) => (
-            <RuntimeContextLineageNode key={node.id} node={node} depth={0} />
+            <RuntimeContextLineageNode key={node.id} node={node} depth={0} selectedNodeId={selectedNodeId} />
           ))}
         </div>
       )}
@@ -3411,10 +3704,21 @@ function RuntimeContextLineage({ nodes }: { nodes: ContextLineageNode[] }) {
   );
 }
 
-function RuntimeContextLineageNode({ node, depth }: { node: ContextLineageNode; depth: number }) {
+function RuntimeContextLineageNode({
+  node,
+  depth,
+  selectedNodeId,
+}: {
+  node: ContextLineageNode;
+  depth: number;
+  selectedNodeId?: string;
+}) {
   return (
     <div className="context-lineage__node">
-      <div className="context-lineage__row" style={{ paddingLeft: `${depth * 16}px` }}>
+      <div
+        className={`context-lineage__row ${selectedNodeId === node.id ? "context-lineage__row--active" : ""}`}
+        style={{ paddingLeft: `${depth * 16}px` }}
+      >
         <div className="context-lineage__title">
           <span>{node.title}</span>
           {node.subtitle ? <small>{node.subtitle}</small> : null}
@@ -3430,7 +3734,7 @@ function RuntimeContextLineageNode({ node, depth }: { node: ContextLineageNode; 
       {node.children.length > 0 ? (
         <div className="context-lineage__children">
           {node.children.map((child) => (
-            <RuntimeContextLineageNode key={child.id} node={child} depth={depth + 1} />
+            <RuntimeContextLineageNode key={child.id} node={child} depth={depth + 1} selectedNodeId={selectedNodeId} />
           ))}
         </div>
       ) : null}
@@ -3438,7 +3742,15 @@ function RuntimeContextLineageNode({ node, depth }: { node: ContextLineageNode; 
   );
 }
 
-function RuntimeAgentTree({ roots }: { roots: AgentTreeNode[] }) {
+function RuntimeAgentTree({
+  roots,
+  selectedAgentId,
+  onSelectAgent,
+}: {
+  roots: AgentTreeNode[];
+  selectedAgentId?: string;
+  onSelectAgent?: (agentId: string) => void;
+}) {
   return (
     <div className="workflow-runtime-section workflow-runtime-section--tree">
       <strong>Sub-agents</strong>
@@ -3447,7 +3759,13 @@ function RuntimeAgentTree({ roots }: { roots: AgentTreeNode[] }) {
       ) : (
         <div className="agent-tree">
           {roots.map((root) => (
-            <RuntimeAgentTreeNode key={root.task.id} node={root} depth={0} />
+            <RuntimeAgentTreeNode
+              key={root.task.id}
+              node={root}
+              depth={0}
+              selectedAgentId={selectedAgentId}
+              onSelectAgent={onSelectAgent}
+            />
           ))}
         </div>
       )}
@@ -3455,10 +3773,25 @@ function RuntimeAgentTree({ roots }: { roots: AgentTreeNode[] }) {
   );
 }
 
-function RuntimeAgentTreeNode({ node, depth }: { node: AgentTreeNode; depth: number }) {
+function RuntimeAgentTreeNode({
+  node,
+  depth,
+  selectedAgentId,
+  onSelectAgent,
+}: {
+  node: AgentTreeNode;
+  depth: number;
+  selectedAgentId?: string;
+  onSelectAgent?: (agentId: string) => void;
+}) {
   return (
     <div className="agent-tree__node">
-      <div className="agent-tree__row" style={{ paddingLeft: `${depth * 16}px` }}>
+      <button
+        type="button"
+        className={`agent-tree__row ${selectedAgentId === node.task.id ? "agent-tree__row--active" : ""}`}
+        style={{ paddingLeft: `${depth * 16}px` }}
+        onClick={() => onSelectAgent?.(node.task.id)}
+      >
         <div className="agent-tree__title">
           <span>{node.task.title}</span>
           <small>{node.task.status}</small>
@@ -3467,12 +3800,18 @@ function RuntimeAgentTreeNode({ node, depth }: { node: AgentTreeNode; depth: num
           {node.task.executionContextId && <code>{node.task.executionContextId}</code>}
           {node.task.childThreadId && <code>{node.task.childThreadId}</code>}
         </div>
-      </div>
+      </button>
       {node.task.summary?.finalMessage ? <small className="agent-tree__summary">{node.task.summary.finalMessage}</small> : null}
       {node.children.length > 0 ? (
         <div className="agent-tree__children">
           {node.children.map((child) => (
-            <RuntimeAgentTreeNode key={child.task.id} node={child} depth={depth + 1} />
+            <RuntimeAgentTreeNode
+              key={child.task.id}
+              node={child}
+              depth={depth + 1}
+              selectedAgentId={selectedAgentId}
+              onSelectAgent={onSelectAgent}
+            />
           ))}
         </div>
       ) : null}
@@ -3484,10 +3823,14 @@ function RuntimeMetaSection({
   title,
   emptyLabel,
   items,
+  selectedItemId,
+  onSelectItem,
 }: {
   title: string;
   emptyLabel: string;
   items: Array<{ id: string; title: string; detail: string }>;
+  selectedItemId?: string;
+  onSelectItem?: (id: string) => void;
 }) {
   return (
     <div className="workflow-runtime-section">
@@ -3496,13 +3839,107 @@ function RuntimeMetaSection({
         <span className="workflow-runtime-section__empty">{emptyLabel}</span>
       ) : (
         items.map((item) => (
-          <div key={item.id} className="workflow-runtime-section__item">
+          <button
+            key={item.id}
+            type="button"
+            className={`workflow-runtime-section__item ${selectedItemId === item.id ? "workflow-runtime-section__item--active" : ""}`}
+            onClick={() => onSelectItem?.(item.id)}
+          >
             <span>{item.title}</span>
             <code>{item.detail}</code>
-          </div>
+          </button>
         ))
       )}
     </div>
+  );
+}
+
+function RuntimeSelectionDetail({
+  agent,
+  executionContext,
+  worktree,
+  environment,
+  onOpenThread,
+}: {
+  agent: AgentTaskRecord | null;
+  executionContext: ExecutionContextRecord | null;
+  worktree: WorktreeRecord | null;
+  environment: EnvironmentRecord | null;
+  onOpenThread?: (threadId: string) => void;
+}) {
+  if (!agent && !executionContext && !worktree && !environment) {
+    return null;
+  }
+
+  return (
+    <section className="review-card">
+      <div className="review-card__header">
+        <div>
+          <div className="review-card__title">Runtime Detail</div>
+          <div className="review-card__status review-card__status--completed">Focused</div>
+        </div>
+      </div>
+      <div className="review-card__findings">
+        {agent ? (
+          <article className="review-finding">
+            <div className="review-finding__header">
+              <span className="review-finding__severity review-finding__severity--medium">agent</span>
+              <strong>{agent.title}</strong>
+            </div>
+            <div className="review-finding__location">{agent.status}</div>
+            <p className="review-finding__detail">
+              childThread={agent.childThreadId ?? "none"} · executionContext={agent.executionContextId ?? "none"}
+            </p>
+            {agent.summary?.finalMessage ? <p className="review-finding__detail">{agent.summary.finalMessage}</p> : null}
+            {agent.childThreadId && onOpenThread ? (
+              <div className="review-finding__actions">
+                <button
+                  type="button"
+                  className="button button--ghost button--small"
+                  onClick={() => onOpenThread(agent.childThreadId!)}
+                >
+                  Open Child Thread
+                </button>
+              </div>
+            ) : null}
+          </article>
+        ) : null}
+        {executionContext ? (
+          <article className="review-finding">
+            <div className="review-finding__header">
+              <span className="review-finding__severity review-finding__severity--low">context</span>
+              <strong>{executionContext.kind} · {executionContext.cwd}</strong>
+            </div>
+            <div className="review-finding__location">{executionContext.id}</div>
+            <p className="review-finding__detail">
+              shell={executionContext.shell} · tools={executionContext.detectedTools.join(", ") || "none"}
+            </p>
+          </article>
+        ) : null}
+        {worktree ? (
+          <article className="review-finding">
+            <div className="review-finding__header">
+              <span className="review-finding__severity review-finding__severity--low">worktree</span>
+              <strong>{worktree.branch}</strong>
+            </div>
+            <div className="review-finding__location">{worktree.path}</div>
+            <p className="review-finding__detail">status={worktree.status}</p>
+          </article>
+        ) : null}
+        {environment ? (
+          <article className="review-finding">
+            <div className="review-finding__header">
+              <span className="review-finding__severity review-finding__severity--low">environment</span>
+              <strong>{environment.shell} · {environment.cwd}</strong>
+            </div>
+            <div className="review-finding__location">{environment.id}</div>
+            <p className="review-finding__detail">
+              detectedTools={environment.detectedTools.join(", ") || "none"}
+            </p>
+          </article>
+        ) : null}
+      </div>
+    </section>
   );
 }
 
@@ -3571,6 +4008,35 @@ function buildAgentTree(agentTasks: AgentTaskRecord[], seedAgentIds: Set<string>
   return roots.map((task) => buildAgentTreeNode(task, childrenByParentId));
 }
 
+function collectAgentTreeIds(nodes: AgentTreeNode[]): string[] {
+  const ids: string[] = [];
+  const queue = [...nodes];
+
+  while (queue.length > 0) {
+    const node = queue.shift()!;
+    ids.push(node.task.id);
+    queue.push(...node.children);
+  }
+
+  return ids;
+}
+
+function findAgentTreeNodeById(nodes: AgentTreeNode[], agentId: string): AgentTreeNode | null {
+  const queue = [...nodes];
+
+  while (queue.length > 0) {
+    const node = queue.shift()!;
+
+    if (node.task.id === agentId) {
+      return node;
+    }
+
+    queue.push(...node.children);
+  }
+
+  return null;
+}
+
 function buildAgentTreeNode(
   task: AgentTaskRecord,
   childrenByParentId: Map<string, AgentTaskRecord[]>,
@@ -3583,6 +4049,70 @@ function buildAgentTreeNode(
     task,
     children,
   };
+}
+
+function buildThreadExecutionContextLineage(params: {
+  thread: ThreadRecord | null;
+  executionContexts: ExecutionContextRecord[];
+  environments: EnvironmentRecord[];
+  worktrees: WorktreeRecord[];
+  agentTree: AgentTreeNode[];
+}): ContextLineageNode[] {
+  const executionContextById = new Map(params.executionContexts.map((entry) => [entry.id, entry]));
+  const environmentById = new Map(params.environments.map((entry) => [entry.id, entry]));
+  const worktreeById = new Map(params.worktrees.map((entry) => [entry.id, entry]));
+  const rootContexts = params.executionContexts.filter((executionContext) => !executionContext.agentId);
+  const lineageRoots = rootContexts
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+    .map((executionContext) => {
+      const environment = executionContext.environmentId ? environmentById.get(executionContext.environmentId) : undefined;
+      const worktree = executionContext.worktreeId ? worktreeById.get(executionContext.worktreeId) : undefined;
+
+      return {
+        id: `thread-context:${executionContext.id}`,
+        title: executionContext.kind === "thread" ? params.thread?.title ?? "Thread workspace" : `${executionContext.kind} context`,
+        subtitle: `${executionContext.kind} · ${executionContext.cwd}`,
+        details: buildContextDetailTokens(executionContext, environment, worktree),
+        children:
+          executionContext.kind === "thread"
+            ? params.agentTree.map((node) => buildAgentContextLineageNode(node, executionContextById, environmentById, worktreeById))
+            : [],
+      } satisfies ContextLineageNode;
+    });
+
+  if (lineageRoots.length > 0) {
+    return lineageRoots;
+  }
+
+  if (params.agentTree.length === 0) {
+    return [];
+  }
+
+  return [
+    {
+      id: `thread:${params.thread?.id ?? "current"}`,
+      title: params.thread?.title ?? "Thread workspace",
+      subtitle: "Delegated runtime",
+      details: [],
+      children: params.agentTree.map((node) => buildAgentContextLineageNode(node, executionContextById, environmentById, worktreeById)),
+    },
+  ];
+}
+
+function buildRuntimeSelectionNodeId(selection: RuntimeFocusTarget | null): string | undefined {
+  if (!selection) {
+    return undefined;
+  }
+
+  if (selection.kind === "agent") {
+    return `agent:${selection.id}`;
+  }
+
+  if (selection.kind === "executionContext") {
+    return `thread-context:${selection.id}`;
+  }
+
+  return undefined;
 }
 
 function buildExecutionContextLineage(params: {
@@ -4066,10 +4596,20 @@ function EmptyState() {
   );
 }
 
-function ConversationFeed({ entries, threadId }: { entries: ConversationEntry[]; threadId?: string }) {
+function ConversationFeed({
+  entries,
+  threadId,
+  focusTarget,
+}: {
+  entries: ConversationEntry[];
+  threadId?: string;
+  focusTarget?: ConversationFocusTarget | null;
+}) {
   const [expandedThoughts, setExpandedThoughts] = useState<Record<string, boolean>>({});
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [attachmentPreview, setAttachmentPreview] = useState<UserAttachmentSummary | null>(null);
+  const [highlightedEntryId, setHighlightedEntryId] = useState<string | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const hasIncompleteThought = entries.some((entry) => entry.kind === "thought" && !entry.completed);
@@ -4103,16 +4643,65 @@ function ConversationFeed({ entries, threadId }: { entries: ConversationEntry[];
     });
   }, [entries]);
 
+  useLayoutEffect(() => {
+    if (!focusTarget || !rootRef.current) {
+      return;
+    }
+
+    const selector = focusTarget.itemId
+      ? `[data-entry-item-id="${escapeAttributeValue(focusTarget.itemId)}"]`
+      : focusTarget.turnId
+        ? `[data-entry-turn-id="${escapeAttributeValue(focusTarget.turnId)}"]`
+        : null;
+
+    if (!selector) {
+      return;
+    }
+
+    const target = rootRef.current.querySelector<HTMLElement>(selector);
+
+    if (!target) {
+      return;
+    }
+
+    target.scrollIntoView({
+      behavior: "smooth",
+      block: "center",
+    });
+
+    const entryId = target.dataset.entryId ?? null;
+    setHighlightedEntryId(entryId);
+
+    if (!entryId) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setHighlightedEntryId((current) => (current === entryId ? null : current));
+    }, 1800);
+
+    return () => window.clearTimeout(timer);
+  }, [focusTarget]);
+
   return (
     <>
-      <div className="conversation-feed">
+      <div className="conversation-feed" ref={rootRef}>
         {entries.map((entry) => {
+        const anchor = getConversationEntryAnchor(entry);
+        const isHighlighted = highlightedEntryId === anchor.entryId;
+
         if (entry.kind === "user") {
           const userText = getUserDisplayText(entry.item);
           const attachments = getUserAttachmentSummaries(entry.item);
 
           return (
-            <div key={entry.id} className="conversation-entry conversation-entry--user">
+            <div
+              key={entry.id}
+              className={`conversation-entry conversation-entry--user ${isHighlighted ? "conversation-entry--highlighted" : ""}`}
+              data-entry-id={anchor.entryId}
+              data-entry-turn-id={anchor.turnId}
+              data-entry-item-id={anchor.itemId}
+            >
               <div className={`user-bubble ${!userText && attachments.length > 0 ? "user-bubble--attachments-only" : ""}`}>
                 {userText ? <pre className="user-bubble__text">{userText}</pre> : null}
                 {attachments.length > 0 ? (
@@ -4180,7 +4769,13 @@ function ConversationFeed({ entries, threadId }: { entries: ConversationEntry[];
           const elapsedMs = entry.completed ? entry.durationMs : Math.max(0, nowMs - entry.startedAtMs);
 
           return (
-            <section key={entry.id} className={`thought-group ${expanded ? "thought-group--expanded" : ""}`}>
+            <section
+              key={entry.id}
+              className={`thought-group ${expanded ? "thought-group--expanded" : ""} ${isHighlighted ? "conversation-entry--highlighted" : ""}`}
+              data-entry-id={anchor.entryId}
+              data-entry-turn-id={anchor.turnId}
+              data-entry-item-id={anchor.itemId}
+            >
               <button
                 className="thought-group__toggle"
                 onClick={() =>
@@ -4214,12 +4809,28 @@ function ConversationFeed({ entries, threadId }: { entries: ConversationEntry[];
         }
 
         if (entry.kind === "changes") {
-          return <ChangedFilesCard key={entry.id} items={entry.items} threadId={threadId} />;
+          return (
+            <div
+              key={entry.id}
+              className={isHighlighted ? "conversation-entry--highlighted" : undefined}
+              data-entry-id={anchor.entryId}
+              data-entry-turn-id={anchor.turnId}
+              data-entry-item-id={anchor.itemId}
+            >
+              <ChangedFilesCard items={entry.items} threadId={threadId} />
+            </div>
+          );
         }
 
         if (entry.kind === "answer") {
           return (
-            <section key={entry.id} className="answer-group">
+            <section
+              key={entry.id}
+              className={`answer-group ${isHighlighted ? "conversation-entry--highlighted" : ""}`}
+              data-entry-id={anchor.entryId}
+              data-entry-turn-id={anchor.turnId}
+              data-entry-item-id={anchor.itemId}
+            >
               <div className="answer-group__header">
                 <span className="answer-group__rule" />
                 <span className="answer-group__summary">Final answer</span>
@@ -4233,7 +4844,13 @@ function ConversationFeed({ entries, threadId }: { entries: ConversationEntry[];
         }
 
         return (
-          <section key={entry.id} className="system-note">
+          <section
+            key={entry.id}
+            className={`system-note ${isHighlighted ? "conversation-entry--highlighted" : ""}`}
+            data-entry-id={anchor.entryId}
+            data-entry-turn-id={anchor.turnId}
+            data-entry-item-id={anchor.itemId}
+          >
             <pre className="system-note__text">{getItemDisplayText(entry.item)}</pre>
           </section>
         );
@@ -4438,23 +5055,20 @@ function ChangedFilesCard({ items, threadId }: { items: ItemRecord[]; threadId?:
 }
 
 function DiffPatchPanel({
-  threadId,
   changeSets,
   latestReview,
+  latestReviewArtifact,
+  requestedSelection,
 }: {
-  threadId?: string;
   changeSets: ThreadChangeSet[];
   latestReview: ReviewRecord | null;
+  latestReviewArtifact: ReviewArtifactRecord | null;
+  requestedSelection?: DiffFocusTarget | null;
 }) {
   const [selectedChangeSetId, setSelectedChangeSetId] = useState<string | null>(changeSets[0]?.id ?? null);
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(changeSets[0]?.files[0]?.path ?? null);
   const [viewerMode, setViewerMode] = useState<"diff" | "patch">("diff");
   const [copiedPatchPath, setCopiedPatchPath] = useState<string | null>(null);
-  const [reviews, setReviews] = useState<Record<string, ChangedFileReview>>(() =>
-    Object.fromEntries(
-      changeSets.flatMap((changeSet) => changeSet.files.map((file) => [file.path, { path: file.path, status: "idle" as const }])),
-    ),
-  );
   const allFiles = useMemo(
     () =>
       changeSets
@@ -4470,19 +5084,6 @@ function DiffPatchPanel({
     () => selectedChangeSet?.files.find((file) => file.path === selectedFilePath) ?? selectedChangeSet?.files[0] ?? null,
     [selectedChangeSet, selectedFilePath],
   );
-  const selectedReview = selectedFile ? reviews[selectedFile.path] : undefined;
-
-  useEffect(() => {
-    setReviews((current) => {
-      const next: Record<string, ChangedFileReview> = {};
-
-      for (const file of allFiles) {
-        next[file.path] = current[file.path] ?? { path: file.path, status: "idle" };
-      }
-
-      return next;
-    });
-  }, [allFiles]);
 
   useEffect(() => {
     if (changeSets.length === 0) {
@@ -4508,75 +5109,23 @@ function DiffPatchPanel({
   }, [selectedChangeSet, selectedFilePath]);
 
   useEffect(() => {
-    if (!threadId || allFiles.length === 0) {
+    if (!requestedSelection) {
       return;
     }
 
-    void loadChangedFileSummaries(threadId, allFiles.map((file) => file.path))
-      .then((summary) => {
-        setReviews((current) => {
-          const next = { ...current };
-
-          for (const file of allFiles) {
-            next[file.path] = {
-              ...next[file.path],
-              path: file.path,
-              additions: summary[file.path]?.additions,
-              deletions: summary[file.path]?.deletions,
-              status: next[file.path]?.diff ? "ready" : "idle",
-            };
-          }
-
-          return next;
-        });
-      })
-      .catch(() => undefined);
-  }, [allFiles, threadId]);
-
-  useEffect(() => {
-    if (!threadId || !selectedFile) {
-      return;
+    if (requestedSelection.changeSetId && changeSets.some((changeSet) => changeSet.id === requestedSelection.changeSetId)) {
+      setSelectedChangeSetId(requestedSelection.changeSetId);
+    } else if (requestedSelection.filePath) {
+      const selectedByFile = changeSets.find((changeSet) => changeSet.files.some((file) => file.path === requestedSelection.filePath));
+      if (selectedByFile) {
+        setSelectedChangeSetId(selectedByFile.id);
+      }
     }
 
-    const existing = reviews[selectedFile.path];
-
-    if (existing?.status === "loading" || existing?.status === "ready") {
-      return;
+    if (requestedSelection.filePath) {
+      setSelectedFilePath(requestedSelection.filePath);
     }
-
-    setReviews((current) => ({
-      ...current,
-      [selectedFile.path]: {
-        ...current[selectedFile.path],
-        path: selectedFile.path,
-        status: "loading",
-      },
-    }));
-
-    void loadChangedFileDiff(threadId, selectedFile.path)
-      .then((diff) => {
-        setReviews((current) => ({
-          ...current,
-          [selectedFile.path]: {
-            ...current[selectedFile.path],
-            path: selectedFile.path,
-            diff,
-            status: "ready",
-          },
-        }));
-      })
-      .catch((error) => {
-        setReviews((current) => ({
-          ...current,
-          [selectedFile.path]: {
-            ...current[selectedFile.path],
-            path: selectedFile.path,
-            status: "error",
-            error: error instanceof Error ? error.message : String(error),
-          },
-        }));
-      });
-  }, [reviews, selectedFile, threadId]);
+  }, [changeSets, requestedSelection]);
 
   useEffect(() => {
     if (!copiedPatchPath) {
@@ -4599,12 +5148,12 @@ function DiffPatchPanel({
   }
 
   const handleCopyPatch = async () => {
-    if (!selectedFile || !selectedReview?.diff) {
+    if (!selectedFile?.patch) {
       return;
     }
 
     try {
-      await navigator.clipboard.writeText(selectedReview.diff);
+      await navigator.clipboard.writeText(selectedFile.patch);
       setCopiedPatchPath(selectedFile.path);
     } catch {
       setCopiedPatchPath(null);
@@ -4627,7 +5176,11 @@ function DiffPatchPanel({
       {latestReview ? (
         <div className="diff-panel__review-link">
           <strong>Latest review</strong>
-          <span>{latestReview.summary ?? latestReview.error ?? "Review available for this thread."}</span>
+          <span>
+            {latestReviewArtifact
+              ? `${latestReviewArtifact.sourceLabel} · ${latestReviewArtifact.findingCounts.total} finding${latestReviewArtifact.findingCounts.total === 1 ? "" : "s"}`
+              : latestReview.summary ?? latestReview.error ?? "Review available for this thread."}
+          </span>
         </div>
       ) : null}
 
@@ -4661,8 +5214,6 @@ function DiffPatchPanel({
             </div>
             <div className="diff-panel__file-list">
               {(selectedChangeSet?.files ?? []).map((file) => {
-                const review = reviews[file.path];
-
                 return (
                   <button
                     key={`${selectedChangeSet?.id}:${file.path}`}
@@ -4672,8 +5223,8 @@ function DiffPatchPanel({
                   >
                     <span className="diff-panel__file-path">{file.path}</span>
                     <span className="diff-panel__file-stats">
-                      {typeof review?.additions === "number" && <span className="changed-file__stat changed-file__stat--add">+{review.additions}</span>}
-                      {typeof review?.deletions === "number" && <span className="changed-file__stat changed-file__stat--del">-{review.deletions}</span>}
+                      {typeof file.additions === "number" && <span className="changed-file__stat changed-file__stat--add">+{file.additions}</span>}
+                      {typeof file.deletions === "number" && <span className="changed-file__stat changed-file__stat--del">-{file.deletions}</span>}
                     </span>
                   </button>
                 );
@@ -4715,7 +5266,7 @@ function DiffPatchPanel({
                     type="button"
                     className="diff-panel__copy"
                     onClick={() => void handleCopyPatch()}
-                    disabled={!selectedReview?.diff}
+                    disabled={!selectedFile.patch}
                   >
                     {copiedPatchPath === selectedFile.path ? <Check size={14} /> : <Copy size={14} />}
                     <span>{copiedPatchPath === selectedFile.path ? "Copied" : "Copy patch"}</span>
@@ -4725,30 +5276,19 @@ function DiffPatchPanel({
 
               <div className="diff-panel__viewer-meta">
                 <span>{formatRelativeTime(selectedFile.updatedAt)} updated</span>
-                {selectedReview?.status === "loading" && <span>Loading diff…</span>}
-                {selectedReview?.status === "error" && <span>{selectedReview.error ?? "Unable to read diff."}</span>}
+                <span>{selectedFile.status}</span>
               </div>
 
               <div className="diff-panel__viewer-body">
-                {selectedReview?.status === "loading" && <div className="changed-file__empty">Loading diff...</div>}
-                {selectedReview?.status === "error" && (
-                  <div className="changed-file__empty">
-                    {selectedReview.error ?? "Unable to read this file diff."}
-                  </div>
-                )}
-                {selectedReview?.status === "ready" && selectedReview.diff ? (
+                {selectedFile.patch ? (
                   viewerMode === "diff" ? (
-                    <div className="changed-file__diff-lines">{renderDiffLines(selectedReview.diff)}</div>
+                    <div className="changed-file__diff-lines">{renderDiffLines(selectedFile.patch)}</div>
                   ) : (
-                    <pre className="diff-panel__patch">{selectedReview.diff}</pre>
+                    <pre className="diff-panel__patch">{selectedFile.patch}</pre>
                   )
-                ) : null}
-                {selectedReview?.status === "ready" && !selectedReview.diff && (
+                ) : (
                   <div className="changed-file__empty">No git diff is available for this file yet.</div>
                 )}
-                {!selectedReview || selectedReview.status === "idle" ? (
-                  <div className="changed-file__empty">Select a changed file to load its current workspace patch.</div>
-                ) : null}
               </div>
             </>
           ) : (
@@ -4772,6 +5312,8 @@ function ApprovalRequest({
   onApprove: (scope: "once" | "session") => void;
   onReject: () => void;
 }) {
+  const toolSummary = approval.tool ? formatToolReferenceSummary(approval.tool) : null;
+
   return (
     <div className="approval-request">
       <div className="approval-request__header">
@@ -4781,6 +5323,8 @@ function ApprovalRequest({
       <div className="approval-request__content">
         <p><strong>{approval.toolName}</strong></p>
         <p>{approval.reason}</p>
+        {toolSummary && <p>{toolSummary}</p>}
+        {approval.mode && <p>Approval mode: {approval.mode}</p>}
         <pre>{JSON.stringify(approval.args, null, 2)}</pre>
       </div>
       <div className="approval-request__actions">
@@ -4800,9 +5344,95 @@ function ApprovalRequest({
   );
 }
 
-function ReviewSummaryCard({ review }: { review: ReviewRecord }) {
+function PlanSummaryCard({
+  plan,
+  onOpenTurn,
+}: {
+  plan: TurnPlanRecord;
+  onOpenTurn?: (plan: TurnPlanRecord) => void;
+}) {
   return (
     <section className="review-card">
+      <div className="review-card__header">
+        <div>
+          <div className="review-card__title">Execution plan</div>
+          <div className="review-card__status review-card__status--running">Structured</div>
+        </div>
+        <div className="review-card__actions">
+          <div className="review-card__meta">{plan.steps.length} step{plan.steps.length === 1 ? "" : "s"}</div>
+          {onOpenTurn ? (
+            <button type="button" className="button button--ghost button--small" onClick={() => onOpenTurn(plan)}>
+              Open Turn
+            </button>
+          ) : null}
+        </div>
+      </div>
+      <p className="review-card__summary">{plan.summary ?? "Plan extracted from the latest planning turn."}</p>
+      <div className="review-card__findings">
+        {plan.steps.map((step) => (
+          <button
+            key={step.id}
+            type="button"
+            className={`review-finding review-finding--interactive ${onOpenTurn ? "review-finding--button" : ""}`}
+            onClick={onOpenTurn ? () => onOpenTurn(plan) : undefined}
+          >
+            <div className="review-finding__header">
+              <span className={`review-finding__severity review-finding__severity--${step.status === "completed" ? "low" : step.status === "blocked" ? "critical" : "medium"}`}>
+                {step.status.replace("_", " ")}
+              </span>
+              <strong>{step.title}</strong>
+            </div>
+            {step.detail && <p className="review-finding__detail">{step.detail}</p>}
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function PlanWorkspacePanel({
+  plan,
+  onOpenTurn,
+}: {
+  plan: TurnPlanRecord | null;
+  onOpenTurn?: (plan: TurnPlanRecord) => void;
+}) {
+  if (!plan) {
+    return <div className="changed-file__empty">No structured plan has been captured for this thread yet.</div>;
+  }
+
+  return <PlanSummaryCard plan={plan} onOpenTurn={onOpenTurn} />;
+}
+
+function ReviewSummaryCard({
+  review,
+  artifact,
+  highlightedFindingId,
+  onOpenReview,
+  onOpenFile,
+}: {
+  review: ReviewRecord;
+  artifact: ReviewArtifactRecord | null;
+  highlightedFindingId?: string;
+  onOpenReview?: (reviewId: string) => void;
+  onOpenFile?: (reviewId: string, findingId: string, filePath?: string) => void;
+}) {
+  const orderedFindings = useMemo(
+    () =>
+      [...review.findings].sort((left, right) => {
+        const severity = compareReviewSeverity(left.severity, right.severity);
+
+        if (severity !== 0) {
+          return severity;
+        }
+
+        return `${left.file ?? ""}:${left.line ?? 0}`.localeCompare(`${right.file ?? ""}:${right.line ?? 0}`);
+      }),
+    [review.findings],
+  );
+
+  return (
+    <section className="review-card" data-review-id={review.id}>
       <div className="review-card__header">
         <div>
           <div className="review-card__title">Code review</div>
@@ -4810,13 +5440,33 @@ function ReviewSummaryCard({ review }: { review: ReviewRecord }) {
             {review.status === "running" ? "Running" : review.status === "failed" ? "Failed" : "Completed"}
           </div>
         </div>
-        <div className="review-card__meta">{formatReviewSourceLabel(review.source)}</div>
+        <div className="review-card__actions">
+          <div className="review-card__meta">{artifact?.sourceLabel ?? formatReviewSourceLabel(review.source)}</div>
+          {onOpenReview ? (
+            <button type="button" className="button button--ghost button--small" onClick={() => onOpenReview(review.id)}>
+              Open Review
+            </button>
+          ) : null}
+        </div>
       </div>
       <p className="review-card__summary">{review.error ?? review.summary ?? "Review is in progress."}</p>
-      {review.findings.length > 0 && (
+      {artifact?.diffStats && (
+        <div className="run-context-card__meta">
+          <span>{artifact.diffStats.fileCount} file{artifact.diffStats.fileCount === 1 ? "" : "s"}</span>
+          <span>+{artifact.diffStats.additions}</span>
+          <span>-{artifact.diffStats.deletions}</span>
+          <span>{artifact.findingCounts.total} finding{artifact.findingCounts.total === 1 ? "" : "s"}</span>
+        </div>
+      )}
+      {orderedFindings.length > 0 && (
         <div className="review-card__findings">
-          {review.findings.map((finding) => (
-            <article key={finding.id} className="review-finding">
+          {orderedFindings.map((finding) => (
+            <button
+              key={finding.id}
+              type="button"
+              className={`review-finding review-finding--button ${finding.id === highlightedFindingId ? "review-finding--active" : ""}`}
+              onClick={() => onOpenFile?.(review.id, finding.id, finding.file)}
+            >
               <div className="review-finding__header">
                 <span className={`review-finding__severity review-finding__severity--${finding.severity}`}>{finding.severity}</span>
                 <strong>{finding.summary}</strong>
@@ -4828,11 +5478,120 @@ function ReviewSummaryCard({ review }: { review: ReviewRecord }) {
                 </div>
               )}
               {finding.detail && <p className="review-finding__detail">{finding.detail}</p>}
-            </article>
+            </button>
           ))}
         </div>
       )}
     </section>
+  );
+}
+
+function ReviewFindingsPanel({
+  reviews,
+  reviewArtifacts,
+  requestedFocus,
+  onOpenReview,
+  onOpenFile,
+}: {
+  reviews: ReviewRecord[];
+  reviewArtifacts: Record<string, ReviewArtifactRecord>;
+  requestedFocus?: ReviewFocusTarget | null;
+  onOpenReview?: (target: Omit<ReviewFocusTarget, "token">) => void;
+  onOpenFile?: (params: { reviewId: string; findingId?: string; filePath?: string }) => void;
+}) {
+  const [highlightedReviewId, setHighlightedReviewId] = useState<string | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const aggregatedCounts = useMemo(
+    () =>
+      reviews.reduce(
+        (counts, review) => {
+          const artifact = reviewArtifacts[review.id] ?? buildReviewArtifactFallback(review);
+          counts.total += artifact.findingCounts.total;
+          counts.critical += artifact.findingCounts.critical;
+          counts.high += artifact.findingCounts.high;
+          counts.medium += artifact.findingCounts.medium;
+          counts.low += artifact.findingCounts.low;
+          return counts;
+        },
+        {
+          total: 0,
+          critical: 0,
+          high: 0,
+          medium: 0,
+          low: 0,
+        },
+      ),
+    [reviewArtifacts, reviews],
+  );
+
+  useLayoutEffect(() => {
+    if (!requestedFocus || !rootRef.current) {
+      return;
+    }
+
+    const selector = requestedFocus.reviewId
+      ? `[data-review-id="${escapeAttributeValue(requestedFocus.reviewId)}"]`
+      : null;
+
+    if (!selector) {
+      return;
+    }
+
+    const target = rootRef.current.querySelector<HTMLElement>(selector);
+
+    if (!target) {
+      return;
+    }
+
+    target.scrollIntoView({
+      behavior: "smooth",
+      block: "center",
+    });
+    setHighlightedReviewId(requestedFocus.reviewId ?? null);
+
+    const timer = window.setTimeout(() => {
+      setHighlightedReviewId((current) => (current === requestedFocus.reviewId ? null : current));
+    }, 1800);
+
+    return () => window.clearTimeout(timer);
+  }, [requestedFocus]);
+
+  if (reviews.length === 0) {
+    return <div className="changed-file__empty">No structured review findings are available for this thread yet.</div>;
+  }
+
+  return (
+    <div ref={rootRef}>
+      <div className="workflow-dashboard">
+        <div className="workflow-dashboard__card">
+          <strong>{aggregatedCounts.total}</strong>
+          <span>Total findings</span>
+        </div>
+        <div className="workflow-dashboard__card">
+          <strong>{aggregatedCounts.critical + aggregatedCounts.high}</strong>
+          <span>High impact</span>
+        </div>
+        <div className="workflow-dashboard__card">
+          <strong>{aggregatedCounts.medium}</strong>
+          <span>Medium</span>
+        </div>
+        <div className="workflow-dashboard__card">
+          <strong>{aggregatedCounts.low}</strong>
+          <span>Low</span>
+        </div>
+      </div>
+      {reviews.map((review) => (
+        <div key={review.id} className={highlightedReviewId === review.id ? "conversation-entry--highlighted" : undefined}>
+          <ReviewSummaryCard
+            review={review}
+            artifact={reviewArtifacts[review.id] ?? buildReviewArtifactFallback(review)}
+            highlightedFindingId={requestedFocus?.reviewId === review.id ? requestedFocus.findingId : undefined}
+            onOpenReview={onOpenReview ? (reviewId) => onOpenReview({ reviewId }) : undefined}
+            onOpenFile={onOpenFile ? (reviewId, findingId, filePath) => onOpenFile({ reviewId, findingId, filePath }) : undefined}
+          />
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -4868,6 +5627,203 @@ function RunContextCard({ snapshot }: { snapshot: TurnContextSnapshotRecord }) {
         ))}
       </div>
     </details>
+  );
+}
+
+function ThreadRuntimePanel({
+  snapshot,
+  agentTree,
+  executionContexts,
+  worktrees,
+  environments,
+  lineage,
+  requestedSelection,
+  onOpenThread,
+}: {
+  snapshot: TurnContextSnapshotRecord | null;
+  agentTree: AgentTreeNode[];
+  executionContexts: ExecutionContextRecord[];
+  worktrees: WorktreeRecord[];
+  environments: EnvironmentRecord[];
+  lineage: ContextLineageNode[];
+  requestedSelection?: RuntimeFocusTarget | null;
+  onOpenThread?: (threadId: string) => void;
+}) {
+  const [selection, setSelection] = useState<RuntimeFocusTarget | null>(null);
+
+  useEffect(() => {
+    if (requestedSelection) {
+      setSelection(requestedSelection);
+      return;
+    }
+
+    setSelection((current) => {
+      if (current) {
+        if (current.kind === "agent" && findAgentTreeNodeById(agentTree, current.id)) {
+          return current;
+        }
+        if (current.kind === "executionContext" && executionContexts.some((executionContext) => executionContext.id === current.id)) {
+          return current;
+        }
+        if (current.kind === "worktree" && worktrees.some((worktree) => worktree.id === current.id)) {
+          return current;
+        }
+        if (current.kind === "environment" && environments.some((environment) => environment.id === current.id)) {
+          return current;
+        }
+      }
+
+      if (agentTree[0]) {
+        return {
+          token: Date.now(),
+          kind: "agent",
+          id: agentTree[0].task.id,
+        };
+      }
+
+      if (executionContexts[0]) {
+        return {
+          token: Date.now(),
+          kind: "executionContext",
+          id: executionContexts[0].id,
+        };
+      }
+
+      if (worktrees[0]) {
+        return {
+          token: Date.now(),
+          kind: "worktree",
+          id: worktrees[0].id,
+        };
+      }
+
+      if (environments[0]) {
+        return {
+          token: Date.now(),
+          kind: "environment",
+          id: environments[0].id,
+        };
+      }
+
+      return null;
+    });
+  }, [agentTree, environments, executionContexts, requestedSelection, worktrees]);
+
+  const selectedAgent = useMemo(
+    () => (selection?.kind === "agent" ? findAgentTreeNodeById(agentTree, selection.id)?.task ?? null : null),
+    [agentTree, selection],
+  );
+  const selectedExecutionContext = useMemo(
+    () =>
+      selection?.kind === "executionContext" ? executionContexts.find((executionContext) => executionContext.id === selection.id) ?? null : null,
+    [executionContexts, selection],
+  );
+  const selectedWorktree = useMemo(
+    () => (selection?.kind === "worktree" ? worktrees.find((worktree) => worktree.id === selection.id) ?? null : null),
+    [selection, worktrees],
+  );
+  const selectedEnvironment = useMemo(
+    () => (selection?.kind === "environment" ? environments.find((environment) => environment.id === selection.id) ?? null : null),
+    [environments, selection],
+  );
+
+  return (
+    <>
+      {snapshot && <RunContextCard snapshot={snapshot} />}
+      <div className="workflow-dashboard">
+        <div className="workflow-dashboard__card">
+          <strong>{agentTree.length}</strong>
+          <span>Agent roots</span>
+        </div>
+        <div className="workflow-dashboard__card">
+          <strong>{executionContexts.length}</strong>
+          <span>Execution contexts</span>
+        </div>
+        <div className="workflow-dashboard__card">
+          <strong>{worktrees.length}</strong>
+          <span>Worktrees</span>
+        </div>
+        <div className="workflow-dashboard__card">
+          <strong>{environments.length}</strong>
+          <span>Environments</span>
+        </div>
+      </div>
+      <div className="workflow-runtime-grid">
+        <RuntimeAgentTree
+          roots={agentTree}
+          selectedAgentId={selection?.kind === "agent" ? selection.id : undefined}
+          onSelectAgent={(agentId) =>
+            setSelection({
+              token: Date.now(),
+              kind: "agent",
+              id: agentId,
+            })
+          }
+        />
+        <RuntimeMetaSection
+          title="Execution Contexts"
+          emptyLabel="No execution contexts for this thread."
+          items={executionContexts.map((executionContext) => ({
+            id: executionContext.id,
+            title: `${executionContext.kind} · ${executionContext.cwd}`,
+            detail: executionContext.id,
+          }))}
+          selectedItemId={selection?.kind === "executionContext" ? selection.id : undefined}
+          onSelectItem={(id) =>
+            setSelection({
+              token: Date.now(),
+              kind: "executionContext",
+              id,
+            })
+          }
+        />
+        <RuntimeMetaSection
+          title="Worktrees"
+          emptyLabel="No thread worktrees."
+          items={worktrees.map((worktree) => ({
+            id: worktree.id,
+            title: `${worktree.branch} · ${worktree.status}`,
+            detail: worktree.path,
+          }))}
+          selectedItemId={selection?.kind === "worktree" ? selection.id : undefined}
+          onSelectItem={(id) =>
+            setSelection({
+              token: Date.now(),
+              kind: "worktree",
+              id,
+            })
+          }
+        />
+        <RuntimeMetaSection
+          title="Environments"
+          emptyLabel="No runtime environments."
+          items={environments.map((environment) => ({
+            id: environment.id,
+            title: `${environment.shell} · ${environment.cwd}`,
+            detail: environment.id,
+          }))}
+          selectedItemId={selection?.kind === "environment" ? selection.id : undefined}
+          onSelectItem={(id) =>
+            setSelection({
+              token: Date.now(),
+              kind: "environment",
+              id,
+            })
+          }
+        />
+      </div>
+      <RuntimeSelectionDetail
+        agent={selectedAgent}
+        executionContext={selectedExecutionContext}
+        worktree={selectedWorktree}
+        environment={selectedEnvironment}
+        onOpenThread={onOpenThread}
+      />
+      <RuntimeContextLineage
+        nodes={lineage}
+        selectedNodeId={buildRuntimeSelectionNodeId(selection)}
+      />
+    </>
   );
 }
 
@@ -5779,8 +6735,40 @@ function buildConversationEntries(items: ItemRecord[]): ConversationEntry[] {
   return entries;
 }
 
+function getConversationEntryAnchor(entry: ConversationEntry): { entryId: string; turnId?: string; itemId?: string } {
+  if (entry.kind === "thought" || entry.kind === "changes") {
+    return {
+      entryId: entry.id,
+      turnId: entry.items[0]?.turnId,
+      itemId: entry.items[0]?.id,
+    };
+  }
+
+  return {
+    entryId: entry.id,
+    turnId: entry.item.turnId,
+    itemId: entry.item.id,
+  };
+}
+
+function escapeAttributeValue(value: string) {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
 function getItemDisplayText(item: ItemRecord) {
-  return [item.title, item.body].filter(Boolean).join("\n\n");
+  const tool = getToolReferenceFromMetadata(item.metadata);
+  const toolError = getToolErrorFromMetadata(item.metadata);
+  const sections = [item.title, item.body].filter(Boolean);
+
+  if (tool) {
+    sections.push(formatToolReferenceSummary(tool));
+  }
+
+  if (toolError) {
+    sections.push(formatToolErrorSummary(toolError));
+  }
+
+  return sections.join("\n\n");
 }
 
 function getUserDisplayText(item: ItemRecord) {
@@ -5879,6 +6867,64 @@ function formatThoughtItemText(item: ItemRecord) {
   }
 
   return `${ITEM_LABELS[item.kind]}: ${content}`;
+}
+
+function getToolReferenceFromMetadata(metadata: ItemRecord["metadata"]): ToolReferenceRecord | undefined {
+  const raw = metadata?.tool;
+
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+
+  const record = raw as ToolReferenceRecord;
+  return record.name && record.source && record.capability ? record : undefined;
+}
+
+function getToolErrorFromMetadata(metadata: ItemRecord["metadata"]): ToolErrorRecord | undefined {
+  const raw = metadata?.toolError;
+
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+
+  const record = raw as ToolErrorRecord;
+  return record.code && record.message ? record : undefined;
+}
+
+function formatToolReferenceSummary(tool: ToolReferenceRecord): string {
+  const capabilitySummary = [
+    tool.capability.writes ? "writes" : "read-only",
+    tool.capability.network ? "network" : null,
+    tool.capability.interactive ? "interactive" : null,
+    tool.capability.approvalModes.filter((mode) => mode !== "none").join("/"),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  return [
+    `Tool: ${tool.name}`,
+    `Source: ${formatToolSourceLabel(tool)}`,
+    capabilitySummary ? `Capability: ${capabilitySummary}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function formatToolErrorSummary(toolError: ToolErrorRecord): string {
+  return [
+    `Tool error: ${toolError.code}`,
+    `Retryable: ${toolError.retryable ? "yes" : "no"}`,
+    toolError.tool ? `Tool source: ${formatToolSourceLabel(toolError.tool)}` : null,
+    toolError.approvalMode ? `Approval mode: ${toolError.approvalMode}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function formatToolSourceLabel(tool: ToolReferenceRecord): string {
+  const source = tool.source;
+  const name = source.label ?? source.id ?? source.type;
+  return `${source.type}${name && name !== source.type ? `:${name}` : ""}`;
 }
 
 function formatElapsedTime(durationMs: number) {
@@ -6000,6 +7046,8 @@ function createEmptyThreadSessionView() {
     turns: [] as TurnRecord[],
     items: [] as ItemRecord[],
     turnContexts: [] as TurnContextSnapshotRecord[],
+    turnPlans: [] as TurnPlanRecord[],
+    turnDiffs: [] as TurnDiffRecord[],
     pendingApproval: null as PendingApproval | null,
     submitting: false,
   };
@@ -6124,9 +7172,15 @@ function buildThreadChangeSets(params: { items: ItemRecord[]; turns: TurnRecord[
     const current = grouped.get(key) ?? {
       id: key,
       turnId: item.turnId,
+      threadId: item.threadId,
       createdAt: item.createdAt,
       updatedAt: item.updatedAt,
       label: formatTurnDiffLabel(turnEntry?.turn, turnEntry ? turnEntry.index + 1 : grouped.size + 1),
+      stats: {
+        fileCount: 0,
+        additions: 0,
+        deletions: 0,
+      },
       files: [],
     };
     const nextFile: ThreadChangeFile = {
@@ -6134,8 +7188,7 @@ function buildThreadChangeSets(params: { items: ItemRecord[]; turns: TurnRecord[
       turnId: item.turnId,
       path,
       title: item.title,
-      body: item.body,
-      createdAt: item.createdAt,
+      status: "unknown",
       updatedAt: item.updatedAt,
     };
     const existingIndex = current.files.findIndex((file) => file.path === path);
@@ -6154,6 +7207,11 @@ function buildThreadChangeSets(params: { items: ItemRecord[]; turns: TurnRecord[
   return [...grouped.values()]
     .map((changeSet) => ({
       ...changeSet,
+      stats: {
+        fileCount: changeSet.files.length,
+        additions: changeSet.files.reduce((total, file) => total + (file.additions ?? 0), 0),
+        deletions: changeSet.files.reduce((total, file) => total + (file.deletions ?? 0), 0),
+      },
       files: [...changeSet.files].sort((left, right) => left.path.localeCompare(right.path)),
     }))
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
@@ -6192,6 +7250,64 @@ function formatReviewSourceLabel(source: ReviewRecord["source"]): string {
   }
 
   return source.kind === "workspace" ? "Workspace diff" : "Staged diff";
+}
+
+function buildReviewArtifactFallback(review: ReviewRecord): ReviewArtifactRecord {
+  return {
+    sourceLabel: formatReviewSourceLabel(review.source),
+    findingCounts: review.findings.reduce(
+      (counts, finding) => {
+        counts.total += 1;
+        counts[finding.severity] += 1;
+        return counts;
+      },
+      {
+        total: 0,
+        critical: 0,
+        high: 0,
+        medium: 0,
+        low: 0,
+      },
+    ),
+  };
+}
+
+function compareReviewSeverity(
+  left: ReviewRecord["findings"][number]["severity"],
+  right: ReviewRecord["findings"][number]["severity"],
+) {
+  return getReviewSeverityRank(right) - getReviewSeverityRank(left);
+}
+
+function getReviewSeverityRank(severity: ReviewRecord["findings"][number]["severity"]) {
+  switch (severity) {
+    case "critical":
+      return 4;
+    case "high":
+      return 3;
+    case "medium":
+      return 2;
+    case "low":
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+function findChangeSetSelectionForFile(
+  changeSets: ThreadChangeSet[],
+  filePath: string,
+): { changeSetId: string; filePath: string } | null {
+  const match = changeSets.find((changeSet) => changeSet.files.some((file) => file.path === filePath));
+
+  if (!match) {
+    return null;
+  }
+
+  return {
+    changeSetId: match.id,
+    filePath,
+  };
 }
 
 async function loadChangedFileSummaries(
