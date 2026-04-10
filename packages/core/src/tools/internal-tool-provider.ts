@@ -1,119 +1,51 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { type WorkspaceProfile } from "@my-agent/protocol";
-import { z } from "zod";
-import { findGitRoot } from "../utils/path-utils.js";
+import { HarnessDatabase } from "../store/database.js";
+import { discoverInternalToolEntries, type InternalToolManifest } from "../services/internal-tool-registry.js";
 import { type JsonSchemaObject, type RuntimeToolCapability, type RuntimeToolDefinition, type RuntimeToolSourceMetadata, type ToolProvider } from "./types.js";
 
-const INTERNAL_TOOL_MANIFEST_SCHEMA = z.object({
-  name: z.string().min(1),
-  description: z.string().min(1),
-  endpoint: z.string().url(),
-  method: z.enum(["GET", "POST"]).default("POST"),
-  headers: z.record(z.string(), z.string()).optional(),
-  parameters: z
-    .object({
-      type: z.literal("object"),
-      properties: z.record(z.string(), z.unknown()).default({}),
-      required: z.array(z.string()).optional(),
-      additionalProperties: z.boolean().optional(),
-      description: z.string().optional(),
-    })
-    .default({
-      type: "object",
-      properties: {},
-      additionalProperties: true,
-    }),
-  timeoutMs: z.number().int().positive().max(120_000).optional(),
-  approval: z
-    .object({
-      required: z.boolean().default(true),
-      reason: z.string().optional(),
-      writes: z.boolean().default(false),
-      network: z.boolean().default(true),
-    })
-    .default({
-      required: true,
-      writes: false,
-      network: true,
-    }),
-});
-
-type InternalToolManifest = z.infer<typeof INTERNAL_TOOL_MANIFEST_SCHEMA>;
-
-interface LoadedInternalToolManifest {
-  manifest: InternalToolManifest;
-  manifestPath: string;
-}
-
 export class InternalToolProvider implements ToolProvider {
-  constructor(private readonly homeDir = process.env.MY_AGENT_HOME ?? join(homedir(), ".my-agent")) {}
+  constructor(
+    private readonly homeDir = process.env.MY_AGENT_HOME ?? join(homedir(), ".my-agent"),
+    private readonly database?: HarnessDatabase,
+  ) {}
 
   listTools(workspace: WorkspaceProfile): RuntimeToolDefinition[] {
-    return this.loadManifests(workspace).map(({ manifest, manifestPath }) => {
-      const source = buildInternalSource(manifest, manifestPath);
+    return discoverInternalToolEntries({
+      workspaceRoot: workspace.rootPath,
+      persisted: this.database?.listInternalTools(),
+      homeDir: this.homeDir,
+    }).flatMap(({ manifest, record }) => {
+      if (!manifest || !record.enabled || record.validationErrors.length > 0) {
+        return [];
+      }
 
-      return {
-        name: manifest.name,
-        description: manifest.description,
-        parameters: manifest.parameters as JsonSchemaObject,
-        strict: true,
-        source,
-        capability: buildInternalCapability(manifest),
-        parseArgs: (input) => parseManifestArgs(manifest, input),
-        buildDescriptor: (args) => ({
+      const source = buildInternalSource(manifest, record.path);
+
+      return [
+        {
+          name: manifest.name,
+          description: manifest.description,
+          parameters: manifest.parameters as JsonSchemaObject,
+          strict: true,
           source,
-          preview: `${manifest.name} -> ${manifest.endpoint}`,
-          scopeKey: `${manifest.name}:${JSON.stringify(args)}`,
-          risky: manifest.approval.required,
-          writes: manifest.approval.writes,
-          network: manifest.approval.network,
-          timeoutMs: manifest.timeoutMs ?? 30_000,
-          approvalReason: manifest.approval.reason ?? `Internal tool ${manifest.name} requires approval.`,
-        }),
-        execute: async (args, context) => executeManifest(manifest, args, context.signal),
-      };
+          capability: buildInternalCapability(manifest),
+          parseArgs: (input) => parseManifestArgs(manifest, input),
+          buildDescriptor: (args) => ({
+            source,
+            preview: `${manifest.name} -> ${manifest.endpoint}`,
+            scopeKey: `${manifest.name}:${JSON.stringify(args)}`,
+            risky: manifest.approval.required,
+            writes: manifest.approval.writes,
+            network: manifest.approval.network,
+            timeoutMs: manifest.timeoutMs ?? 30_000,
+            approvalReason: manifest.approval.reason ?? `Internal tool ${manifest.name} requires approval.`,
+          }),
+          execute: async (args, context) => executeManifest(manifest, args, context.signal),
+        },
+      ];
     });
-  }
-
-  private loadManifests(workspace: WorkspaceProfile): LoadedInternalToolManifest[] {
-    const roots = new Set<string>([join(this.homeDir, "internal-tools")]);
-    const repoRoot = findGitRoot(workspace.rootPath);
-
-    if (repoRoot) {
-      roots.add(join(repoRoot, ".agents", "internal-tools"));
-    } else {
-      roots.add(join(workspace.rootPath, ".agents", "internal-tools"));
-    }
-
-    const manifests: LoadedInternalToolManifest[] = [];
-
-    for (const root of roots) {
-      if (!existsSync(root)) {
-        continue;
-      }
-
-      for (const entry of readdirSync(root, { withFileTypes: true })) {
-        if (!entry.isFile() || !entry.name.endsWith(".json")) {
-          continue;
-        }
-
-        const absolute = join(root, entry.name);
-
-        try {
-          const parsed = INTERNAL_TOOL_MANIFEST_SCHEMA.parse(JSON.parse(readFileSync(absolute, "utf8")));
-          manifests.push({
-            manifest: parsed,
-            manifestPath: absolute,
-          });
-        } catch (error) {
-          console.warn(`[internal-tools] Skipping invalid manifest ${absolute}: ${error instanceof Error ? error.message : String(error)}`);
-        }
-      }
-    }
-
-    return manifests;
   }
 }
 

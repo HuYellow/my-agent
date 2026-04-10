@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { discoverPluginEntries } from "../src/services/plugin-registry.js";
 import { HarnessDatabase } from "../src/store/database.js";
 import { ToolService } from "../src/tools/tool-service.js";
 import {
@@ -264,6 +265,63 @@ describe("ToolService", () => {
     expect(mcp?.source.type).toBe("mcp");
     expect(mcp?.source.details?.mountId).toBe("mount_docs");
     expect(mcp?.capability.riskLevel).toBe("network");
+  });
+
+  it("requires trust before exposing user-installed plugin tools", () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "my-agent-home-"));
+    const { database, workspace } = createWorkspace({
+      sandboxMode: "danger-full-access",
+      approvalPolicy: "never",
+    });
+    mkdirSync(join(homeDir, "plugins", "sample-plugin", ".codex-plugin"), { recursive: true });
+    writeFileSync(
+      join(homeDir, "plugins", "sample-plugin", ".codex-plugin", "plugin.json"),
+      JSON.stringify({
+        name: "sample-plugin",
+        version: "1.2.3",
+        enabled: true,
+        sandboxMode: "read-only",
+        command: process.execPath,
+        args: ["-e", "process.stdin.resume();process.stdin.on('data', (chunk) => process.stdout.write(chunk));"],
+        tool: {
+          name: "plugin_echo",
+          description: "Echo plugin payload",
+          parameters: {
+            type: "object",
+            properties: {},
+            additionalProperties: true,
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const untrustedService = new ToolService(workspace, {
+      database,
+      threadId: "thread-1",
+      homeDir,
+    });
+
+    expect(untrustedService.getDefinitions().find((definition) => definition.name === "plugin_echo")).toBeUndefined();
+
+    const discovered = discoverPluginEntries({
+      workspaceRoot: workspace.rootPath,
+      persisted: database.listPlugins(),
+      homeDir,
+    });
+    database.upsertPlugin({
+      ...discovered[0]!.record,
+      trusted: true,
+      updatedAt: new Date().toISOString(),
+    });
+
+    const trustedService = new ToolService(workspace, {
+      database,
+      threadId: "thread-1",
+      homeDir,
+    });
+
+    expect(trustedService.getDefinitions().find((definition) => definition.name === "plugin_echo")).toBeDefined();
   });
 
   it("classifies validation failures with the unified tool error model", async () => {

@@ -10,6 +10,7 @@ import {
   type AppConfig,
   type ExecutionContextRecord,
   type ItemRecord,
+  type InternalToolRecord,
   type McpMountRecord,
   type McpPromptRecord,
   type McpResourceRecord,
@@ -380,12 +381,36 @@ export class HarnessDatabase {
         name TEXT NOT NULL,
         version TEXT NOT NULL,
         path TEXT NOT NULL,
+        manifest_path TEXT NOT NULL DEFAULT '',
         source TEXT NOT NULL,
         enabled INTEGER NOT NULL,
+        trusted INTEGER NOT NULL DEFAULT 0,
         capabilities_json TEXT NOT NULL,
+        tool_name TEXT,
         sandbox_mode TEXT,
         command TEXT,
         args_json TEXT,
+        validation_errors_json TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS internal_tools (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL,
+        path TEXT NOT NULL,
+        source TEXT NOT NULL,
+        enabled INTEGER NOT NULL,
+        endpoint TEXT,
+        method TEXT,
+        timeout_ms INTEGER,
+        approval_required INTEGER NOT NULL,
+        approval_reason TEXT,
+        writes INTEGER NOT NULL,
+        network INTEGER NOT NULL,
+        parameters_schema_json TEXT,
+        validation_errors_json TEXT NOT NULL DEFAULT '[]',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -1517,18 +1542,24 @@ export class HarnessDatabase {
   upsertPlugin(plugin: PluginRecord): PluginRecord {
     this.db
       .prepare(
-        `INSERT INTO plugins(id, name, version, path, source, enabled, capabilities_json, sandbox_mode, command, args_json, created_at, updated_at)
-         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO plugins(
+           id, name, version, path, manifest_path, source, enabled, trusted, capabilities_json, tool_name, sandbox_mode, command, args_json, validation_errors_json, created_at, updated_at
+         )
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            name = excluded.name,
            version = excluded.version,
            path = excluded.path,
+           manifest_path = excluded.manifest_path,
            source = excluded.source,
            enabled = excluded.enabled,
+           trusted = excluded.trusted,
            capabilities_json = excluded.capabilities_json,
+           tool_name = excluded.tool_name,
            sandbox_mode = excluded.sandbox_mode,
            command = excluded.command,
            args_json = excluded.args_json,
+           validation_errors_json = excluded.validation_errors_json,
            updated_at = excluded.updated_at`,
       )
       .run(
@@ -1536,21 +1567,86 @@ export class HarnessDatabase {
         plugin.name,
         plugin.version,
         plugin.path,
+        plugin.manifestPath,
         plugin.source,
         plugin.enabled ? 1 : 0,
+        plugin.trusted ? 1 : 0,
         JSON.stringify(plugin.capabilities),
+        plugin.toolName ?? null,
         plugin.sandboxMode ?? null,
         plugin.command ?? null,
         plugin.args ? JSON.stringify(plugin.args) : null,
+        JSON.stringify(plugin.validationErrors),
         plugin.createdAt,
         plugin.updatedAt,
       );
     return plugin;
   }
 
+  getPlugin(pluginId: string): PluginRecord | null {
+    const row = this.db.prepare("SELECT * FROM plugins WHERE id = ?").get(pluginId) as Record<string, unknown> | undefined;
+    return row ? this.mapPlugin(row) : null;
+  }
+
   listPlugins(): PluginRecord[] {
     const rows = this.db.prepare("SELECT * FROM plugins ORDER BY name ASC").all() as Record<string, unknown>[];
     return rows.map((row) => this.mapPlugin(row));
+  }
+
+  upsertInternalTool(internalTool: InternalToolRecord): InternalToolRecord {
+    this.db
+      .prepare(
+        `INSERT INTO internal_tools(
+           id, name, description, path, source, enabled, endpoint, method, timeout_ms, approval_required, approval_reason, writes, network, parameters_schema_json, validation_errors_json, created_at, updated_at
+         )
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           name = excluded.name,
+           description = excluded.description,
+           path = excluded.path,
+           source = excluded.source,
+           enabled = excluded.enabled,
+           endpoint = excluded.endpoint,
+           method = excluded.method,
+           timeout_ms = excluded.timeout_ms,
+           approval_required = excluded.approval_required,
+           approval_reason = excluded.approval_reason,
+           writes = excluded.writes,
+           network = excluded.network,
+           parameters_schema_json = excluded.parameters_schema_json,
+           validation_errors_json = excluded.validation_errors_json,
+           updated_at = excluded.updated_at`,
+      )
+      .run(
+        internalTool.id,
+        internalTool.name,
+        internalTool.description,
+        internalTool.path,
+        internalTool.source,
+        internalTool.enabled ? 1 : 0,
+        internalTool.endpoint ?? null,
+        internalTool.method ?? null,
+        internalTool.timeoutMs ?? null,
+        internalTool.approvalRequired ? 1 : 0,
+        internalTool.approvalReason ?? null,
+        internalTool.writes ? 1 : 0,
+        internalTool.network ? 1 : 0,
+        internalTool.parametersSchema ? JSON.stringify(internalTool.parametersSchema) : null,
+        JSON.stringify(internalTool.validationErrors),
+        internalTool.createdAt,
+        internalTool.updatedAt,
+      );
+    return internalTool;
+  }
+
+  getInternalTool(internalToolId: string): InternalToolRecord | null {
+    const row = this.db.prepare("SELECT * FROM internal_tools WHERE id = ?").get(internalToolId) as Record<string, unknown> | undefined;
+    return row ? this.mapInternalTool(row) : null;
+  }
+
+  listInternalTools(): InternalToolRecord[] {
+    const rows = this.db.prepare("SELECT * FROM internal_tools ORDER BY name ASC").all() as Record<string, unknown>[];
+    return rows.map((row) => this.mapInternalTool(row));
   }
 
   upsertMcpMount(mount: McpMountRecord): McpMountRecord {
@@ -1966,12 +2062,40 @@ export class HarnessDatabase {
       name: String(row.name),
       version: String(row.version),
       path: String(row.path),
+      manifestPath: String(row.manifest_path ?? row.path),
       source: row.source as PluginRecord["source"],
       enabled: Number(row.enabled) === 1,
+      trusted: Number(row.trusted ?? 0) === 1,
       capabilities: JSON.parse(String(row.capabilities_json)) as string[],
+      toolName: row.tool_name ? String(row.tool_name) : undefined,
       sandboxMode: row.sandbox_mode ? (String(row.sandbox_mode) as PluginRecord["sandboxMode"]) : undefined,
       command: row.command ? String(row.command) : undefined,
       args: row.args_json ? (JSON.parse(String(row.args_json)) as string[]) : undefined,
+      validationErrors: row.validation_errors_json ? (JSON.parse(String(row.validation_errors_json)) as string[]) : [],
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+    };
+  }
+
+  private mapInternalTool(row: Record<string, unknown>): InternalToolRecord {
+    return {
+      id: String(row.id),
+      name: String(row.name),
+      description: String(row.description),
+      path: String(row.path),
+      source: row.source as InternalToolRecord["source"],
+      enabled: Number(row.enabled) === 1,
+      endpoint: row.endpoint ? String(row.endpoint) : undefined,
+      method: row.method ? (String(row.method) as InternalToolRecord["method"]) : undefined,
+      timeoutMs: row.timeout_ms ? Number(row.timeout_ms) : undefined,
+      approvalRequired: Number(row.approval_required) === 1,
+      approvalReason: row.approval_reason ? String(row.approval_reason) : undefined,
+      writes: Number(row.writes) === 1,
+      network: Number(row.network) === 1,
+      parametersSchema: row.parameters_schema_json
+        ? (JSON.parse(String(row.parameters_schema_json)) as InternalToolRecord["parametersSchema"])
+        : undefined,
+      validationErrors: row.validation_errors_json ? (JSON.parse(String(row.validation_errors_json)) as string[]) : [],
       createdAt: String(row.created_at),
       updatedAt: String(row.updated_at),
     };
@@ -2139,6 +2263,46 @@ export class HarnessDatabase {
 
     if (!this.columnExists("plugins", "args_json")) {
       this.db.exec("ALTER TABLE plugins ADD COLUMN args_json TEXT");
+    }
+
+    if (!this.columnExists("plugins", "manifest_path")) {
+      this.db.exec("ALTER TABLE plugins ADD COLUMN manifest_path TEXT NOT NULL DEFAULT ''");
+    }
+
+    if (!this.columnExists("plugins", "trusted")) {
+      this.db.exec("ALTER TABLE plugins ADD COLUMN trusted INTEGER NOT NULL DEFAULT 0");
+    }
+
+    if (!this.columnExists("plugins", "tool_name")) {
+      this.db.exec("ALTER TABLE plugins ADD COLUMN tool_name TEXT");
+    }
+
+    if (!this.columnExists("plugins", "validation_errors_json")) {
+      this.db.exec("ALTER TABLE plugins ADD COLUMN validation_errors_json TEXT NOT NULL DEFAULT '[]'");
+    }
+
+    if (!this.tableExists("internal_tools")) {
+      this.db.exec(`
+        CREATE TABLE internal_tools (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          description TEXT NOT NULL,
+          path TEXT NOT NULL,
+          source TEXT NOT NULL,
+          enabled INTEGER NOT NULL,
+          endpoint TEXT,
+          method TEXT,
+          timeout_ms INTEGER,
+          approval_required INTEGER NOT NULL,
+          approval_reason TEXT,
+          writes INTEGER NOT NULL,
+          network INTEGER NOT NULL,
+          parameters_schema_json TEXT,
+          validation_errors_json TEXT NOT NULL DEFAULT '[]',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )
+      `);
     }
 
     if (!this.tableExists("workflow_runs")) {

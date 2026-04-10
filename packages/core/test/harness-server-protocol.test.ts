@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { createRuntimeKernel } from "../src/runtime-kernel.js";
 
 describe("HarnessServer protocol compatibility", () => {
-  it("accepts review/list, requirement/list, automation/list, and turn/steer methods", async () => {
+  it("accepts review/list, requirement/list, automation/list, plugin/internal tool management, and turn/steer methods", async () => {
     const homeDir = mkdtempSync(join(tmpdir(), "my-agent-kernel-"));
     const kernel = createRuntimeKernel({
       homeDir,
@@ -32,6 +32,38 @@ describe("HarnessServer protocol compatibility", () => {
         jsonrpc: "2.0",
         id: "tool-list",
         method: "tool/list",
+      });
+      const pluginList = await kernel.server.handle({
+        jsonrpc: "2.0",
+        id: "plugin-list",
+        method: "plugin/list",
+      });
+      const internalToolList = await kernel.server.handle({
+        jsonrpc: "2.0",
+        id: "internal-tool-list",
+        method: "internalTool/list",
+      });
+      const pluginUpdate = await kernel.server.handle({
+        jsonrpc: "2.0",
+        id: "plugin-update",
+        method: "plugin/update",
+        params: {
+          pluginId: "missing-plugin",
+          patch: {
+            enabled: false,
+          },
+        },
+      });
+      const internalToolUpdate = await kernel.server.handle({
+        jsonrpc: "2.0",
+        id: "internal-tool-update",
+        method: "internalTool/update",
+        params: {
+          internalToolId: "missing-internal-tool",
+          patch: {
+            enabled: false,
+          },
+        },
       });
       const steer = await kernel.server.handle({
         jsonrpc: "2.0",
@@ -72,6 +104,10 @@ describe("HarnessServer protocol compatibility", () => {
       expect("result" in requirementList && Array.isArray((requirementList as any).result.requirements)).toBe(true);
       expect("result" in automationList && Array.isArray((automationList as any).result.automations)).toBe(true);
       expect("result" in toolList && Array.isArray((toolList as any).result.tools)).toBe(true);
+      expect("result" in pluginList && Array.isArray((pluginList as any).result.plugins)).toBe(true);
+      expect("result" in internalToolList && Array.isArray((internalToolList as any).result.internalTools)).toBe(true);
+      expect("error" in pluginUpdate && pluginUpdate.error.message).toContain("Plugin not found");
+      expect("error" in internalToolUpdate && internalToolUpdate.error.message).toContain("Internal tool not found");
       expect("error" in steer && steer.error.message).toContain("Turn not found");
       expect("error" in terminalApproval && terminalApproval.error.message).toContain("Terminal session not found");
       expect("error" in terminalArchive && terminalArchive.error.message).toContain("Terminal session not found");

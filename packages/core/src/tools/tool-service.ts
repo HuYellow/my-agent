@@ -40,8 +40,8 @@ export class ToolService {
   ) {
     this.providers = [
       new LocalToolProvider(),
-      new InternalToolProvider(options.homeDir),
-      new PluginToolProvider(),
+      new InternalToolProvider(options.homeDir, options.database),
+      new PluginToolProvider(options.database, options.homeDir),
       new McpToolProvider(options.database, options.mcpManager),
     ];
   }

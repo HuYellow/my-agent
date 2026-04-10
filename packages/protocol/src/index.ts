@@ -361,6 +361,8 @@ export interface InitializeResult {
   automationRuns?: AutomationRunRecord[];
   agentTasks?: AgentTaskRecord[];
   tools?: ToolCatalogRecord[];
+  plugins?: PluginRecord[];
+  internalTools?: InternalToolRecord[];
 }
 
 export interface StartThreadParams {
@@ -975,12 +977,42 @@ export interface PluginRecord {
   name: string;
   version: string;
   path: string;
+  manifestPath: string;
   source: "system" | "user" | "repo";
   enabled: boolean;
+  trusted: boolean;
   capabilities: string[];
+  toolName?: string;
   sandboxMode?: SandboxMode;
   command?: string;
   args?: string[];
+  validationErrors: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface InternalToolRecord {
+  id: string;
+  name: string;
+  description: string;
+  path: string;
+  source: "user" | "repo";
+  enabled: boolean;
+  endpoint?: string;
+  method?: "GET" | "POST";
+  timeoutMs?: number;
+  approvalRequired: boolean;
+  approvalReason?: string;
+  writes: boolean;
+  network: boolean;
+  parametersSchema?: {
+    type: "object";
+    properties: Record<string, unknown>;
+    required?: string[];
+    additionalProperties?: boolean;
+    description?: string;
+  };
+  validationErrors: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -1062,6 +1094,7 @@ export type HarnessEvent =
   | EventEnvelope<"automation/updated", { automation: AutomationRecord }>
   | EventEnvelope<"automation/run", { run: AutomationRunRecord }>
   | EventEnvelope<"plugin/updated", { plugin: PluginRecord }>
+  | EventEnvelope<"internalTool/updated", { internalTool: InternalToolRecord }>
   | EventEnvelope<"mcp/updated", { mount: McpMountRecord }>
   | EventEnvelope<"mcp/session", { session: McpSessionRecord }>
   | EventEnvelope<"tools/catalogUpdated", { tools: ToolCatalogRecord[] }>
@@ -1219,8 +1252,38 @@ export interface WorkflowRunResult {
   stepsRun: WorkflowFinishedStepResult[];
 }
 
+export interface PluginListParams {
+  projectId?: string;
+}
+
 export interface PluginListResult {
   plugins: PluginRecord[];
+}
+
+export interface UpdatePluginParams {
+  pluginId: string;
+  patch: Partial<Pick<PluginRecord, "enabled" | "trusted">>;
+}
+
+export interface UpdatePluginResult {
+  plugin: PluginRecord;
+}
+
+export interface InternalToolListParams {
+  projectId?: string;
+}
+
+export interface InternalToolListResult {
+  internalTools: InternalToolRecord[];
+}
+
+export interface UpdateInternalToolParams {
+  internalToolId: string;
+  patch: Partial<Pick<InternalToolRecord, "enabled">>;
+}
+
+export interface UpdateInternalToolResult {
+  internalTool: InternalToolRecord;
 }
 
 export interface McpListResult {

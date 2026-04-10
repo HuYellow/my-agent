@@ -13,6 +13,7 @@ import {
   type CreateAutomationParams,
   type EnvironmentDetectParams,
   type HarnessEvent,
+  type InternalToolListParams,
   type InterruptTurnParams,
   type JsonRpcMessage,
   type JsonRpcNotification,
@@ -24,6 +25,7 @@ import {
   type RequirementListParams,
   type RequirementUnassignThreadParams,
   type ReviewStartParams,
+  type PluginListParams,
   type StartThreadParams,
   type StartTurnParams,
   type TerminalArchiveParams,
@@ -38,6 +40,8 @@ import {
   type TurnSteerParams,
   type RunAutomationParams,
   type ToolListParams,
+  type UpdateInternalToolParams,
+  type UpdatePluginParams,
   type UpdateRequirementParams,
   type UpdateAutomationParams,
   type WorkflowRunParams,
@@ -466,7 +470,10 @@ ipcMain.handle("command:exec", (_event, params: CommandExecParams) => harness.re
   ipcMain.handle("executionContext:list", (_event, params: { projectId?: string }) => harness.request("executionContext/list", params));
   ipcMain.handle("agent:list", (_event, params: { projectId?: string }) => harness.request("agent/list", params));
   ipcMain.handle("tool:list", (_event, params: ToolListParams) => harness.request("tool/list", params));
-  ipcMain.handle("plugin:list", () => harness.request("plugin/list"));
+  ipcMain.handle("plugin:list", (_event, params: PluginListParams) => harness.request("plugin/list", params));
+  ipcMain.handle("plugin:update", (_event, params: UpdatePluginParams) => harness.request("plugin/update", params));
+  ipcMain.handle("internalTool:list", (_event, params: InternalToolListParams) => harness.request("internalTool/list", params));
+  ipcMain.handle("internalTool:update", (_event, params: UpdateInternalToolParams) => harness.request("internalTool/update", params));
   ipcMain.handle("mcp:list", () => harness.request("mcp/list"));
   ipcMain.handle("mcp:sessions", () => harness.request("mcp/sessions"));
   ipcMain.handle("mcp:refresh", (_event, params: { mountId: string }) => harness.request("mcp:refresh", params));

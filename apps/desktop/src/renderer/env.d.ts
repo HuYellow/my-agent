@@ -11,6 +11,7 @@ import {
   type ExecutionContextRecord,
   type HarnessEvent,
   type InitializeResult,
+  type InternalToolRecord,
   type InterruptTurnParams,
   type ItemRecord,
   type McpMountRecord,
@@ -18,6 +19,7 @@ import {
   type ProviderModelRecord,
   type PendingApproval,
   type PluginRecord,
+  type PluginListParams,
   type ProviderActionParams,
   type ProjectRecord,
   type RequirementMemoryRecord,
@@ -50,6 +52,8 @@ import {
   type TurnSteerParams,
   type TurnSteerRecord,
   type UpdateAutomationParams,
+  type UpdateInternalToolParams,
+  type UpdatePluginParams,
   type TurnRecord,
   type UpdateRequirementParams,
   type UpdateThreadParams,
@@ -117,7 +121,10 @@ declare global {
       resumeWorkflow: (params: { runId: string; approvePausedSteps?: boolean; retryFailedStepIds?: string[] }) => Promise<unknown>;
       listAgentTasks: (projectId?: string) => Promise<{ tasks: AgentTaskRecord[] }>;
       listTools: (params?: ToolListParams) => Promise<{ tools: ToolCatalogRecord[] }>;
-      listPlugins: () => Promise<{ plugins: PluginRecord[] }>;
+      listPlugins: (params?: PluginListParams) => Promise<{ plugins: PluginRecord[] }>;
+      updatePlugin: (params: UpdatePluginParams) => Promise<{ plugin: PluginRecord }>;
+      listInternalTools: (params?: { projectId?: string }) => Promise<{ internalTools: InternalToolRecord[] }>;
+      updateInternalTool: (params: UpdateInternalToolParams) => Promise<{ internalTool: InternalToolRecord }>;
       listMcpMounts: () => Promise<{ mounts: McpMountRecord[] }>;
       listMcpSessions: () => Promise<{ sessions: McpSessionRecord[] }>;
       refreshMcpMount: (mountId: string) => Promise<unknown>;

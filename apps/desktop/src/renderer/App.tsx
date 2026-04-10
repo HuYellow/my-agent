@@ -50,6 +50,7 @@ import {
   type AutomationRecord,
   type AutomationRunRecord,
   type ExecutionContextRecord,
+  type InternalToolRecord,
   type ItemKind,
   type ItemRecord,
   type ModelReasoningEffort,
@@ -323,6 +324,7 @@ export function App() {
   const [skillDocumentLoading, setSkillDocumentLoading] = useState(false);
   const [skillDocumentError, setSkillDocumentError] = useState<string | null>(null);
   const [runtimePlugins, setRuntimePlugins] = useState<PluginRecord[]>([]);
+  const [runtimeInternalTools, setRuntimeInternalTools] = useState<InternalToolRecord[]>([]);
   const [runtimeMcpMounts, setRuntimeMcpMounts] = useState<McpMountRecord[]>([]);
   const [runtimeMcpSessions, setRuntimeMcpSessions] = useState<McpSessionRecord[]>([]);
   const [threadSearch, setThreadSearch] = useState("");
@@ -1019,14 +1021,26 @@ export function App() {
     };
   }, [currentSkillDetail]);
 
+  const refreshRuntimeSurfaces = async (projectId = activeProjectId) => {
+    const [pluginsResult, internalToolsResult, mcpMountsResult, mcpSessionsResult] = await Promise.all([
+      window.myAgent.listPlugins({ projectId }),
+      window.myAgent.listInternalTools({ projectId }),
+      window.myAgent.listMcpMounts(),
+      window.myAgent.listMcpSessions(),
+    ]);
+
+    setRuntimePlugins(pluginsResult.plugins);
+    setRuntimeInternalTools(internalToolsResult.internalTools);
+    setRuntimeMcpMounts(mcpMountsResult.mounts);
+    setRuntimeMcpSessions(mcpSessionsResult.sessions);
+  };
+
   useEffect(() => {
     void Promise.all([
-      refreshToolCatalog(),
-      window.myAgent.listPlugins().then((result) => setRuntimePlugins(result.plugins)),
-      window.myAgent.listMcpMounts().then((result) => setRuntimeMcpMounts(result.mounts)),
-      window.myAgent.listMcpSessions().then((result) => setRuntimeMcpSessions(result.sessions)),
+      refreshToolCatalog(activeProjectId ? { projectId: activeProjectId } : undefined),
+      refreshRuntimeSurfaces(activeProjectId),
     ]).catch(() => undefined);
-  }, [refreshToolCatalog]);
+  }, [activeProjectId, refreshToolCatalog]);
 
   useEffect(() => {
     setBranchMenuOpen(false);
@@ -2001,6 +2015,7 @@ export function App() {
             compatibility={protocolCompatibility}
             tools={runtimeTools}
             plugins={runtimePlugins}
+            internalTools={runtimeInternalTools}
             mcpMounts={runtimeMcpMounts}
             mcpSessions={runtimeMcpSessions}
             terminalSessions={terminals}
@@ -2009,11 +2024,27 @@ export function App() {
             onRespondTerminalApproval={(sessionId, decision, scope) =>
               window.myAgent.respondTerminalApproval({ sessionId, decision, scope })
             }
-            onRefreshMount={(mountId) =>
-              window.myAgent.refreshMcpMount(mountId).then(() =>
-                window.myAgent.listMcpSessions().then((result) => setRuntimeMcpSessions(result.sessions)),
-              )
-            }
+            onUpdatePlugin={async (pluginId, patch) => {
+              await window.myAgent.updatePlugin({ pluginId, patch });
+              await Promise.all([
+                refreshToolCatalog(activeProjectId ? { projectId: activeProjectId } : undefined),
+                refreshRuntimeSurfaces(activeProjectId),
+              ]);
+            }}
+            onUpdateInternalTool={async (internalToolId, patch) => {
+              await window.myAgent.updateInternalTool({ internalToolId, patch });
+              await Promise.all([
+                refreshToolCatalog(activeProjectId ? { projectId: activeProjectId } : undefined),
+                refreshRuntimeSurfaces(activeProjectId),
+              ]);
+            }}
+            onRefreshMount={async (mountId) => {
+              await window.myAgent.refreshMcpMount(mountId);
+              await Promise.all([
+                refreshToolCatalog(activeProjectId ? { projectId: activeProjectId } : undefined),
+                refreshRuntimeSurfaces(activeProjectId),
+              ]);
+            }}
           />
         ) : activeView === "automation" ? (
           <RuntimeAutomationPanel
@@ -2989,25 +3020,33 @@ function RuntimePluginsPanel({
   compatibility,
   tools,
   plugins,
+  internalTools,
   mcpMounts,
   mcpSessions,
   terminalSessions,
   terminalCapabilities,
   activeProjectId,
   onRespondTerminalApproval,
+  onUpdatePlugin,
+  onUpdateInternalTool,
   onRefreshMount,
 }: {
   compatibility?: import("@my-agent/protocol").ProtocolCompatibilityRecord;
   tools: import("@my-agent/protocol").ToolCatalogRecord[];
   plugins: PluginRecord[];
+  internalTools: InternalToolRecord[];
   mcpMounts: McpMountRecord[];
   mcpSessions: McpSessionRecord[];
   terminalSessions: TerminalSessionRecord[];
   terminalCapabilities: TerminalBackendCapability[];
   activeProjectId?: string;
   onRespondTerminalApproval: (sessionId: string, decision: "approve" | "reject", scope?: "once" | "session") => Promise<unknown>;
+  onUpdatePlugin: (pluginId: string, patch: Partial<Pick<PluginRecord, "enabled" | "trusted">>) => Promise<unknown>;
+  onUpdateInternalTool: (internalToolId: string, patch: Partial<Pick<InternalToolRecord, "enabled">>) => Promise<unknown>;
   onRefreshMount: (mountId: string) => Promise<unknown>;
 }) {
+  const [pendingActionKey, setPendingActionKey] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const visibleTerminalSessions = activeProjectId
     ? terminalSessions.filter((session) => session.workspaceId === activeProjectId)
     : terminalSessions;
@@ -3020,14 +3059,54 @@ function RuntimePluginsPanel({
     [tools],
   );
 
+  async function handlePluginUpdate(pluginId: string, patch: Partial<Pick<PluginRecord, "enabled" | "trusted">>, actionKey: string) {
+    setPendingActionKey(actionKey);
+    setActionError(null);
+
+    try {
+      await onUpdatePlugin(pluginId, patch);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Unable to update plugin.");
+    } finally {
+      setPendingActionKey(null);
+    }
+  }
+
+  async function handleInternalToolUpdate(internalToolId: string, patch: Partial<Pick<InternalToolRecord, "enabled">>, actionKey: string) {
+    setPendingActionKey(actionKey);
+    setActionError(null);
+
+    try {
+      await onUpdateInternalTool(internalToolId, patch);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Unable to update internal tool.");
+    } finally {
+      setPendingActionKey(null);
+    }
+  }
+
+  async function handleRefreshMountAction(mountId: string) {
+    setPendingActionKey(`mcp:${mountId}`);
+    setActionError(null);
+
+    try {
+      await onRefreshMount(mountId);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Unable to refresh MCP mount.");
+    } finally {
+      setPendingActionKey(null);
+    }
+  }
+
   return (
     <div className="skills-page">
       <div className="skills-page__header">
         <h2 className="skills-page__title">Runtime Surfaces</h2>
         <span className="skills-page__count">
-          {tools.length} tools · {plugins.length} plugins · {mcpMounts.length} MCP mounts · {visibleTerminalSessions.length} terminal sessions
+          {tools.length} tools · {plugins.length} plugins · {internalTools.length} internal tools · {mcpMounts.length} MCP mounts · {visibleTerminalSessions.length} terminal sessions
         </span>
       </div>
+      {actionError ? <div className="thread-shell__empty">{actionError}</div> : null}
       <div className="skills-grid">
         {compatibility ? (
           <div className="skill-card">
@@ -3143,12 +3222,73 @@ function RuntimePluginsPanel({
             <div className="skill-card__header">
               <div>
                 <h3>{plugin.name}</h3>
-                <span>{plugin.version}</span>
+                <span>{plugin.version} · {plugin.source}</span>
               </div>
-              <span className={`skill-card__status ${plugin.enabled ? "skill-card__status--enabled" : ""}`}>{plugin.enabled ? "Enabled" : "Disabled"}</span>
+              <span className={`skill-card__status ${plugin.enabled && plugin.trusted && plugin.validationErrors.length === 0 ? "skill-card__status--enabled" : ""}`}>
+                {plugin.validationErrors.length > 0 ? "Invalid" : plugin.trusted ? (plugin.enabled ? "Enabled" : "Disabled") : "Untrusted"}
+              </span>
             </div>
             <p>{plugin.path}</p>
-            <pre>{plugin.capabilities.join(", ") || "No declared capabilities"}</pre>
+            <pre>
+              manifest={plugin.manifestPath}
+              {`\n`}tool={plugin.toolName ?? "unconfigured"}
+              {`\n`}capabilities={plugin.capabilities.join(", ") || "none"}
+              {plugin.command ? `\ncommand=${plugin.command}` : ""}
+              {plugin.sandboxMode ? `\nsandbox=${plugin.sandboxMode}` : ""}
+            </pre>
+            {plugin.validationErrors.length > 0 ? <small>{plugin.validationErrors.join(" | ")}</small> : null}
+            <div className="runtime-terminal-approval__actions">
+              <button
+                className="button"
+                disabled={pendingActionKey === `plugin:trust:${plugin.id}`}
+                onClick={() => void handlePluginUpdate(plugin.id, { trusted: !plugin.trusted }, `plugin:trust:${plugin.id}`)}
+              >
+                {plugin.trusted ? "Untrust" : "Trust"}
+              </button>
+              <button
+                className="button"
+                disabled={!plugin.trusted || plugin.validationErrors.length > 0 || pendingActionKey === `plugin:enable:${plugin.id}`}
+                onClick={() => void handlePluginUpdate(plugin.id, { enabled: !plugin.enabled }, `plugin:enable:${plugin.id}`)}
+              >
+                {plugin.enabled ? "Disable" : "Enable"}
+              </button>
+            </div>
+          </div>
+        ))}
+        {internalTools.map((internalTool) => (
+          <div key={internalTool.id} className="skill-card">
+            <div className="skill-card__header">
+              <div>
+                <h3>{internalTool.name}</h3>
+                <span>{internalTool.source}</span>
+              </div>
+              <span className={`skill-card__status ${internalTool.enabled && internalTool.validationErrors.length === 0 ? "skill-card__status--enabled" : ""}`}>
+                {internalTool.validationErrors.length > 0 ? "Invalid" : internalTool.enabled ? "Enabled" : "Disabled"}
+              </span>
+            </div>
+            <p>{internalTool.description}</p>
+            <pre>
+              endpoint={internalTool.endpoint ?? "unconfigured"}
+              {`\n`}method={internalTool.method ?? "POST"} timeout={internalTool.timeoutMs ?? 30_000}ms
+              {`\n`}approval={internalTool.approvalRequired ? "required" : "not_required"} writes={String(internalTool.writes)} network={String(internalTool.network)}
+            </pre>
+            {internalTool.approvalReason ? <small>{internalTool.approvalReason}</small> : null}
+            {internalTool.validationErrors.length > 0 ? <small>{internalTool.validationErrors.join(" | ")}</small> : null}
+            <div className="runtime-terminal-approval__actions">
+              <button
+                className="button"
+                disabled={internalTool.validationErrors.length > 0 || pendingActionKey === `internal-tool:${internalTool.id}`}
+                onClick={() =>
+                  void handleInternalToolUpdate(
+                    internalTool.id,
+                    { enabled: !internalTool.enabled },
+                    `internal-tool:${internalTool.id}`,
+                  )
+                }
+              >
+                {internalTool.enabled ? "Disable" : "Enable"}
+              </button>
+            </div>
           </div>
         ))}
         {mcpMounts.map((mount) => (
@@ -3164,7 +3304,7 @@ function RuntimePluginsPanel({
             <pre>
               Session: {mcpSessions.find((session) => session.mountId === mount.id)?.status ?? "not connected"}
             </pre>
-            <button className="button" onClick={() => void onRefreshMount(mount.id)}>
+            <button className="button" disabled={pendingActionKey === `mcp:${mount.id}`} onClick={() => void handleRefreshMountAction(mount.id)}>
               Refresh Mount
             </button>
           </div>

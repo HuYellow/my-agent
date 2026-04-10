@@ -24,7 +24,9 @@ import {
   type McpListResult,
   type McpSessionsResult,
   type McpToolsResult,
+  type PluginListParams,
   type PluginListResult,
+  type UpdatePluginParams,
   type ProtocolCompatibilityRecord,
   type RequirementAssignThreadParams,
   type RequirementGetParams,
@@ -69,7 +71,9 @@ import {
   type TurnSteerResult,
   type TurnRecord,
   type ToolListParams,
+  type InternalToolListParams,
   type ToolListResult,
+  type UpdateInternalToolParams,
   type WorktreeCreateParams,
   type WorktreeListParams,
   type WorktreeRemoveParams,
@@ -90,6 +94,7 @@ import { AgentTaskManager } from "../services/agent-task-manager.js";
 import { detectProviderCapabilities } from "../services/provider-capabilities.js";
 import { EnvironmentManager } from "../services/environment-manager.js";
 import { ExecutionContextManager } from "../services/execution-context-manager.js";
+import { InternalToolManager } from "../services/internal-tool-manager.js";
 import { McpManager } from "../services/mcp-manager.js";
 import { ensureStoredProviderConfig, syncStoredProviderConfig, watchStoredConfig } from "../services/my-agent-config.js";
 import { PluginManager } from "../services/plugin-manager.js";
@@ -119,6 +124,7 @@ export class HarnessServer {
   private readonly executionContextManager: ExecutionContextManager;
   private readonly workflowManager: WorkflowManager;
   private readonly pluginManager: PluginManager;
+  private readonly internalToolManager: InternalToolManager;
   private readonly mcpManager: McpManager;
   private readonly requirementMemoryManager: RequirementMemoryManager;
   private readonly requirementService: RequirementService;
@@ -237,6 +243,13 @@ export class HarnessServer {
       this.emit({
         type: "plugin/updated",
         payload: { plugin },
+      });
+      this.emitToolCatalogUpdated();
+    });
+    this.internalToolManager = new InternalToolManager(this.database, (internalTool) => {
+      this.emit({
+        type: "internalTool/updated",
+        payload: { internalTool },
       });
       this.emitToolCatalogUpdated();
     });
@@ -411,7 +424,13 @@ export class HarnessServer {
       case "automation/runs":
         return this.listAutomationRuns(message.params as { automationId?: string; projectId?: string } | undefined);
       case "plugin/list":
-        return this.listPlugins();
+        return this.listPlugins((message.params ?? {}) as PluginListParams);
+      case "plugin/update":
+        return this.updatePlugin(message.params as UpdatePluginParams);
+      case "internalTool/list":
+        return this.listInternalTools((message.params ?? {}) as InternalToolListParams);
+      case "internalTool/update":
+        return this.updateInternalTool(message.params as UpdateInternalToolParams);
       case "tool/list":
         return this.listTools((message.params ?? {}) as ToolListParams);
       case "mcp/list":
@@ -466,6 +485,8 @@ export class HarnessServer {
       automations: this.database.listAutomations(config.selectedProjectId),
       automationRuns: this.database.listAutomationRuns({ projectId: config.selectedProjectId }),
       agentTasks: this.database.listAgentTasks(config.selectedProjectId),
+      plugins: this.pluginManager.list(activeProject),
+      internalTools: this.internalToolManager.list(activeProject),
       tools: this.buildToolCatalog(activeProject),
     };
   }
@@ -1623,11 +1644,28 @@ export class HarnessServer {
     }
   }
 
-  private listPlugins(): PluginListResult {
-    const project = this.requireProject(this.database.getConfig().selectedProjectId);
+  private listPlugins(params?: PluginListParams): PluginListResult {
+    const project = this.requireProject(params?.projectId ?? this.database.getConfig().selectedProjectId);
     return {
       plugins: this.pluginManager.list(project),
     };
+  }
+
+  private updatePlugin(params: UpdatePluginParams) {
+    const plugin = this.pluginManager.update(params.pluginId, params.patch);
+    return { plugin };
+  }
+
+  private listInternalTools(params?: InternalToolListParams) {
+    const project = this.requireProject(params?.projectId ?? this.database.getConfig().selectedProjectId);
+    return {
+      internalTools: this.internalToolManager.list(project),
+    };
+  }
+
+  private updateInternalTool(params: UpdateInternalToolParams) {
+    const internalTool = this.internalToolManager.update(params.internalToolId, params.patch);
+    return { internalTool };
   }
 
   private listTools(params?: ToolListParams): ToolListResult {

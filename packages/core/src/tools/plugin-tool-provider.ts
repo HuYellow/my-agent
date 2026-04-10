@@ -1,52 +1,28 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { type WorkspaceProfile } from "@my-agent/protocol";
-import { z } from "zod";
-import { findGitRoot } from "../utils/path-utils.js";
+import { HarnessDatabase } from "../store/database.js";
+import { discoverPluginEntries, type PluginManifest } from "../services/plugin-registry.js";
 import { ToolExecutionAbortedError, type RuntimeToolCapability, type RuntimeToolDefinition, type RuntimeToolSourceMetadata, type ToolProvider } from "./types.js";
 
-const PLUGIN_MANIFEST_SCHEMA = z.object({
-  name: z.string().min(1),
-  version: z.string().default("0.0.0"),
-  enabled: z.boolean().optional(),
-  capabilities: z.array(z.string()).optional(),
-  sandboxMode: z.enum(["read-only", "workspace-write", "danger-full-access"]).optional(),
-  command: z.string().optional(),
-  args: z.array(z.string()).optional(),
-  tool: z
-    .object({
-      name: z.string().min(1),
-      description: z.string().min(1),
-      parameters: z
-        .object({
-          type: z.literal("object"),
-          properties: z.record(z.string(), z.unknown()).default({}),
-          required: z.array(z.string()).optional(),
-          additionalProperties: z.boolean().optional(),
-        })
-        .default({ type: "object", properties: {}, additionalProperties: true }),
-    })
-    .optional(),
-});
-
-type PluginManifest = z.infer<typeof PLUGIN_MANIFEST_SCHEMA>;
-
-interface LoadedPluginManifest {
-  manifest: PluginManifest;
-  manifestPath: string;
-  pluginPath: string;
-}
-
 export class PluginToolProvider implements ToolProvider {
+  constructor(
+    private readonly database?: HarnessDatabase,
+    private readonly homeDir = process.env.MY_AGENT_HOME ?? join(homedir(), ".my-agent"),
+  ) {}
+
   listTools(workspace: WorkspaceProfile): RuntimeToolDefinition[] {
-    return loadPluginManifests(workspace).flatMap(({ manifest: plugin, manifestPath, pluginPath }) => {
-      if (plugin.enabled === false || !plugin.command || !plugin.tool) {
+    return discoverPluginEntries({
+      workspaceRoot: workspace.rootPath,
+      persisted: this.database?.listPlugins(),
+      homeDir: this.homeDir,
+    }).flatMap(({ manifest: plugin, record }) => {
+      if (!plugin || !record.enabled || !record.trusted || record.validationErrors.length > 0 || !plugin.command || !plugin.tool) {
         return [];
       }
 
-      const source = buildPluginSource(plugin, pluginPath, manifestPath);
+      const source = buildPluginSource(plugin, record.path, record.manifestPath);
 
       return [
         {
@@ -77,39 +53,6 @@ export class PluginToolProvider implements ToolProvider {
       ];
     });
   }
-}
-
-function loadPluginManifests(workspace: WorkspaceProfile): LoadedPluginManifest[] {
-  const roots = [join(homedir(), ".my-agent", "plugins")];
-  const repoRoot = findGitRoot(workspace.rootPath);
-  if (repoRoot) {
-    roots.push(join(repoRoot, ".agents", "plugins"));
-    roots.push(join(repoRoot, ".codex", "plugins"));
-  }
-
-  const manifests: LoadedPluginManifest[] = [];
-  for (const root of roots) {
-    if (!existsSync(root)) {
-      continue;
-    }
-    for (const entry of readdirSync(root, { withFileTypes: true })) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
-      const manifestPathCandidates = [join(root, entry.name, ".codex-plugin", "plugin.json"), join(root, entry.name, "plugin.json")];
-      const manifestPath = manifestPathCandidates.find((candidate) => existsSync(candidate));
-      if (!manifestPath) {
-        continue;
-      }
-      manifests.push({
-        manifest: PLUGIN_MANIFEST_SCHEMA.parse(JSON.parse(readFileSync(manifestPath, "utf8"))),
-        manifestPath,
-        pluginPath: join(root, entry.name),
-      });
-    }
-  }
-
-  return manifests;
 }
 
 function executePluginCommand(

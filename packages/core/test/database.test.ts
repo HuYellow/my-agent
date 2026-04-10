@@ -247,6 +247,73 @@ describe("HarnessDatabase projects", () => {
     ]);
   });
 
+  it("stores managed plugin and internal tool metadata", () => {
+    const root = mkdtempSync(join(tmpdir(), "my-agent-db-"));
+    const database = new HarnessDatabase(join(root, "app.db"));
+    const now = new Date().toISOString();
+
+    database.upsertPlugin({
+      id: "plugin-1",
+      name: "Sample plugin",
+      version: "1.0.0",
+      path: join(root, "plugins", "sample-plugin"),
+      manifestPath: join(root, "plugins", "sample-plugin", ".codex-plugin", "plugin.json"),
+      source: "repo",
+      enabled: true,
+      trusted: true,
+      capabilities: ["network"],
+      toolName: "sample_echo",
+      sandboxMode: "read-only",
+      command: process.execPath,
+      args: ["-v"],
+      validationErrors: [],
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    database.upsertInternalTool({
+      id: "internal-tool-1",
+      name: "notify_team",
+      description: "Send an internal notification",
+      path: join(root, "internal-tools", "notify.json"),
+      source: "user",
+      enabled: false,
+      endpoint: "https://example.test/internal",
+      method: "POST",
+      timeoutMs: 15_000,
+      approvalRequired: true,
+      approvalReason: "Contacts an internal API.",
+      writes: false,
+      network: true,
+      parametersSchema: {
+        type: "object",
+        properties: {
+          message: { type: "string" },
+        },
+        required: ["message"],
+        additionalProperties: false,
+      },
+      validationErrors: ["Missing API token header."],
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    expect(database.getPlugin("plugin-1")).toMatchObject({
+      manifestPath: join(root, "plugins", "sample-plugin", ".codex-plugin", "plugin.json"),
+      trusted: true,
+      toolName: "sample_echo",
+    });
+    expect(database.listInternalTools()).toMatchObject([
+      {
+        id: "internal-tool-1",
+        enabled: false,
+        timeoutMs: 15_000,
+        approvalRequired: true,
+        validationErrors: ["Missing API token header."],
+      },
+    ]);
+  });
+
   it("persists extended terminal session state for future PTY backends", () => {
     const root = mkdtempSync(join(tmpdir(), "my-agent-db-"));
     const database = new HarnessDatabase(join(root, "app.db"));
