@@ -27,3 +27,13 @@ This repository contains a working foundation for:
 - a desktop UI for threads, event stream, approvals, provider settings, and skills
 
 Future work is intentionally left open for richer terminal emulation, Monaco-based diffs, company tools, TUI, and more advanced model adapters.
+
+## Extension Distribution
+
+P2-M3 adds a first-class extension packaging layer:
+
+- scaffoldable templates for skills, workflows, and plugins
+- compatibility metadata for workflow and plugin manifests
+- catalog roots under `~/.my-agent/catalogs/*` for shareable local distributions
+
+See [docs/distribution-and-templates.md](docs/distribution-and-templates.md) for the authoring and packaging guide.

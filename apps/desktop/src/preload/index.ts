@@ -3,12 +3,14 @@ import {
   type ApprovalResponseParams,
   type AgentTaskRecord,
   type AutomationRecord,
+  type AutomationRunLogRecord,
   type AutomationRunRecord,
   type CommandExecParams,
   type ConfigWriteParams,
   type CreateAutomationParams,
   type CreateProjectParams,
   type CreateRequirementParams,
+  type DistributionTemplateRecord,
   type ExecutionContextRecord,
   type HarnessEvent,
   type InternalToolRecord,
@@ -50,6 +52,8 @@ import {
   type UpdateRequirementParams,
   type UpdateThreadParams,
   type UpdateProjectParams,
+  type AutomationRunLogsParams,
+  type TemplateScaffoldParams,
 } from "@my-agent/protocol";
 
 const api = {
@@ -66,6 +70,8 @@ const api = {
     ipcRenderer.invoke("automation:run", params) as Promise<{ automation: AutomationRecord; run: AutomationRunRecord }>,
   listAutomationRuns: (params?: { automationId?: string; projectId?: string }) =>
     ipcRenderer.invoke("automation:runs", params ?? {}) as Promise<{ runs: AutomationRunRecord[] }>,
+  listAutomationRunLogs: (params?: AutomationRunLogsParams) =>
+    ipcRenderer.invoke("automation:logs", params ?? {}) as Promise<{ logs: AutomationRunLogRecord[] }>,
   listRequirements: (params?: { projectId?: string }) =>
     ipcRenderer.invoke("requirement:list", params ?? {}) as Promise<{ requirements: RequirementRecord[]; memories: RequirementMemoryRecord[] }>,
   getRequirement: (requirementId: string) =>
@@ -124,6 +130,13 @@ const api = {
     ipcRenderer.invoke("workflow:resume", params),
   listAgentTasks: (projectId?: string) => ipcRenderer.invoke("agent:list", { projectId }) as Promise<{ tasks: AgentTaskRecord[] }>,
   listTools: (params?: ToolListParams) => ipcRenderer.invoke("tool:list", params ?? {}) as Promise<{ tools: ToolCatalogRecord[] }>,
+  listTemplates: () => ipcRenderer.invoke("template:list") as Promise<{ templates: DistributionTemplateRecord[] }>,
+  scaffoldTemplate: (params: TemplateScaffoldParams) =>
+    ipcRenderer.invoke("template:scaffold", params) as Promise<{
+      template: DistributionTemplateRecord;
+      rootPath: string;
+      createdPaths: string[];
+    }>,
   listPlugins: (params?: PluginListParams) => ipcRenderer.invoke("plugin:list", params ?? {}) as Promise<{ plugins: PluginRecord[] }>,
   updatePlugin: (params: UpdatePluginParams) => ipcRenderer.invoke("plugin:update", params) as Promise<{ plugin: PluginRecord }>,
   listInternalTools: (params?: { projectId?: string }) =>

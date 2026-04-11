@@ -4,6 +4,9 @@ import {
   type AgentSpawnParams,
   type AgentWaitParams,
   type AutomationListParams,
+  type AutomationRunArtifactRecord,
+  type AutomationRunLogRecord,
+  type AutomationRunLogsParams,
   type CreateAutomationParams,
   type UpdateAutomationParams,
   type RunAutomationParams,
@@ -48,6 +51,9 @@ import {
   type ReviewStartResult,
   type ResumeThreadParams,
   type ResumeThreadResult,
+  type TemplateListResult,
+  type TemplateScaffoldParams,
+  type TemplateScaffoldResult,
   type TerminalArchiveParams,
   type TerminalCloseParams,
   type TerminalApprovalResponseParams,
@@ -103,8 +109,9 @@ import { ProviderService } from "../services/provider-service.js";
 import { RequirementMemoryManager } from "../services/requirement-memory-manager.js";
 import { RequirementService } from "../services/requirement-service.js";
 import { ReviewManager } from "../services/review-manager.js";
-import { SkillService } from "../services/skill-service.js";
+import { getDefaultHomeDir, SkillService } from "../services/skill-service.js";
 import { TerminalManager } from "../services/terminal-manager.js";
+import { TemplateService } from "../services/template-service.js";
 import { WorkflowManager } from "../services/workflow-manager.js";
 import { WorktreeManager } from "../services/worktree-manager.js";
 import { HarnessDatabase } from "../store/database.js";
@@ -129,6 +136,7 @@ export class HarnessServer {
   private readonly requirementMemoryManager: RequirementMemoryManager;
   private readonly requirementService: RequirementService;
   private readonly reviewManager: ReviewManager;
+  private readonly templateService: TemplateService;
 
   constructor(
     private readonly database: HarnessDatabase,
@@ -221,6 +229,7 @@ export class HarnessServer {
       this.requirementMemoryManager,
       (event) => this.emit(event),
     );
+    this.templateService = new TemplateService(process.env.MY_AGENT_HOME ?? getDefaultHomeDir());
     this.workflowManager = new WorkflowManager(
       this.database,
       this.worktreeManager,
@@ -423,6 +432,8 @@ export class HarnessServer {
         return this.runAutomation(message.params as RunAutomationParams);
       case "automation/runs":
         return this.listAutomationRuns(message.params as { automationId?: string; projectId?: string } | undefined);
+      case "automation/logs":
+        return this.listAutomationRunLogs(message.params as AutomationRunLogsParams | undefined);
       case "plugin/list":
         return this.listPlugins((message.params ?? {}) as PluginListParams);
       case "plugin/update":
@@ -433,6 +444,10 @@ export class HarnessServer {
         return this.updateInternalTool(message.params as UpdateInternalToolParams);
       case "tool/list":
         return this.listTools((message.params ?? {}) as ToolListParams);
+      case "template/list":
+        return this.listTemplates();
+      case "template/scaffold":
+        return this.scaffoldTemplate(message.params as TemplateScaffoldParams);
       case "mcp/list":
         return this.listMcpMounts();
       case "mcp/sessions":
@@ -484,9 +499,11 @@ export class HarnessServer {
       workflowRuns: this.workflowManager.listRuns(),
       automations: this.database.listAutomations(config.selectedProjectId),
       automationRuns: this.database.listAutomationRuns({ projectId: config.selectedProjectId }),
+      automationRunLogs: this.database.listAutomationRunLogs({ projectId: config.selectedProjectId }),
       agentTasks: this.database.listAgentTasks(config.selectedProjectId),
       plugins: this.pluginManager.list(activeProject),
       internalTools: this.internalToolManager.list(activeProject),
+      templates: this.templateService.listTemplates(),
       tools: this.buildToolCatalog(activeProject),
     };
   }
@@ -1517,6 +1534,12 @@ export class HarnessServer {
     };
   }
 
+  private listAutomationRunLogs(params?: AutomationRunLogsParams) {
+    return {
+      logs: this.database.listAutomationRunLogs(params),
+    };
+  }
+
   private async runAutomation(params: RunAutomationParams) {
     const automation = this.database.getAutomation(params.automationId);
 
@@ -1525,6 +1548,9 @@ export class HarnessServer {
     }
 
     const startedAt = new Date().toISOString();
+    const trigger = params.trigger ?? "manual";
+    const runner = params.runner ?? "core";
+    const initiatedBy = params.initiatedBy;
     const runningAutomation = this.database.updateAutomation({
       ...automation,
       lastRunStatus: "running",
@@ -1539,18 +1565,26 @@ export class HarnessServer {
       projectId: automation.projectId,
       requirementId: automation.requirementId,
       status: "running",
+      trigger,
+      runner,
+      initiatedBy,
+      artifacts: [],
       createdAt: startedAt,
       updatedAt: startedAt,
     });
     this.emit({ type: "automation/run", payload: { run } });
+    this.writeAutomationLog(run, "info", `Automation started via ${trigger}.`, initiatedBy ? `Initiated by ${initiatedBy}.` : undefined);
 
     try {
       const project = this.requireProject(automation.projectId);
+      this.writeAutomationLog(run, "info", `Resolved project ${project.name}.`, project.rootPath);
 
       if (automation.kind === "workflow") {
         if (!automation.workflowId) {
           throw new Error("Workflow automation is missing workflowId.");
         }
+
+        this.writeAutomationLog(run, "info", `Starting workflow automation.`, `workflowId=${automation.workflowId}`);
 
         const result = await this.workflowManager.run({
           workflowId: automation.workflowId,
@@ -1560,22 +1594,47 @@ export class HarnessServer {
           requirementId: automation.requirementId,
           nonInteractive: true,
         });
+        const completedAt = new Date().toISOString();
+        const artifacts: AutomationRunArtifactRecord[] = [
+          {
+            kind: "workflow_run",
+            id: result.run.id,
+            label: `Workflow run ${result.run.id}`,
+            summary: `Workflow finished with ${result.run.status}.`,
+            metadata: {
+              workflowId: result.workflow.id,
+              workflowName: result.workflow.name,
+            },
+          },
+          ...result.stepsRun
+            .filter((step) => step.artifactSummary)
+            .slice(0, 6)
+            .map((step) => ({
+              kind: "report" as const,
+              label: step.stepId,
+              summary: step.artifactSummary,
+            })),
+        ];
+        const output = buildWorkflowAutomationOutput(automation.name, result.run.id, result.stepsRun);
 
         const completedRun = this.database.updateAutomationRun({
           ...run,
           status: "completed",
           workflowRunId: result.run.id,
           summary: result.stepsRun.map((step) => step.artifactSummary).filter(Boolean).join(" | ") || `${result.run.status}`,
-          updatedAt: new Date().toISOString(),
-          completedAt: new Date().toISOString(),
+          output,
+          artifacts,
+          updatedAt: completedAt,
+          completedAt,
         });
         const completedAutomation = this.database.updateAutomation({
           ...runningAutomation,
           lastRunAt: completedRun.completedAt,
           lastRunStatus: "completed",
           nextRunAt: computeNextAutomationRunAt(runningAutomation.scheduleType, runningAutomation.intervalMinutes, completedRun.completedAt),
-          updatedAt: new Date().toISOString(),
+          updatedAt: completedAt,
         });
+        this.writeAutomationLog(completedRun, "info", `Workflow automation completed.`, output);
         this.emit({ type: "automation/run", payload: { run: completedRun } });
         this.emit({ type: "automation/updated", payload: { automation: completedAutomation } });
         return {
@@ -1588,6 +1647,8 @@ export class HarnessServer {
         throw new Error("Prompt automation is missing prompt text.");
       }
 
+      this.writeAutomationLog(run, "info", "Starting prompt automation thread.", automation.threadTitle?.trim() || automation.name);
+
       const threadResult = this.startThread({
         projectId: automation.projectId,
         requirementId: automation.requirementId,
@@ -1599,23 +1660,57 @@ export class HarnessServer {
         includeIdeContext: false,
       });
       const finalTurn = this.database.getTurn(turnResult.turn.id) ?? turnResult.turn;
+      const threadItems = this.database
+        .listItems(threadResult.thread.id)
+        .filter((item) => item.turnId === finalTurn.id && item.kind === "agentMessage" && item.status === "completed");
+      const finalMessage = threadItems.at(-1)?.body?.trim();
+      const completedAt = new Date().toISOString();
+      const output = buildPromptAutomationOutput({
+        automationName: automation.name,
+        threadId: threadResult.thread.id,
+        turnId: finalTurn.id,
+        turnStatus: finalTurn.status,
+        finalMessage,
+      });
+      const artifacts: AutomationRunArtifactRecord[] = [
+        {
+          kind: "thread",
+          id: threadResult.thread.id,
+          label: `Thread ${threadResult.thread.id}`,
+          summary: automation.threadTitle?.trim() || `Automation: ${automation.name}`,
+        },
+        {
+          kind: "turn",
+          id: finalTurn.id,
+          label: `Turn ${finalTurn.id}`,
+          summary: `Turn finished with ${finalTurn.status}.`,
+        },
+        {
+          kind: "report",
+          label: "Final response",
+          summary: finalMessage ? truncateForSummary(finalMessage, 220) : `Prompt run finished with ${finalTurn.status}.`,
+        },
+      ];
       const completedRun = this.database.updateAutomationRun({
         ...run,
         status: finalTurn.status === "completed" ? "completed" : "failed",
         threadId: threadResult.thread.id,
         turnId: finalTurn.id,
-        summary: `Prompt run finished with ${finalTurn.status}.`,
+        summary: finalMessage ? truncateForSummary(finalMessage, 140) : `Prompt run finished with ${finalTurn.status}.`,
+        output,
+        artifacts,
         error: finalTurn.status === "failed" ? "Prompt automation turn failed." : undefined,
-        updatedAt: new Date().toISOString(),
-        completedAt: new Date().toISOString(),
+        updatedAt: completedAt,
+        completedAt,
       });
       const completedAutomation = this.database.updateAutomation({
         ...runningAutomation,
         lastRunAt: completedRun.completedAt,
         lastRunStatus: completedRun.status,
         nextRunAt: computeNextAutomationRunAt(runningAutomation.scheduleType, runningAutomation.intervalMinutes, completedRun.completedAt),
-        updatedAt: new Date().toISOString(),
+        updatedAt: completedAt,
       });
+      this.writeAutomationLog(completedRun, completedRun.status === "completed" ? "info" : "warning", "Prompt automation finished.", output);
       this.emit({ type: "automation/run", payload: { run: completedRun } });
       this.emit({ type: "automation/updated", payload: { automation: completedAutomation } });
       return {
@@ -1627,6 +1722,7 @@ export class HarnessServer {
       const failedRun: AutomationRunRecord = this.database.updateAutomationRun({
         ...run,
         status: "failed",
+        artifacts: run.artifacts,
         error: error instanceof Error ? error.message : String(error),
         updatedAt: failedAt,
         completedAt: failedAt,
@@ -1638,6 +1734,7 @@ export class HarnessServer {
         nextRunAt: computeNextAutomationRunAt(runningAutomation.scheduleType, runningAutomation.intervalMinutes, failedAt),
         updatedAt: failedAt,
       });
+      this.writeAutomationLog(failedRun, "error", "Automation failed.", error instanceof Error ? error.stack ?? error.message : String(error));
       this.emit({ type: "automation/run", payload: { run: failedRun } });
       this.emit({ type: "automation/updated", payload: { automation: failedAutomation } });
       throw error;
@@ -1673,6 +1770,24 @@ export class HarnessServer {
     return {
       tools: this.buildToolCatalog(workspace),
     };
+  }
+
+  private listTemplates(): TemplateListResult {
+    return {
+      templates: this.templateService.listTemplates(),
+    };
+  }
+
+  private scaffoldTemplate(params: TemplateScaffoldParams): TemplateScaffoldResult {
+    const project = params.projectId ? this.requireProject(params.projectId) : undefined;
+
+    return this.templateService.scaffold({
+      templateId: params.templateId,
+      target: params.target,
+      projectRoot: project?.rootPath,
+      name: params.name,
+      directoryName: params.directoryName,
+    });
   }
 
   private listMcpMounts(): McpListResult {
@@ -2087,6 +2202,29 @@ export class HarnessServer {
       },
     });
   }
+
+  private writeAutomationLog(
+    run: Pick<AutomationRunRecord, "id" | "automationId" | "projectId">,
+    level: AutomationRunLogRecord["level"],
+    message: string,
+    detail?: string,
+  ): AutomationRunLogRecord {
+    const log = this.database.createAutomationRunLog({
+      id: createId("automation_log"),
+      runId: run.id,
+      automationId: run.automationId,
+      projectId: run.projectId,
+      level,
+      message,
+      detail,
+      createdAt: new Date().toISOString(),
+    });
+    this.emit({
+      type: "automation/log",
+      payload: { log },
+    });
+    return log;
+  }
 }
 
 function buildTurnPlans(turns: TurnRecord[], items: ItemRecord[]): TurnPlanRecord[] {
@@ -2414,6 +2552,62 @@ function computeNextAutomationRunAt(
   return new Date(base + minutes * 60_000).toISOString();
 }
 
+function buildWorkflowAutomationOutput(
+  automationName: string,
+  workflowRunId: string,
+  steps: Array<{ stepId: string; status: string; artifactSummary?: string; output?: string }>,
+): string {
+  const lines = [
+    `Automation: ${automationName}`,
+    `Workflow run: ${workflowRunId}`,
+    "",
+    "Steps:",
+    ...steps.map((step) => `- ${step.stepId}: ${step.status}${step.artifactSummary ? ` | ${step.artifactSummary}` : ""}`),
+  ];
+
+  const noteworthyOutputs = steps
+    .map((step) => step.output?.trim())
+    .filter((value): value is string => Boolean(value))
+    .slice(0, 2);
+
+  if (noteworthyOutputs.length > 0) {
+    lines.push("", "Output excerpts:", ...noteworthyOutputs.map((value) => truncateForSummary(value, 320)));
+  }
+
+  return lines.join("\n");
+}
+
+function buildPromptAutomationOutput(params: {
+  automationName: string;
+  threadId: string;
+  turnId: string;
+  turnStatus: string;
+  finalMessage?: string;
+}): string {
+  const lines = [
+    `Automation: ${params.automationName}`,
+    `Thread: ${params.threadId}`,
+    `Turn: ${params.turnId}`,
+    `Status: ${params.turnStatus}`,
+  ];
+
+  if (params.finalMessage) {
+    lines.push("", "Final message:", params.finalMessage.trim());
+  }
+
+  return lines.join("\n");
+}
+
+function truncateForSummary(value: string, maxLength: number): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}...`;
+}
+
 function buildProtocolCompatibility(): ProtocolCompatibilityRecord {
   return {
     protocolVersion: "0.1.0",
@@ -2425,6 +2619,7 @@ function buildProtocolCompatibility(): ProtocolCompatibilityRecord {
       "Tool source kinds are stable across local, plugin, mcp, and internal tools.",
       "Structured tool errors use ToolErrorRecord and are attached through RPC error.data when available.",
       "Structured plan, diff, and review events are first-class and should not require parsing item bodies.",
+      "Template descriptors and catalog-scoped extension roots are additive distribution metadata.",
     ],
     documentationPath: "docs/protocol-compatibility.md",
   };

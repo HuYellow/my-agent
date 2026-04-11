@@ -24,6 +24,7 @@ interface OpenAiYaml {
   policy?: {
     allow_implicit_invocation?: boolean;
   };
+  template_version?: string;
 }
 
 export class SkillService {
@@ -122,6 +123,7 @@ export class SkillService {
     const roots: Array<{ scope: SkillDescriptor["scope"]; path: string }> = [
       { scope: "SYSTEM", path: this.systemSkillsRoot },
       { scope: "USER", path: join(this.homeDir, "skills") },
+      { scope: "CATALOG", path: join(this.homeDir, "catalogs", "skills") },
     ];
 
     if (repoRoot) {
@@ -190,6 +192,7 @@ export class SkillService {
         shortDescription: openaiYaml.interface?.short_description,
         brandColor: openaiYaml.interface?.brand_color,
         allowImplicitInvocation: openaiYaml.policy?.allow_implicit_invocation ?? openaiYaml.interface?.allow_implicit_invocation ?? scope === "SYSTEM",
+        templateVersion: typeof openaiYaml.template_version === "string" ? openaiYaml.template_version : undefined,
       },
     };
   }

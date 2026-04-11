@@ -21,11 +21,17 @@ async function main() {
         method: "automation/run",
         params: {
           automationId,
+          trigger: "github_action",
+          runner: "github-action",
+          initiatedBy: "GitHub Actions",
         },
       });
+      const run = "result" in response ? (response.result as { run?: { id?: string; summary?: string } }).run : undefined;
       writeGithubOutputs({
         mode: "automation",
         automation_id: automationId,
+        automation_run_id: run?.id ?? "",
+        summary: run?.summary ?? "",
         success: "result" in response ? "true" : "false",
       });
       writeGithubSummary("automation", response);

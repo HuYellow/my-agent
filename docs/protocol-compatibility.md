@@ -56,3 +56,10 @@ Supported tool error codes:
 - Desktop, app-server, and other clients should tolerate unknown additive fields.
 - Clients should ignore unknown event types they do not yet understand.
 - Clients should prefer structured `tool`, `artifact`, `plan`, and `diff` payloads over parsing message text.
+- Clients should tolerate new catalog-scoped assets and new template descriptors without assuming fixed source roots.
+
+## Distribution Templates
+
+- `template/list` enumerates built-in scaffold kits.
+- `template/scaffold` creates local skill, workflow, and plugin starter assets.
+- Template descriptors are additive metadata and may gain new optional fields over time.

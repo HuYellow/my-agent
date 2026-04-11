@@ -16,6 +16,15 @@ inputs:
   thread_title:
     description: "Optional thread title when running a prompt."
     required: false
+outputs:
+  mode:
+    description: "Execution mode used by the action."
+  automation_run_id:
+    description: "Automation run id when automation mode is used."
+  summary:
+    description: "Top-level summary reported by the runtime when available."
+  success:
+    description: "Whether the runtime call completed successfully."
 runs:
   using: "node20"
   main: "dist/index.js"

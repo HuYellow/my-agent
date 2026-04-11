@@ -3,10 +3,12 @@ import {
   type AgentTaskRecord,
   type AppConfig,
   type AutomationRecord,
+  type AutomationRunLogRecord,
   type AutomationRunRecord,
   type CreateAutomationParams,
   type CreateProjectParams,
   type CreateRequirementParams,
+  type DistributionTemplateRecord,
   type EnvironmentRecord,
   type ExecutionContextRecord,
   type HarnessEvent,
@@ -38,6 +40,7 @@ import {
   type WorkflowRecord,
   type WorkflowRunRecord,
   type WorktreeRecord,
+  type TemplateScaffoldParams,
 } from "@my-agent/protocol";
 
 let bootstrapPromise: Promise<void> | null = null;
@@ -66,6 +69,7 @@ interface AppState {
   reviewArtifacts: Record<string, ReviewArtifactRecord>;
   automations: AutomationRecord[];
   automationRuns: AutomationRunRecord[];
+  automationRunLogs: AutomationRunLogRecord[];
   worktrees: WorktreeRecord[];
   environments: EnvironmentRecord[];
   executionContexts: ExecutionContextRecord[];
@@ -78,6 +82,7 @@ interface AppState {
   terminalCapabilities: TerminalBackendCapability[];
   protocolCompatibility?: ProtocolCompatibilityRecord;
   runtimeTools: ToolCatalogRecord[];
+  templates: DistributionTemplateRecord[];
   skills: SkillDescriptor[];
   activeProjectId?: string;
   activeRequirementId?: string;
@@ -112,6 +117,7 @@ interface AppState {
   testProvider: (provider?: Partial<ProviderProfile>) => Promise<void>;
   refreshProviderModels: (provider?: Partial<ProviderProfile>) => Promise<void>;
   refreshToolCatalog: (params?: { projectId?: string; threadId?: string }) => Promise<void>;
+  scaffoldTemplate: (params: TemplateScaffoldParams) => Promise<{ rootPath: string; createdPaths: string[] }>;
   refreshRuntimeProjectState: (projectId?: string) => Promise<void>;
   handleEvent: (event: HarnessEvent) => void;
 }
@@ -129,6 +135,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   reviewArtifacts: {},
   automations: [],
   automationRuns: [],
+  automationRunLogs: [],
   worktrees: [],
   environments: [],
   executionContexts: [],
@@ -141,6 +148,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   terminalCapabilities: [],
   protocolCompatibility: undefined,
   runtimeTools: [],
+  templates: [],
   skills: [],
   activeRequirementId: undefined,
   providerModels: [],
@@ -180,6 +188,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           reviewArtifacts: Object.fromEntries((initial.reviews ?? []).map((review) => [review.id, buildReviewArtifactView(review)])),
           automations: initial.automations ?? [],
           automationRuns: initial.automationRuns ?? [],
+          automationRunLogs: initial.automationRunLogs ?? [],
           worktrees: initial.worktrees ?? [],
           environments: initial.environments ?? [],
           executionContexts: initial.executionContexts ?? [],
@@ -190,6 +199,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           terminalOutputArchives: initial.terminalOutputArchives ?? [],
           terminalCapabilities: initial.terminalCapabilities ?? [],
           runtimeTools: initial.tools ?? [],
+          templates: initial.templates ?? [],
           skills: initial.skills,
           config: initial.config,
           activeProjectId,
@@ -248,6 +258,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => ({
       automations: upsertAutomation(state.automations, result.automation),
       automationRuns: upsertAutomationRun(state.automationRuns, result.run),
+    }));
+    const logs = await window.myAgent.listAutomationRunLogs({ runId: result.run.id }).then((payload) => payload.logs);
+    set((state) => ({
+      automationRunLogs: upsertAutomationRunLogs(state.automationRunLogs, logs),
     }));
   },
   createRequirement: async (params) => {
@@ -635,6 +649,21 @@ export const useAppStore = create<AppState>((set, get) => ({
       runtimeTools: result.tools,
     });
   },
+  scaffoldTemplate: async (params) => {
+    const result = await window.myAgent.scaffoldTemplate(params);
+    const templates = await window.myAgent.listTemplates().then((payload) => payload.templates);
+    set({
+      templates,
+    });
+    if (params.projectId) {
+      await get().refreshRuntimeProjectState(params.projectId);
+      await get().refreshToolCatalog({ projectId: params.projectId });
+    }
+    return {
+      rootPath: result.rootPath,
+      createdPaths: result.createdPaths,
+    };
+  },
   refreshRuntimeProjectState: async (projectId) => {
     const activeProjectId = projectId ?? get().activeProjectId ?? get().config?.selectedProjectId;
 
@@ -642,6 +671,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({
         automations: [],
         automationRuns: [],
+        automationRunLogs: [],
         worktrees: [],
         environments: [],
         executionContexts: [],
@@ -652,9 +682,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       return;
     }
 
-    const [automations, automationRuns, worktrees, environments, executionContexts, workflows, workflowRuns, agentTasks] = await Promise.all([
+    const [automations, automationRuns, automationRunLogs, worktrees, environments, executionContexts, workflows, workflowRuns, agentTasks] = await Promise.all([
       window.myAgent.listAutomations({ projectId: activeProjectId }).then((result) => result.automations),
       window.myAgent.listAutomationRuns({ projectId: activeProjectId }).then((result) => result.runs),
+      window.myAgent.listAutomationRunLogs({ projectId: activeProjectId }).then((result) => result.logs),
       window.myAgent.listWorktrees(activeProjectId).then((result) => result.worktrees),
       window.myAgent.listEnvironments(activeProjectId).then((result) => result.environments),
       window.myAgent.listExecutionContexts(activeProjectId).then((result) => result.executionContexts),
@@ -666,6 +697,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({
       automations,
       automationRuns,
+      automationRunLogs,
       worktrees,
       environments,
       executionContexts,
@@ -823,6 +855,11 @@ export const useAppStore = create<AppState>((set, get) => ({
           automationRuns: upsertAutomationRun(state.automationRuns, event.payload.run),
         }));
         break;
+      case "automation/log":
+        set((state) => ({
+          automationRunLogs: upsertAutomationRunLog(state.automationRunLogs, event.payload.log),
+        }));
+        break;
       case "agent/updated":
         set((state) => ({
           agentTasks: upsertAgentTask(state.agentTasks, event.payload.task),
@@ -932,6 +969,16 @@ function upsertAutomationRun(runs: AutomationRunRecord[], run: AutomationRunReco
   return [...runs.filter((entry) => entry.id !== run.id), run].sort((left, right) =>
     right.createdAt.localeCompare(left.createdAt),
   );
+}
+
+function upsertAutomationRunLog(logs: AutomationRunLogRecord[], log: AutomationRunLogRecord): AutomationRunLogRecord[] {
+  return [...logs.filter((entry) => entry.id !== log.id), log].sort((left, right) =>
+    right.createdAt.localeCompare(left.createdAt),
+  );
+}
+
+function upsertAutomationRunLogs(logs: AutomationRunLogRecord[], nextLogs: AutomationRunLogRecord[]): AutomationRunLogRecord[] {
+  return nextLogs.reduce((current, log) => upsertAutomationRunLog(current, log), logs);
 }
 
 function upsertTurn(turns: TurnRecord[], turn: TurnRecord): TurnRecord[] {

@@ -3,11 +3,14 @@ import {
   type AgentTaskRecord,
   type AppConfig,
   type AutomationRecord,
+  type AutomationRunLogRecord,
   type AutomationRunRecord,
+  type AutomationRunLogsParams,
   type ConfigWriteParams,
   type CreateAutomationParams,
   type CreateProjectParams,
   type CreateRequirementParams,
+  type DistributionTemplateRecord,
   type ExecutionContextRecord,
   type HarnessEvent,
   type InitializeResult,
@@ -58,6 +61,7 @@ import {
   type UpdateRequirementParams,
   type UpdateThreadParams,
   type UpdateProjectParams,
+  type TemplateScaffoldParams,
 } from "@my-agent/protocol";
 
 declare global {
@@ -71,6 +75,7 @@ declare global {
       updateAutomation: (params: UpdateAutomationParams) => Promise<{ automation: AutomationRecord }>;
       runAutomation: (params: { automationId: string }) => Promise<{ automation: AutomationRecord; run: AutomationRunRecord }>;
       listAutomationRuns: (params?: { automationId?: string; projectId?: string }) => Promise<{ runs: AutomationRunRecord[] }>;
+      listAutomationRunLogs: (params?: AutomationRunLogsParams) => Promise<{ logs: AutomationRunLogRecord[] }>;
       listRequirements: (params?: { projectId?: string }) => Promise<{ requirements: RequirementRecord[]; memories: RequirementMemoryRecord[] }>;
       getRequirement: (requirementId: string) => Promise<{ requirement: RequirementRecord; memory: RequirementMemoryRecord }>;
       createRequirement: (params: CreateRequirementParams) => Promise<{ requirement: RequirementRecord; memory: RequirementMemoryRecord }>;
@@ -121,6 +126,12 @@ declare global {
       resumeWorkflow: (params: { runId: string; approvePausedSteps?: boolean; retryFailedStepIds?: string[] }) => Promise<unknown>;
       listAgentTasks: (projectId?: string) => Promise<{ tasks: AgentTaskRecord[] }>;
       listTools: (params?: ToolListParams) => Promise<{ tools: ToolCatalogRecord[] }>;
+      listTemplates: () => Promise<{ templates: DistributionTemplateRecord[] }>;
+      scaffoldTemplate: (params: TemplateScaffoldParams) => Promise<{
+        template: DistributionTemplateRecord;
+        rootPath: string;
+        createdPaths: string[];
+      }>;
       listPlugins: (params?: PluginListParams) => Promise<{ plugins: PluginRecord[] }>;
       updatePlugin: (params: UpdatePluginParams) => Promise<{ plugin: PluginRecord }>;
       listInternalTools: (params?: { projectId?: string }) => Promise<{ internalTools: InternalToolRecord[] }>;

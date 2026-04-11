@@ -6,6 +6,7 @@ import { z } from "zod";
 import { findGitRoot } from "../utils/path-utils.js";
 
 export const PLUGIN_MANIFEST_SCHEMA = z.object({
+  schemaVersion: z.string().default("1.0"),
   name: z.string().min(1),
   version: z.string().default("0.0.0"),
   enabled: z.boolean().optional(),
@@ -25,6 +26,13 @@ export const PLUGIN_MANIFEST_SCHEMA = z.object({
           additionalProperties: z.boolean().optional(),
         })
         .default({ type: "object", properties: {}, additionalProperties: true }),
+    })
+    .optional(),
+  compatibility: z
+    .object({
+      protocolVersion: z.string().optional(),
+      serverVersion: z.string().optional(),
+      notes: z.array(z.string()).optional(),
     })
     .optional(),
 });
@@ -83,6 +91,8 @@ export function discoverPluginEntries(params: {
             enabled: existing?.enabled ?? manifest.enabled !== false,
             trusted: existing?.trusted ?? defaultTrusted,
             capabilities: manifest.capabilities ?? [],
+            manifestVersion: manifest.schemaVersion,
+            compatibility: manifest.compatibility,
             toolName: manifest.tool?.name,
             sandboxMode: manifest.sandboxMode,
             command: manifest.command,
@@ -105,6 +115,8 @@ export function discoverPluginEntries(params: {
             enabled: existing?.enabled ?? false,
             trusted: existing?.trusted ?? defaultTrusted,
             capabilities: existing?.capabilities ?? [],
+            manifestVersion: existing?.manifestVersion,
+            compatibility: existing?.compatibility,
             toolName: existing?.toolName,
             sandboxMode: existing?.sandboxMode,
             command: existing?.command,
@@ -124,6 +136,7 @@ export function discoverPluginEntries(params: {
 function resolvePluginRoots(workspaceRoot: string, homeDir = join(homedir(), ".my-agent")): Array<{ source: PluginRecord["source"]; path: string }> {
   const roots: Array<{ source: PluginRecord["source"]; path: string }> = [
     { source: "user", path: join(homeDir, "plugins") },
+    { source: "catalog", path: join(homeDir, "catalogs", "plugins") },
   ];
   const repoRoot = findGitRoot(workspaceRoot);
 
@@ -142,6 +155,10 @@ function resolvePluginManifestPath(pluginPath: string): string | undefined {
 
 function validatePluginManifest(manifest: PluginManifest): string[] {
   const errors: string[] = [];
+
+  if (!manifest.schemaVersion.startsWith("1.")) {
+    errors.push(`Unsupported plugin schemaVersion: ${manifest.schemaVersion}`);
+  }
 
   if (!manifest.command?.trim()) {
     errors.push("Missing plugin command.");

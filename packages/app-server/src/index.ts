@@ -5,6 +5,7 @@ import { randomBytes } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { createRuntimeKernel, type RuntimeKernel } from "@my-agent/core/runtime-kernel";
 import { type HarnessEvent, type JsonRpcRequest, type JsonRpcResponse } from "@my-agent/protocol";
+import { AutomationScheduler } from "./automation-scheduler.js";
 
 export interface AppServerInstance {
   authToken: string;
@@ -20,6 +21,8 @@ export function createAppServer(options: {
   homeDir?: string;
   port?: number;
   runtime?: RuntimeKernel;
+  schedulerEnabled?: boolean;
+  schedulerPollIntervalMs?: number;
   onListening?: (payload: { server: string; port: number; authToken: string; homeDir: string }) => void;
 } = {}): AppServerInstance {
   const runtime =
@@ -41,6 +44,10 @@ export function createAppServer(options: {
       res,
     });
   });
+  const scheduler = new AutomationScheduler(
+    runtime,
+    options.schedulerPollIntervalMs ?? Number(process.env.MY_AGENT_AUTOMATION_POLL_MS ?? 30_000),
+  );
 
   function broadcastEvent(event: HarnessEvent): void {
     const payload = `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
@@ -65,6 +72,9 @@ export function createAppServer(options: {
 
       const address = server.address();
       const resolvedPort = typeof address === "object" && address ? address.port : port;
+      if (options.schedulerEnabled !== false) {
+        scheduler.start();
+      }
       options.onListening?.({
         server: "my-agent-app-server",
         port: resolvedPort,
@@ -81,6 +91,7 @@ export function createAppServer(options: {
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
       });
+      scheduler.stop();
       runtime.dispose();
     },
   };

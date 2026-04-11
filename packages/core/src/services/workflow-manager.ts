@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import YAML from "yaml";
 import {
+  type ArtifactCompatibilityRecord,
   type ProviderProfile,
   type ProjectRecord,
   type WorkspaceProfile,
@@ -263,6 +264,7 @@ function discoverWorkflows(project?: ProjectRecord): WorkflowRecord[] {
   const roots: Array<{ source: WorkflowRecord["source"]; path: string }> = [
     { source: "system", path: join(process.cwd(), "packages", "core", "system-workflows") },
     { source: "user", path: join(homedir(), ".my-agent", "workflows") },
+    { source: "catalog", path: join(homedir(), ".my-agent", "catalogs", "workflows") },
   ];
   const repoRoot = project ? findGitRoot(project.rootPath) : undefined;
 
@@ -305,9 +307,47 @@ function parseWorkflowFile(filePath: string, source: WorkflowRecord["source"]): 
     description: typeof parsed.description === "string" ? parsed.description : "Workflow",
     path: filePath,
     source,
+    manifestVersion:
+      typeof parsed.templateVersion === "string"
+        ? parsed.templateVersion
+        : typeof parsed.apiVersion === "string"
+          ? parsed.apiVersion
+          : undefined,
+    compatibility: parseCompatibility(parsed.compatibility),
     steps: steps.map((step, index) => normalizeWorkflowStep(step, index)),
     createdAt: now,
     updatedAt: now,
+  };
+}
+
+function parseCompatibility(value: unknown): ArtifactCompatibilityRecord | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+
+  const compatibility = value as Record<string, unknown>;
+  const protocolVersion =
+    typeof compatibility.protocolVersion === "string"
+      ? compatibility.protocolVersion
+      : typeof compatibility.protocol_version === "string"
+        ? compatibility.protocol_version
+        : undefined;
+  const serverVersion =
+    typeof compatibility.serverVersion === "string"
+      ? compatibility.serverVersion
+      : typeof compatibility.server_version === "string"
+        ? compatibility.server_version
+        : undefined;
+  const notes = Array.isArray(compatibility.notes) ? compatibility.notes.map((entry) => String(entry)) : undefined;
+
+  if (!protocolVersion && !serverVersion && !notes?.length) {
+    return undefined;
+  }
+
+  return {
+    protocolVersion,
+    serverVersion,
+    notes,
   };
 }
 

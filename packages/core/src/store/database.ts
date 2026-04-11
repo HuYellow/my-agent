@@ -4,6 +4,8 @@ import { DatabaseSync } from "node:sqlite";
 import { type AgentInputItem } from "@openai/agents";
 import {
   type AutomationRecord,
+  type AutomationRunArtifactRecord,
+  type AutomationRunLogRecord,
   type AutomationRunRecord,
   type EnvironmentRecord,
   type AgentTaskRecord,
@@ -306,6 +308,8 @@ export class HarnessDatabase {
         description TEXT NOT NULL,
         path TEXT NOT NULL,
         source TEXT NOT NULL,
+        manifest_version TEXT,
+        compatibility_json TEXT,
         steps_json TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -366,14 +370,30 @@ export class HarnessDatabase {
         project_id TEXT NOT NULL,
         requirement_id TEXT,
         status TEXT NOT NULL,
+        trigger TEXT NOT NULL DEFAULT 'manual',
+        runner TEXT NOT NULL DEFAULT 'core',
+        initiated_by TEXT,
         thread_id TEXT,
         turn_id TEXT,
         workflow_run_id TEXT,
         summary TEXT,
+        output TEXT,
+        artifacts_json TEXT NOT NULL DEFAULT '[]',
         error TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         completed_at TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS automation_run_logs (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        automation_id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        level TEXT NOT NULL,
+        message TEXT NOT NULL,
+        detail TEXT,
+        created_at TEXT NOT NULL
       );
 
       CREATE TABLE IF NOT EXISTS plugins (
@@ -386,6 +406,8 @@ export class HarnessDatabase {
         enabled INTEGER NOT NULL,
         trusted INTEGER NOT NULL DEFAULT 0,
         capabilities_json TEXT NOT NULL,
+        manifest_version TEXT,
+        compatibility_json TEXT,
         tool_name TEXT,
         sandbox_mode TEXT,
         command TEXT,
@@ -1316,14 +1338,16 @@ export class HarnessDatabase {
   upsertWorkflow(workflow: WorkflowRecord): WorkflowRecord {
     this.db
       .prepare(
-        `INSERT INTO workflows(id, project_id, name, description, path, source, steps_json, created_at, updated_at)
-         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO workflows(id, project_id, name, description, path, source, manifest_version, compatibility_json, steps_json, created_at, updated_at)
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            project_id = excluded.project_id,
            name = excluded.name,
            description = excluded.description,
            path = excluded.path,
            source = excluded.source,
+           manifest_version = excluded.manifest_version,
+           compatibility_json = excluded.compatibility_json,
            steps_json = excluded.steps_json,
            updated_at = excluded.updated_at`,
       )
@@ -1334,6 +1358,8 @@ export class HarnessDatabase {
         workflow.description,
         workflow.path,
         workflow.source,
+        workflow.manifestVersion ?? null,
+        workflow.compatibility ? JSON.stringify(workflow.compatibility) : null,
         JSON.stringify(workflow.steps),
         workflow.createdAt,
         workflow.updatedAt,
@@ -1478,8 +1504,8 @@ export class HarnessDatabase {
     this.db
       .prepare(
         `INSERT INTO automation_runs(
-          id, automation_id, kind, project_id, requirement_id, status, thread_id, turn_id, workflow_run_id, summary, error, created_at, updated_at, completed_at
-        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          id, automation_id, kind, project_id, requirement_id, status, trigger, runner, initiated_by, thread_id, turn_id, workflow_run_id, summary, output, artifacts_json, error, created_at, updated_at, completed_at
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         run.id,
@@ -1488,10 +1514,15 @@ export class HarnessDatabase {
         run.projectId,
         run.requirementId ?? null,
         run.status,
+        run.trigger,
+        run.runner,
+        run.initiatedBy ?? null,
         run.threadId ?? null,
         run.turnId ?? null,
         run.workflowRunId ?? null,
         run.summary ?? null,
+        run.output ?? null,
+        JSON.stringify(run.artifacts),
         run.error ?? null,
         run.createdAt,
         run.updatedAt,
@@ -1504,15 +1535,20 @@ export class HarnessDatabase {
     this.db
       .prepare(
         `UPDATE automation_runs
-         SET status = ?, thread_id = ?, turn_id = ?, workflow_run_id = ?, summary = ?, error = ?, updated_at = ?, completed_at = ?
+         SET status = ?, trigger = ?, runner = ?, initiated_by = ?, thread_id = ?, turn_id = ?, workflow_run_id = ?, summary = ?, output = ?, artifacts_json = ?, error = ?, updated_at = ?, completed_at = ?
          WHERE id = ?`,
       )
       .run(
         run.status,
+        run.trigger,
+        run.runner,
+        run.initiatedBy ?? null,
         run.threadId ?? null,
         run.turnId ?? null,
         run.workflowRunId ?? null,
         run.summary ?? null,
+        run.output ?? null,
+        JSON.stringify(run.artifacts),
         run.error ?? null,
         run.updatedAt,
         run.completedAt ?? null,
@@ -1539,13 +1575,45 @@ export class HarnessDatabase {
     return rows.map((row) => this.mapAutomationRun(row));
   }
 
+  createAutomationRunLog(log: AutomationRunLogRecord): AutomationRunLogRecord {
+    this.db
+      .prepare(
+        `INSERT INTO automation_run_logs(id, run_id, automation_id, project_id, level, message, detail, created_at)
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(log.id, log.runId, log.automationId, log.projectId, log.level, log.message, log.detail ?? null, log.createdAt);
+    return log;
+  }
+
+  listAutomationRunLogs(params: { automationId?: string; projectId?: string; runId?: string } = {}): AutomationRunLogRecord[] {
+    let rows: Record<string, unknown>[];
+
+    if (params.runId) {
+      rows = this.db
+        .prepare("SELECT * FROM automation_run_logs WHERE run_id = ? ORDER BY created_at ASC")
+        .all(params.runId) as Record<string, unknown>[];
+    } else if (params.automationId) {
+      rows = this.db
+        .prepare("SELECT * FROM automation_run_logs WHERE automation_id = ? ORDER BY created_at DESC")
+        .all(params.automationId) as Record<string, unknown>[];
+    } else if (params.projectId) {
+      rows = this.db
+        .prepare("SELECT * FROM automation_run_logs WHERE project_id = ? ORDER BY created_at DESC")
+        .all(params.projectId) as Record<string, unknown>[];
+    } else {
+      rows = this.db.prepare("SELECT * FROM automation_run_logs ORDER BY created_at DESC").all() as Record<string, unknown>[];
+    }
+
+    return rows.map((row) => this.mapAutomationRunLog(row));
+  }
+
   upsertPlugin(plugin: PluginRecord): PluginRecord {
     this.db
       .prepare(
         `INSERT INTO plugins(
-           id, name, version, path, manifest_path, source, enabled, trusted, capabilities_json, tool_name, sandbox_mode, command, args_json, validation_errors_json, created_at, updated_at
+           id, name, version, path, manifest_path, source, enabled, trusted, capabilities_json, manifest_version, compatibility_json, tool_name, sandbox_mode, command, args_json, validation_errors_json, created_at, updated_at
          )
-         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            name = excluded.name,
            version = excluded.version,
@@ -1555,6 +1623,8 @@ export class HarnessDatabase {
            enabled = excluded.enabled,
            trusted = excluded.trusted,
            capabilities_json = excluded.capabilities_json,
+           manifest_version = excluded.manifest_version,
+           compatibility_json = excluded.compatibility_json,
            tool_name = excluded.tool_name,
            sandbox_mode = excluded.sandbox_mode,
            command = excluded.command,
@@ -1572,6 +1642,8 @@ export class HarnessDatabase {
         plugin.enabled ? 1 : 0,
         plugin.trusted ? 1 : 0,
         JSON.stringify(plugin.capabilities),
+        plugin.manifestVersion ?? null,
+        plugin.compatibility ? JSON.stringify(plugin.compatibility) : null,
         plugin.toolName ?? null,
         plugin.sandboxMode ?? null,
         plugin.command ?? null,
@@ -1963,6 +2035,8 @@ export class HarnessDatabase {
       description: String(row.description),
       path: String(row.path),
       source: row.source as WorkflowRecord["source"],
+      manifestVersion: row.manifest_version ? String(row.manifest_version) : undefined,
+      compatibility: row.compatibility_json ? JSON.parse(String(row.compatibility_json)) : undefined,
       steps: JSON.parse(String(row.steps_json)) as WorkflowRecord["steps"],
       createdAt: String(row.created_at),
       updatedAt: String(row.updated_at),
@@ -2031,14 +2105,32 @@ export class HarnessDatabase {
       projectId: String(row.project_id),
       requirementId: row.requirement_id ? String(row.requirement_id) : undefined,
       status: row.status as AutomationRunRecord["status"],
+      trigger: (row.trigger as AutomationRunRecord["trigger"]) ?? "manual",
+      runner: (row.runner as AutomationRunRecord["runner"]) ?? "core",
+      initiatedBy: row.initiated_by ? String(row.initiated_by) : undefined,
       threadId: row.thread_id ? String(row.thread_id) : undefined,
       turnId: row.turn_id ? String(row.turn_id) : undefined,
       workflowRunId: row.workflow_run_id ? String(row.workflow_run_id) : undefined,
       summary: row.summary ? String(row.summary) : undefined,
+      output: row.output ? String(row.output) : undefined,
+      artifacts: row.artifacts_json ? (JSON.parse(String(row.artifacts_json)) as AutomationRunArtifactRecord[]) : [],
       error: row.error ? String(row.error) : undefined,
       createdAt: String(row.created_at),
       updatedAt: String(row.updated_at),
       completedAt: row.completed_at ? String(row.completed_at) : undefined,
+    };
+  }
+
+  private mapAutomationRunLog(row: Record<string, unknown>): AutomationRunLogRecord {
+    return {
+      id: String(row.id),
+      runId: String(row.run_id),
+      automationId: String(row.automation_id),
+      projectId: String(row.project_id),
+      level: row.level as AutomationRunLogRecord["level"],
+      message: String(row.message),
+      detail: row.detail ? String(row.detail) : undefined,
+      createdAt: String(row.created_at),
     };
   }
 
@@ -2067,6 +2159,8 @@ export class HarnessDatabase {
       enabled: Number(row.enabled) === 1,
       trusted: Number(row.trusted ?? 0) === 1,
       capabilities: JSON.parse(String(row.capabilities_json)) as string[],
+      manifestVersion: row.manifest_version ? String(row.manifest_version) : undefined,
+      compatibility: row.compatibility_json ? JSON.parse(String(row.compatibility_json)) : undefined,
       toolName: row.tool_name ? String(row.tool_name) : undefined,
       sandboxMode: row.sandbox_mode ? (String(row.sandbox_mode) as PluginRecord["sandboxMode"]) : undefined,
       command: row.command ? String(row.command) : undefined,
@@ -2281,6 +2375,14 @@ export class HarnessDatabase {
       this.db.exec("ALTER TABLE plugins ADD COLUMN validation_errors_json TEXT NOT NULL DEFAULT '[]'");
     }
 
+    if (!this.columnExists("plugins", "manifest_version")) {
+      this.db.exec("ALTER TABLE plugins ADD COLUMN manifest_version TEXT");
+    }
+
+    if (!this.columnExists("plugins", "compatibility_json")) {
+      this.db.exec("ALTER TABLE plugins ADD COLUMN compatibility_json TEXT");
+    }
+
     if (!this.tableExists("internal_tools")) {
       this.db.exec(`
         CREATE TABLE internal_tools (
@@ -2387,6 +2489,14 @@ export class HarnessDatabase {
       this.db.exec("ALTER TABLE workflow_runs ADD COLUMN requirement_id TEXT");
     }
 
+    if (!this.columnExists("workflows", "manifest_version")) {
+      this.db.exec("ALTER TABLE workflows ADD COLUMN manifest_version TEXT");
+    }
+
+    if (!this.columnExists("workflows", "compatibility_json")) {
+      this.db.exec("ALTER TABLE workflows ADD COLUMN compatibility_json TEXT");
+    }
+
     if (!this.tableExists("automations")) {
       this.db.exec(`
         CREATE TABLE automations (
@@ -2419,14 +2529,54 @@ export class HarnessDatabase {
           project_id TEXT NOT NULL,
           requirement_id TEXT,
           status TEXT NOT NULL,
+          trigger TEXT NOT NULL DEFAULT 'manual',
+          runner TEXT NOT NULL DEFAULT 'core',
+          initiated_by TEXT,
           thread_id TEXT,
           turn_id TEXT,
           workflow_run_id TEXT,
           summary TEXT,
+          output TEXT,
+          artifacts_json TEXT NOT NULL DEFAULT '[]',
           error TEXT,
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL,
           completed_at TEXT
+        )
+      `);
+    }
+
+    if (!this.columnExists("automation_runs", "trigger")) {
+      this.db.exec("ALTER TABLE automation_runs ADD COLUMN trigger TEXT NOT NULL DEFAULT 'manual'");
+    }
+
+    if (!this.columnExists("automation_runs", "runner")) {
+      this.db.exec("ALTER TABLE automation_runs ADD COLUMN runner TEXT NOT NULL DEFAULT 'core'");
+    }
+
+    if (!this.columnExists("automation_runs", "initiated_by")) {
+      this.db.exec("ALTER TABLE automation_runs ADD COLUMN initiated_by TEXT");
+    }
+
+    if (!this.columnExists("automation_runs", "output")) {
+      this.db.exec("ALTER TABLE automation_runs ADD COLUMN output TEXT");
+    }
+
+    if (!this.columnExists("automation_runs", "artifacts_json")) {
+      this.db.exec("ALTER TABLE automation_runs ADD COLUMN artifacts_json TEXT NOT NULL DEFAULT '[]'");
+    }
+
+    if (!this.tableExists("automation_run_logs")) {
+      this.db.exec(`
+        CREATE TABLE automation_run_logs (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          automation_id TEXT NOT NULL,
+          project_id TEXT NOT NULL,
+          level TEXT NOT NULL,
+          message TEXT NOT NULL,
+          detail TEXT,
+          created_at TEXT NOT NULL
         )
       `);
     }

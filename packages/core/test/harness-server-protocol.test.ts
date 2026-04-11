@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { createRuntimeKernel } from "../src/runtime-kernel.js";
 
 describe("HarnessServer protocol compatibility", () => {
-  it("accepts review/list, requirement/list, automation/list, plugin/internal tool management, and turn/steer methods", async () => {
+  it("accepts review/list, requirement/list, automation/list/logs, template scaffolding, plugin/internal tool management, and turn/steer methods", async () => {
     const homeDir = mkdtempSync(join(tmpdir(), "my-agent-kernel-"));
     const kernel = createRuntimeKernel({
       homeDir,
@@ -28,10 +28,31 @@ describe("HarnessServer protocol compatibility", () => {
         id: "automation-list",
         method: "automation/list",
       });
+      const automationLogs = await kernel.server.handle({
+        jsonrpc: "2.0",
+        id: "automation-logs",
+        method: "automation/logs",
+      });
       const toolList = await kernel.server.handle({
         jsonrpc: "2.0",
         id: "tool-list",
         method: "tool/list",
+      });
+      const templateList = await kernel.server.handle({
+        jsonrpc: "2.0",
+        id: "template-list",
+        method: "template/list",
+      });
+      const templateScaffold = await kernel.server.handle({
+        jsonrpc: "2.0",
+        id: "template-scaffold",
+        method: "template/scaffold",
+        params: {
+          templateId: "skill-basic",
+          target: "user",
+          name: "Protocol Test Skill",
+          directoryName: "protocol-test-skill",
+        },
       });
       const pluginList = await kernel.server.handle({
         jsonrpc: "2.0",
@@ -103,7 +124,10 @@ describe("HarnessServer protocol compatibility", () => {
       expect("result" in reviewList && Array.isArray((reviewList as any).result.reviews)).toBe(true);
       expect("result" in requirementList && Array.isArray((requirementList as any).result.requirements)).toBe(true);
       expect("result" in automationList && Array.isArray((automationList as any).result.automations)).toBe(true);
+      expect("result" in automationLogs && Array.isArray((automationLogs as any).result.logs)).toBe(true);
       expect("result" in toolList && Array.isArray((toolList as any).result.tools)).toBe(true);
+      expect("result" in templateList && Array.isArray((templateList as any).result.templates)).toBe(true);
+      expect("result" in templateScaffold && Array.isArray((templateScaffold as any).result.createdPaths)).toBe(true);
       expect("result" in pluginList && Array.isArray((pluginList as any).result.plugins)).toBe(true);
       expect("result" in internalToolList && Array.isArray((internalToolList as any).result.internalTools)).toBe(true);
       expect("error" in pluginUpdate && pluginUpdate.error.message).toContain("Plugin not found");
@@ -174,6 +198,8 @@ describe("HarnessServer protocol compatibility", () => {
         expect.arrayContaining(["local", "plugin", "mcp", "internal"]),
       );
       expect("result" in initialized && (initialized as any).result.tools.some((tool: any) => tool.source.type === "local")).toBe(true);
+      expect("result" in initialized && Array.isArray((initialized as any).result.automationRunLogs)).toBe(true);
+      expect("result" in initialized && Array.isArray((initialized as any).result.templates)).toBe(true);
     } finally {
       kernel.dispose();
     }

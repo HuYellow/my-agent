@@ -2,6 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { createRuntimeKernel } from "@my-agent/core/runtime-kernel";
 import { createAppServer, type AppServerInstance } from "../src/index.js";
 
 const runningServers: AppServerInstance[] = [];
@@ -116,5 +117,51 @@ describe("app-server RPC bridge", () => {
 
     const catalogEvent = await nextCatalogEvent();
     expect(catalogEvent?.payload?.tools?.some((tool: any) => tool.source.type === "local")).toBe(true);
+  });
+
+  it("schedules due automation runs in headless app-server mode", async () => {
+    const runtime = createRuntimeKernel({
+      homeDir: mkdtempSync(join(tmpdir(), "my-agent-app-server-")),
+      emitEvent: () => undefined,
+    });
+    const now = new Date().toISOString();
+    const project = runtime.database.listProjects()[0]!;
+    runtime.database.createAutomation({
+      id: "automation-due",
+      name: "Due automation",
+      kind: "workflow",
+      projectId: project.id,
+      scheduleType: "interval",
+      intervalMinutes: 1,
+      status: "active",
+      lastRunStatus: "idle",
+      nextRunAt: new Date(Date.now() - 60_000).toISOString(),
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const instance = createAppServer({
+      authToken: "test-token",
+      runtime,
+      port: 0,
+      schedulerPollIntervalMs: 50,
+    });
+    runningServers.push(instance);
+    await instance.start();
+
+    const deadline = Date.now() + 2_000;
+    let runs = runtime.database.listAutomationRuns({ automationId: "automation-due" });
+
+    while (runs.length === 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      runs = runtime.database.listAutomationRuns({ automationId: "automation-due" });
+    }
+
+    expect(runs[0]).toMatchObject({
+      trigger: "scheduler",
+      runner: "app-server",
+      status: "failed",
+    });
+    expect(runtime.database.listAutomationRunLogs({ runId: runs[0]!.id }).length).toBeGreaterThan(0);
   });
 });

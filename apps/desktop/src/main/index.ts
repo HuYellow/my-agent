@@ -13,6 +13,7 @@ import {
   type CreateAutomationParams,
   type EnvironmentDetectParams,
   type HarnessEvent,
+  type AutomationRunLogsParams,
   type InternalToolListParams,
   type InterruptTurnParams,
   type JsonRpcMessage,
@@ -28,6 +29,7 @@ import {
   type PluginListParams,
   type StartThreadParams,
   type StartTurnParams,
+  type TemplateScaffoldParams,
   type TerminalArchiveParams,
   type TerminalApprovalResponseParams,
   type TerminalClearBufferParams,
@@ -410,6 +412,7 @@ function registerIpc(): void {
   ipcMain.handle("automation:update", (_event, params: UpdateAutomationParams) => harness.request("automation/update", params));
   ipcMain.handle("automation:run", (_event, params: RunAutomationParams) => harness.request("automation/run", params));
   ipcMain.handle("automation:runs", (_event, params: { automationId?: string; projectId?: string }) => harness.request("automation/runs", params));
+  ipcMain.handle("automation:logs", (_event, params: AutomationRunLogsParams) => harness.request("automation/logs", params));
   ipcMain.handle("project:path:reveal", async (_event, params: { projectPath: string }) => {
     const error = await shell.openPath(params.projectPath);
     return { ok: error.length === 0, error: error || undefined };
@@ -470,6 +473,8 @@ ipcMain.handle("command:exec", (_event, params: CommandExecParams) => harness.re
   ipcMain.handle("executionContext:list", (_event, params: { projectId?: string }) => harness.request("executionContext/list", params));
   ipcMain.handle("agent:list", (_event, params: { projectId?: string }) => harness.request("agent/list", params));
   ipcMain.handle("tool:list", (_event, params: ToolListParams) => harness.request("tool/list", params));
+  ipcMain.handle("template:list", () => harness.request("template/list"));
+  ipcMain.handle("template:scaffold", (_event, params: TemplateScaffoldParams) => harness.request("template/scaffold", params));
   ipcMain.handle("plugin:list", (_event, params: PluginListParams) => harness.request("plugin/list", params));
   ipcMain.handle("plugin:update", (_event, params: UpdatePluginParams) => harness.request("plugin/update", params));
   ipcMain.handle("internalTool:list", (_event, params: InternalToolListParams) => harness.request("internalTool/list", params));

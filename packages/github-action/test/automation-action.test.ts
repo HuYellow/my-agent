@@ -9,7 +9,11 @@ describe("github-action automation support", () => {
 
     expect(source).toContain("MY_AGENT_AUTOMATION_ID");
     expect(source).toContain('method: "automation/run"');
+    expect(source).toContain('trigger: "github_action"');
+    expect(source).toContain('runner: "github-action"');
     expect(source).toContain('mode: "automation"');
+    expect(source).toContain("automation_run_id");
     expect(manifest).toContain("automation_id:");
+    expect(manifest).toContain("automation_run_id:");
   });
 });

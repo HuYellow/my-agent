@@ -26,6 +26,7 @@ afterEach(() => {
     runtimeTools: [],
     protocolCompatibility: undefined,
     terminals: [],
+    templates: [],
     terminalOutputArchives: [],
     terminalCapabilities: [],
     terminalOutputs: {},
@@ -402,6 +403,9 @@ describe("desktop thread smoke", () => {
     expect(source).toContain("threadWorkspaceView");
     expect(source).toContain("Review Findings");
     expect(source).toContain("Runtime");
+    expect(source).toContain("Templates & Distribution");
+    expect(source).toContain("DistributionTemplatesCard");
+    expect(source).toContain("Scaffold Template");
     expect(source).toContain("Plan");
     expect(source).toContain("Open Turn");
     expect(source).toContain("Open Review");
@@ -471,6 +475,8 @@ describe("desktop thread smoke", () => {
     expect(preloadSource).toContain("createAutomation");
     expect(preloadSource).toContain("runAutomation");
     expect(preloadSource).toContain("listAutomationRuns");
+    expect(preloadSource).toContain("listTemplates");
+    expect(preloadSource).toContain("scaffoldTemplate");
     expect(preloadSource).toContain("respondTerminalApproval");
     expect(preloadSource).toContain("createTerminal");
     expect(preloadSource).toContain("writeTerminal");
@@ -487,6 +493,8 @@ describe("desktop thread smoke", () => {
     expect(envSource).toContain("createAutomation");
     expect(envSource).toContain("runAutomation");
     expect(envSource).toContain("listAutomationRuns");
+    expect(envSource).toContain("listTemplates");
+    expect(envSource).toContain("scaffoldTemplate");
     expect(envSource).toContain("respondTerminalApproval");
     expect(envSource).toContain("createTerminal");
     expect(envSource).toContain("writeTerminal");
@@ -505,6 +513,8 @@ describe("desktop thread smoke", () => {
     expect(mainSource).toContain('"terminal:archive"');
     expect(mainSource).toContain('"terminal:clear"');
     expect(mainSource).toContain('"workflow:resume"');
+    expect(mainSource).toContain('"template:list"');
+    expect(mainSource).toContain('"template:scaffold"');
     expect(mainSource).toContain("retryFailedStepIds");
     expect(mainSource).toContain('"executionContext:list"');
     expect(mainSource).toContain('"agent:list"');

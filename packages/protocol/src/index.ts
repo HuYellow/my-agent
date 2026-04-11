@@ -38,12 +38,14 @@ export type SandboxMode = "read-only" | "workspace-write" | "danger-full-access"
 export type ApprovalPolicy = "on-request" | "on-failure" | "never";
 export type ApiFlavor = "chat_completions" | "responses";
 export type ModelReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
-export type SkillScope = "SYSTEM" | "USER" | "REPO" | "ADMIN";
+export type SkillScope = "SYSTEM" | "USER" | "REPO" | "CATALOG" | "ADMIN";
 export type RuntimeRunMode = "no-tools" | "limited-tools" | "full-tools";
 export type RequirementStatus = "active" | "paused" | "completed" | "archived";
 export type AutomationStatus = "active" | "paused";
 export type AutomationKind = "workflow" | "prompt";
 export type AutomationScheduleType = "manual" | "interval";
+export type AutomationRunTrigger = "manual" | "scheduler" | "github_action" | "api";
+export type AutomationRunner = "desktop" | "app-server" | "github-action" | "core";
 export type ToolSource = "local" | "plugin" | "mcp" | "internal";
 export type ToolApprovalMode = "none" | "preflight" | "deferred";
 export type ToolRiskLevel = "safe_read" | "write" | "interactive" | "network" | "privileged";
@@ -102,6 +104,28 @@ export interface ToolErrorRecord {
   tool?: ToolReferenceRecord;
   approvalMode?: ToolApprovalMode;
   details?: Record<string, unknown>;
+}
+
+export type TemplateKind = "skill" | "workflow" | "plugin";
+export type DistributionTarget = "user" | "repo" | "catalog";
+
+export interface ArtifactCompatibilityRecord {
+  protocolVersion?: string;
+  serverVersion?: string;
+  notes?: string[];
+}
+
+export interface DistributionTemplateRecord {
+  id: string;
+  kind: TemplateKind;
+  name: string;
+  description: string;
+  version: string;
+  recommendedTarget: DistributionTarget;
+  supportedTargets: DistributionTarget[];
+  destinationHint: string;
+  files: string[];
+  documentationPath?: string;
 }
 
 export type ItemKind =
@@ -307,6 +331,7 @@ export interface SkillDescriptor {
     shortDescription?: string;
     brandColor?: string;
     allowImplicitInvocation: boolean;
+    templateVersion?: string;
   };
 }
 
@@ -359,10 +384,12 @@ export interface InitializeResult {
   workflowRuns?: WorkflowRunRecord[];
   automations?: AutomationRecord[];
   automationRuns?: AutomationRunRecord[];
+  automationRunLogs?: AutomationRunLogRecord[];
   agentTasks?: AgentTaskRecord[];
   tools?: ToolCatalogRecord[];
   plugins?: PluginRecord[];
   internalTools?: InternalToolRecord[];
+  templates?: DistributionTemplateRecord[];
 }
 
 export interface StartThreadParams {
@@ -876,7 +903,9 @@ export interface WorkflowRecord {
   name: string;
   description: string;
   path: string;
-  source: "system" | "user" | "repo";
+  source: "system" | "user" | "repo" | "catalog";
+  manifestVersion?: string;
+  compatibility?: ArtifactCompatibilityRecord;
   steps: WorkflowStep[];
   createdAt: string;
   updatedAt: string;
@@ -950,14 +979,38 @@ export interface AutomationRunRecord {
   projectId: string;
   requirementId?: string;
   status: "running" | "completed" | "failed";
+  trigger: AutomationRunTrigger;
+  runner: AutomationRunner;
+  initiatedBy?: string;
   threadId?: string;
   turnId?: string;
   workflowRunId?: string;
   summary?: string;
+  output?: string;
+  artifacts: AutomationRunArtifactRecord[];
   error?: string;
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
+}
+
+export interface AutomationRunArtifactRecord {
+  kind: "workflow_run" | "thread" | "turn" | "report";
+  label: string;
+  id?: string;
+  summary?: string;
+  metadata?: Record<string, string>;
+}
+
+export interface AutomationRunLogRecord {
+  id: string;
+  runId: string;
+  automationId: string;
+  projectId: string;
+  level: "info" | "warning" | "error";
+  message: string;
+  detail?: string;
+  createdAt: string;
 }
 
 export interface ReviewArtifactRecord {
@@ -978,10 +1031,12 @@ export interface PluginRecord {
   version: string;
   path: string;
   manifestPath: string;
-  source: "system" | "user" | "repo";
+  source: "system" | "user" | "repo" | "catalog";
   enabled: boolean;
   trusted: boolean;
   capabilities: string[];
+  manifestVersion?: string;
+  compatibility?: ArtifactCompatibilityRecord;
   toolName?: string;
   sandboxMode?: SandboxMode;
   command?: string;
@@ -1093,6 +1148,7 @@ export type HarnessEvent =
   | EventEnvelope<"workflow/updated", { workflow: WorkflowRecord }>
   | EventEnvelope<"automation/updated", { automation: AutomationRecord }>
   | EventEnvelope<"automation/run", { run: AutomationRunRecord }>
+  | EventEnvelope<"automation/log", { log: AutomationRunLogRecord }>
   | EventEnvelope<"plugin/updated", { plugin: PluginRecord }>
   | EventEnvelope<"internalTool/updated", { internalTool: InternalToolRecord }>
   | EventEnvelope<"mcp/updated", { mount: McpMountRecord }>
@@ -1260,6 +1316,24 @@ export interface PluginListResult {
   plugins: PluginRecord[];
 }
 
+export interface TemplateListResult {
+  templates: DistributionTemplateRecord[];
+}
+
+export interface TemplateScaffoldParams {
+  templateId: string;
+  projectId?: string;
+  target: DistributionTarget;
+  name?: string;
+  directoryName?: string;
+}
+
+export interface TemplateScaffoldResult {
+  template: DistributionTemplateRecord;
+  rootPath: string;
+  createdPaths: string[];
+}
+
 export interface UpdatePluginParams {
   pluginId: string;
   patch: Partial<Pick<PluginRecord, "enabled" | "trusted">>;
@@ -1317,6 +1391,16 @@ export interface AutomationRunsResult {
   runs: AutomationRunRecord[];
 }
 
+export interface AutomationRunLogsParams {
+  automationId?: string;
+  projectId?: string;
+  runId?: string;
+}
+
+export interface AutomationRunLogsResult {
+  logs: AutomationRunLogRecord[];
+}
+
 export interface CreateAutomationParams {
   name: string;
   kind: AutomationKind;
@@ -1350,6 +1434,9 @@ export interface UpdateAutomationResult {
 
 export interface RunAutomationParams {
   automationId: string;
+  trigger?: AutomationRunTrigger;
+  runner?: AutomationRunner;
+  initiatedBy?: string;
 }
 
 export interface RunAutomationResult {

@@ -48,7 +48,10 @@ import {
   type AgentTaskRecord,
   type ApprovalPolicy,
   type AutomationRecord,
+  type AutomationRunLogRecord,
   type AutomationRunRecord,
+  type DistributionTarget,
+  type DistributionTemplateRecord,
   type ExecutionContextRecord,
   type InternalToolRecord,
   type ItemKind,
@@ -271,6 +274,7 @@ export function App() {
     workflowRuns,
     automations,
     automationRuns,
+    automationRunLogs,
     agentTasks,
     terminals,
     terminalOutputs,
@@ -278,6 +282,7 @@ export function App() {
     terminalCapabilities,
     protocolCompatibility,
     runtimeTools,
+    templates,
     skills,
     activeProjectId,
     activeRequirementId,
@@ -311,6 +316,7 @@ export function App() {
     testProvider,
     refreshProviderModels,
     refreshToolCatalog,
+    scaffoldTemplate,
   } = useAppStore();
 
   const [activeView, setActiveView] = useState<NavView>("threads");
@@ -2053,6 +2059,7 @@ export function App() {
             threads={threads}
             automations={automations}
             automationRuns={automationRuns}
+            automationRunLogs={automationRunLogs}
             workflows={workflows}
             runs={workflowRuns}
             worktrees={worktrees}
@@ -2072,6 +2079,8 @@ export function App() {
         ) : (
             <SettingsPanel
               project={activeProject}
+              templates={templates}
+              protocolCompatibility={protocolCompatibility}
               providerForm={providerForm}
               setProviderForm={setProviderForm}
               providerTestMessage={providerTestMessage}
@@ -2112,6 +2121,7 @@ export function App() {
                 setProviderForm((state) => ({ ...state, rootPath: picked }));
               }
             }}
+            onScaffoldTemplate={scaffoldTemplate}
           />
         )}
         </main>
@@ -3320,6 +3330,7 @@ function RuntimeAutomationPanel({
   threads,
   automations,
   automationRuns,
+  automationRunLogs,
   workflows,
   runs,
   worktrees,
@@ -3337,6 +3348,7 @@ function RuntimeAutomationPanel({
   threads: ThreadRecord[];
   automations: AutomationRecord[];
   automationRuns: AutomationRunRecord[];
+  automationRunLogs: AutomationRunLogRecord[];
   workflows: WorkflowRecord[];
   runs: WorkflowRunRecord[];
   worktrees: WorktreeRecord[];
@@ -3400,6 +3412,10 @@ function RuntimeAutomationPanel({
   const visibleAutomationRuns = useMemo(
     () => (projectId ? automationRuns.filter((run) => run.projectId === projectId) : automationRuns),
     [automationRuns, projectId],
+  );
+  const visibleAutomationRunLogs = useMemo(
+    () => (projectId ? automationRunLogs.filter((log) => log.projectId === projectId) : automationRunLogs),
+    [automationRunLogs, projectId],
   );
 
   async function handleResumeWorkflow(params: { runId: string; approvePausedSteps?: boolean; retryFailedStepIds?: string[] }) {
@@ -3604,6 +3620,7 @@ function RuntimeAutomationPanel({
 
         {visibleAutomations.map((automation) => {
           const recentRuns = visibleAutomationRuns.filter((run) => run.automationId === automation.id).slice(0, 3);
+          const recentLogs = visibleAutomationRunLogs.filter((log) => log.automationId === automation.id).slice(0, 12);
           return (
             <div key={automation.id} className="skill-card">
               <div className="skill-card__header">
@@ -3642,19 +3659,67 @@ function RuntimeAutomationPanel({
               </div>
               <div className="settings-panel__message">Recent runs: {recentRuns.length}</div>
               {recentRuns.map((run) => (
-                <div key={run.id} className="workflow-step-row">
-                  <div className="workflow-step-row__title">
+                <details key={run.id} className="workflow-step-row">
+                  <summary className="workflow-step-row__title">
                     <strong>{run.status}</strong>
                     <span>{formatRelativeTime(run.updatedAt)}</span>
-                  </div>
+                  </summary>
                   <div className="workflow-step-row__meta">
+                    <small>{run.trigger} via {run.runner}{run.initiatedBy ? ` · ${run.initiatedBy}` : ""}</small>
                     {run.workflowRunId && <code>{run.workflowRunId}</code>}
                     {run.threadId && <code>{run.threadId}</code>}
+                    {run.turnId && <code>{run.turnId}</code>}
                     {run.summary ? <small>{run.summary}</small> : null}
                     {run.error ? <small>{run.error}</small> : null}
                   </div>
-                </div>
+                  {run.artifacts.length > 0 ? (
+                    <div className="workflow-step-row__meta">
+                      {run.artifacts.map((artifact) => (
+                        <small key={`${run.id}:${artifact.kind}:${artifact.id ?? artifact.label}`}>
+                          {artifact.kind}: {artifact.label}{artifact.summary ? ` · ${artifact.summary}` : ""}
+                        </small>
+                      ))}
+                    </div>
+                  ) : null}
+                  {run.output ? (
+                    <details className="workflow-step-row__details">
+                      <summary>Headless output</summary>
+                      <pre>{run.output}</pre>
+                    </details>
+                  ) : null}
+                  <details className="workflow-step-row__details">
+                    <summary>Audit log</summary>
+                    {visibleAutomationRunLogs.filter((log) => log.runId === run.id).length > 0 ? (
+                      visibleAutomationRunLogs
+                        .filter((log) => log.runId === run.id)
+                        .map((log) => (
+                          <div key={log.id} className="workflow-step-row__failure">
+                            <strong>{log.level} · {formatRelativeTime(log.createdAt)}</strong>
+                            <small>{log.message}</small>
+                            {log.detail ? <pre>{log.detail}</pre> : null}
+                          </div>
+                        ))
+                    ) : (
+                      <small>No persisted logs for this run.</small>
+                    )}
+                  </details>
+                </details>
               ))}
+              {recentRuns.length === 0 && recentLogs.length > 0 ? (
+                <details className="workflow-step-row">
+                  <summary className="workflow-step-row__title">
+                    <strong>Recent audit log</strong>
+                    <span>{recentLogs.length} entries</span>
+                  </summary>
+                  <div className="workflow-step-row__meta">
+                    {recentLogs.map((log) => (
+                      <small key={log.id}>
+                        {log.level} · {formatRelativeTime(log.createdAt)} · {log.message}
+                      </small>
+                    ))}
+                  </div>
+                </details>
+              ) : null}
             </div>
           );
         })}
@@ -4350,6 +4415,8 @@ function SettingsNavItem({
 
 function SettingsPanel({
   project,
+  templates,
+  protocolCompatibility,
   providerForm,
   setProviderForm,
   providerTestMessage,
@@ -4362,8 +4429,11 @@ function SettingsPanel({
   onRefreshProviderModels,
   onSaveConfig,
   onPickWorkspace,
+  onScaffoldTemplate,
 }: {
   project?: ProjectRecord;
+  templates: DistributionTemplateRecord[];
+  protocolCompatibility?: import("@my-agent/protocol").ProtocolCompatibilityRecord;
   providerForm: ProviderFormState;
   setProviderForm: React.Dispatch<React.SetStateAction<ProviderFormState>>;
   providerTestMessage?: string;
@@ -4376,8 +4446,9 @@ function SettingsPanel({
   onRefreshProviderModels: () => Promise<void>;
   onSaveConfig: () => void;
   onPickWorkspace: () => Promise<void>;
+  onScaffoldTemplate: (params: { templateId: string; projectId?: string; target: DistributionTarget; name?: string; directoryName?: string }) => Promise<{ rootPath: string; createdPaths: string[] }>;
 }) {
-  type SettingsCategory = "api" | "project" | "policy" | "runtime";
+  type SettingsCategory = "api" | "project" | "policy" | "runtime" | "distribution";
   const [activeCategory, setActiveCategory] = useState<SettingsCategory>("api");
 
   const categoryTitles: Record<SettingsCategory, string> = {
@@ -4385,6 +4456,7 @@ function SettingsPanel({
     project: "Project Settings",
     policy: "Approval Policy",
     runtime: "System Diagnostics",
+    distribution: "Templates & Distribution",
   };
 
   const categoryDescriptions: Record<SettingsCategory, string> = {
@@ -4392,6 +4464,7 @@ function SettingsPanel({
     project: "Manage project workspace and root path settings",
     policy: "Set approval policies for automated actions",
     runtime: "Monitor runtime environment and system diagnostics",
+    distribution: "Scaffold extension templates and review protocol compatibility guidance",
   };
 
   return (
@@ -4427,6 +4500,13 @@ function SettingsPanel({
             icon={<Server size={18} />}
             label="System Diagnostics"
             category="runtime"
+            activeCategory={activeCategory}
+            onClick={setActiveCategory}
+          />
+          <SettingsNavItem
+            icon={<Box size={18} />}
+            label="Templates & Distribution"
+            category="distribution"
             activeCategory={activeCategory}
             onClick={setActiveCategory}
           />
@@ -4473,6 +4553,14 @@ function SettingsPanel({
               environments={environments}
             />
           )}
+          {activeCategory === "distribution" && (
+            <DistributionTemplatesCard
+              project={project}
+              templates={templates}
+              protocolCompatibility={protocolCompatibility}
+              onScaffoldTemplate={onScaffoldTemplate}
+            />
+          )}
 
           {/* 保存按钮 - 始终显示 */}
           <div className="settings-actions">
@@ -4481,6 +4569,116 @@ function SettingsPanel({
             </button>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function DistributionTemplatesCard({
+  project,
+  templates,
+  protocolCompatibility,
+  onScaffoldTemplate,
+}: {
+  project?: ProjectRecord;
+  templates: DistributionTemplateRecord[];
+  protocolCompatibility?: import("@my-agent/protocol").ProtocolCompatibilityRecord;
+  onScaffoldTemplate: (params: {
+    templateId: string;
+    projectId?: string;
+    target: DistributionTarget;
+    name?: string;
+    directoryName?: string;
+  }) => Promise<{ rootPath: string; createdPaths: string[] }>;
+}) {
+  const [targetByTemplate, setTargetByTemplate] = useState<Record<string, DistributionTarget>>({});
+  const [message, setMessage] = useState<string | null>(null);
+  const [busyTemplateId, setBusyTemplateId] = useState<string | null>(null);
+
+  return (
+    <div className="settings-card">
+      <div className="settings-card__header">
+        <Box size={20} />
+        <h4>Template Kits</h4>
+      </div>
+      <div className="settings-card__body">
+        <div className="settings-panel__message">
+          Protocol {protocolCompatibility?.protocolVersion ?? "0.1.0"} · additive changes {protocolCompatibility?.additiveChangesOnly ? "enabled" : "unknown"}
+        </div>
+        <div className="runtime-plugins-list">
+          {templates.map((template) => {
+            const selectedTarget = targetByTemplate[template.id] ?? template.recommendedTarget;
+            const repoDisabled = selectedTarget === "repo" && !project;
+            const disabled = busyTemplateId === template.id || repoDisabled;
+
+            return (
+              <div key={template.id} className="plugin-card">
+                <div className="plugin-card__header">
+                  <div>
+                    <h4>{template.name}</h4>
+                    <span>{template.kind} · v{template.version}</span>
+                  </div>
+                  <span className="tool-pill">{template.destinationHint}</span>
+                </div>
+                <p className="tool-card__description">{template.description}</p>
+                <div className="tool-meta-grid">
+                  <span>Files</span>
+                  <span>{template.files.join(", ")}</span>
+                  <span>Docs</span>
+                  <span>{template.documentationPath ?? "docs/distribution-and-templates.md"}</span>
+                </div>
+                <div className="settings-field">
+                  <label>
+                    <span>Target</span>
+                    <select
+                      value={selectedTarget}
+                      onChange={(event) =>
+                        setTargetByTemplate((current) => ({
+                          ...current,
+                          [template.id]: event.target.value as DistributionTarget,
+                        }))
+                      }
+                    >
+                      {template.supportedTargets.map((target) => (
+                        <option key={target} value={target}>
+                          {target}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <div className="settings-actions">
+                  <button
+                    className="button button--primary"
+                    disabled={disabled}
+                    onClick={() => {
+                      setBusyTemplateId(template.id);
+                      setMessage(null);
+                      void onScaffoldTemplate({
+                        templateId: template.id,
+                        projectId: project?.id,
+                        target: selectedTarget,
+                        name: template.name,
+                      })
+                        .then((result) => {
+                          setMessage(`Scaffolded ${template.name} into ${result.rootPath}`);
+                        })
+                        .catch((error) => {
+                          setMessage(error instanceof Error ? error.message : String(error));
+                        })
+                        .finally(() => {
+                          setBusyTemplateId(null);
+                        });
+                    }}
+                  >
+                    {busyTemplateId === template.id ? "Scaffolding..." : "Scaffold Template"}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {message ? <div className="settings-panel__message">{message}</div> : null}
       </div>
     </div>
   );
@@ -7108,6 +7306,8 @@ function formatSkillScopeLabel(scope: SkillDescriptor["scope"]) {
       return "鐢ㄦ埛";
     case "REPO":
       return "浠撳簱";
+    case "CATALOG":
+      return "Catalog";
     case "ADMIN":
       return "绠＄悊";
     default:
