@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -144,7 +145,7 @@ function resolveInternalToolRoots(
 }
 
 function buildInternalToolId(manifestPath: string): string {
-  return `internal_tool_${Buffer.from(manifestPath).toString("base64url").slice(0, 16)}`;
+  return `internal_tool_${createHash("sha256").update(manifestPath).digest("hex").slice(0, 24)}`;
 }
 
 function formatDiscoveryError(error: unknown): string {

@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { type ProjectRecord, type WorktreeRecord } from "@my-agent/protocol";
 import { HarnessDatabase } from "../store/database.js";
 import { createId } from "../utils/ids.js";
+import { isPathInside } from "../utils/path-utils.js";
 
 export class WorktreeManager {
   constructor(
@@ -28,9 +29,11 @@ export class WorktreeManager {
     baseRef?: string;
   }): WorktreeRecord {
     const now = new Date().toISOString();
-    const branch = params.branch?.trim() || buildDefaultBranchName(params.threadId, params.agentId);
-    const worktreePath = join(params.project.rootPath, ".my-agent", "worktrees", branch);
-    mkdirSync(resolve(worktreePath, ".."), { recursive: true });
+    const branch = normalizeWorktreeBranch(params.branch?.trim() || buildDefaultBranchName(params.threadId, params.agentId));
+    const managedRoot = getManagedWorktreeRoot(params.project.rootPath);
+    const worktreePath = resolve(managedRoot, branch);
+    assertManagedWorktreePath(managedRoot, worktreePath);
+    mkdirSync(managedRoot, { recursive: true });
 
     const record = this.database.createWorktree({
       id: createId("worktree"),
@@ -57,6 +60,7 @@ export class WorktreeManager {
     );
 
     if (result.status !== 0) {
+      cleanupManagedWorktreePath(managedRoot, worktreePath);
       const failed = this.database.updateWorktree({
         ...record,
         status: "failed",
@@ -83,19 +87,23 @@ export class WorktreeManager {
     }
 
     const project = this.database.getProject(worktree.projectId);
+    const resolvedWorktreePath = resolve(worktree.path);
 
-    if (project) {
-      const result = spawnSync("git", ["worktree", "remove", "--force", worktree.path], {
-        cwd: project.rootPath,
-        encoding: "utf8",
-        windowsHide: true,
-      });
+    if (!project) {
+      throw new Error(`Project not found for worktree ${worktree.id}. Refusing to remove an unmanaged path.`);
+    }
 
-      if (result.status !== 0) {
-        rmSync(worktree.path, { recursive: true, force: true });
-      }
-    } else {
-      rmSync(worktree.path, { recursive: true, force: true });
+    const managedRoot = getManagedWorktreeRoot(project.rootPath);
+    assertManagedWorktreePath(managedRoot, resolvedWorktreePath);
+
+    const result = spawnSync("git", ["worktree", "remove", "--force", resolvedWorktreePath], {
+      cwd: project.rootPath,
+      encoding: "utf8",
+      windowsHide: true,
+    });
+
+    if (result.status !== 0) {
+      cleanupManagedWorktreePath(managedRoot, resolvedWorktreePath);
     }
 
     const removed = this.database.updateWorktree({
@@ -111,4 +119,41 @@ export class WorktreeManager {
 function buildDefaultBranchName(threadId?: string, agentId?: string): string {
   const suffix = (agentId ?? threadId ?? createId("branch")).replace(/^[^_]+_/, "").slice(0, 12);
   return `codex/${suffix}`;
+}
+
+function getManagedWorktreeRoot(projectRootPath: string): string {
+  return resolve(projectRootPath, ".my-agent", "worktrees");
+}
+
+function cleanupManagedWorktreePath(managedRoot: string, worktreePath: string): void {
+  assertManagedWorktreePath(managedRoot, worktreePath);
+  rmSync(worktreePath, { recursive: true, force: true });
+}
+
+function assertManagedWorktreePath(managedRoot: string, worktreePath: string): void {
+  if (!isPathInside(managedRoot, worktreePath)) {
+    throw new Error(`Refusing to manage a worktree path outside the managed root: ${worktreePath}`);
+  }
+}
+
+function normalizeWorktreeBranch(branch: string): string {
+  const normalized = branch.trim().replace(/\\/g, "/");
+
+  if (!normalized) {
+    throw new Error("Worktree branch cannot be empty.");
+  }
+
+  if (
+    normalized.startsWith("/") ||
+    normalized.endsWith("/") ||
+    normalized.includes("//") ||
+    normalized.includes("..") ||
+    normalized.includes("@{") ||
+    normalized.includes(".lock") ||
+    /[\s~^:?*\[\]]/.test(normalized)
+  ) {
+    throw new Error(`Unsafe worktree branch name: ${branch}`);
+  }
+
+  return normalized;
 }
