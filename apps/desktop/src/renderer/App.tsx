@@ -2765,6 +2765,9 @@ function RequirementOverview({
   const relatedProjects = requirement.relatedProjectIds
     .map((projectId) => projects.find((project) => project.id === projectId) ?? null)
     .filter((project): project is ProjectRecord => Boolean(project));
+  const threadSummaries = memory?.derived.threadSummaries ?? [];
+  const threadSummaryById = new Map(threadSummaries.map((thread) => [thread.threadId, thread]));
+  const contextPreview = buildRequirementContextPreview(requirement, memory, primaryProject, relatedProjects);
 
   return (
     <div className="skills-page requirement-overview">
@@ -2797,6 +2800,16 @@ function RequirementOverview({
           <strong>{memory?.derived.recentChanges.length ?? 0}</strong>
           <span>Changed paths</span>
         </div>
+      </div>
+
+      <div className="skill-card requirement-overview__preview">
+        <div className="skill-card__header">
+          <div>
+            <h3>Context Preview</h3>
+            <span>Next turn requirement context</span>
+          </div>
+        </div>
+        <pre>{contextPreview}</pre>
       </div>
 
       <div className="skills-grid requirement-overview__grid">
@@ -2868,8 +2881,26 @@ function RequirementOverview({
             items={(memory?.derived.recentReviews ?? []).map((review) => `${review.status}: ${review.summary ?? review.reviewId}`)}
           />
           <RequirementTokenList
-            title="Recent Artifacts"
-            items={(memory?.derived.recentArtifacts ?? []).map((artifact) => `${artifact.source}: ${artifact.summary}`)}
+            title="Latest Turns"
+            items={(memory?.derived.recentTurns ?? []).map((turn) => `${turn.threadTitle}: ${turn.status}${turn.finalMessage ? ` - ${turn.finalMessage}` : ""}`)}
+          />
+          <RequirementTokenList
+            title="Review Artifacts"
+            items={(memory?.derived.recentArtifacts ?? [])
+              .filter((artifact) => artifact.source === "review")
+              .map((artifact) => artifact.summary)}
+          />
+          <RequirementTokenList
+            title="Workflow Artifacts"
+            items={(memory?.derived.recentArtifacts ?? [])
+              .filter((artifact) => artifact.source === "workflow")
+              .map((artifact) => artifact.summary)}
+          />
+          <RequirementTokenList
+            title="Agent Artifacts"
+            items={(memory?.derived.recentArtifacts ?? [])
+              .filter((artifact) => artifact.source === "agent")
+              .map((artifact) => artifact.summary)}
           />
           <RequirementTokenList
             title="Recent Changes"
@@ -2886,22 +2917,28 @@ function RequirementOverview({
           </div>
           {threads.length > 0 ? (
             <div className="requirement-overview__thread-list">
-              {threads.map((thread) => (
-                <div key={thread.id} className="requirement-overview__thread-row">
-                  <div>
-                    <strong>{thread.title}</strong>
-                    <small>{formatRelativeTime(thread.updatedAt)}</small>
+              {threads.map((thread) => {
+                const summary = threadSummaryById.get(thread.id);
+                return (
+                  <div key={thread.id} className="requirement-overview__thread-row">
+                    <div>
+                      <strong>{thread.title}</strong>
+                      <small>
+                        {summary?.latestTurnStatus ?? "idle"} · {formatRelativeTime(summary?.updatedAt ?? thread.updatedAt)}
+                        {summary?.hidden ? " · delegated" : ""}
+                      </small>
+                    </div>
+                    <div className="requirement-overview__thread-actions">
+                      <button className="button button--small" onClick={() => onOpenThread(thread.id)}>
+                        Open
+                      </button>
+                      <button className="button button--ghost button--small" onClick={() => onUnassignThread(thread.id)}>
+                        Unassign
+                      </button>
+                    </div>
                   </div>
-                  <div className="requirement-overview__thread-actions">
-                    <button className="button button--small" onClick={() => onOpenThread(thread.id)}>
-                      Open
-                    </button>
-                    <button className="button button--ghost button--small" onClick={() => onUnassignThread(thread.id)}>
-                      Unassign
-                    </button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           ) : (
             <div className="settings-panel__message">No threads are linked yet.</div>
@@ -2977,6 +3014,67 @@ function RequirementTokenList({ title, items }: { title: string; items: string[]
       )}
     </div>
   );
+}
+
+function buildRequirementContextPreview(
+  requirement: RequirementRecord,
+  memory: RequirementMemoryRecord | null,
+  primaryProject: ProjectRecord | null,
+  relatedProjects: ProjectRecord[],
+): string {
+  const manual = memory?.manual;
+  const derived = memory?.derived;
+  const sections = [
+    "# Requirement Context",
+    `Requirement: ${requirement.title}`,
+    `Status: ${requirement.status}`,
+    `Primary project: ${primaryProject?.name ?? requirement.primaryProjectId}`,
+    `Related projects: ${relatedProjects.length > 0 ? relatedProjects.map((project) => project.name).join(", ") : "None"}`,
+    "## Goals / Constraints / Decisions",
+    manual?.brief ? `Brief: ${manual.brief}` : null,
+    renderPreviewList("Goals", manual?.goals ?? []),
+    renderPreviewList("Constraints", manual?.constraints ?? []),
+    renderPreviewList("Decisions", manual?.decisions ?? []),
+    renderPreviewList("Open questions", manual?.openQuestions ?? []),
+    renderPreviewList("Definition of done", manual?.definitionOfDone ?? []),
+    "## Current Activity Digest",
+    derived?.activitySummary || "No requirement activity has been recorded yet.",
+    renderPreviewList(
+      "Latest turns",
+      (derived?.recentTurns ?? []).map((turn) => `${turn.threadTitle}: ${turn.status}${turn.finalMessage ? ` - ${turn.finalMessage}` : ""}`),
+    ),
+    "## Recent Artifacts",
+    renderPreviewList(
+      "Reviews",
+      (derived?.recentArtifacts ?? []).filter((artifact) => artifact.source === "review").map((artifact) => artifact.summary),
+    ),
+    renderPreviewList(
+      "Workflows",
+      (derived?.recentArtifacts ?? []).filter((artifact) => artifact.source === "workflow").map((artifact) => artifact.summary),
+    ),
+    renderPreviewList(
+      "Agents",
+      (derived?.recentArtifacts ?? []).filter((artifact) => artifact.source === "agent").map((artifact) => artifact.summary),
+    ),
+    "## Recent Changed Paths",
+    renderPreviewList("Paths", derived?.recentChanges ?? []),
+    "## Linked Thread Status",
+    renderPreviewList(
+      "Threads",
+      (derived?.threadSummaries ?? derived?.linkedThreads ?? []).map(
+        (thread) =>
+          `${thread.title}: ${thread.latestTurnStatus ?? "idle"}${thread.hidden ? " (delegated)" : ""}${
+            "latestFinalMessage" in thread && thread.latestFinalMessage ? ` - ${thread.latestFinalMessage}` : ""
+          }`,
+      ),
+    ),
+  ];
+
+  return sections.filter((section): section is string => Boolean(section)).join("\n");
+}
+
+function renderPreviewList(label: string, items: string[]): string {
+  return `${label}: ${items.length > 0 ? items.slice(0, 8).join(" | ") : "None"}`;
 }
 
 function SkillsPanel({

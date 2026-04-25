@@ -74,6 +74,8 @@ const EMPTY_REQUIREMENT_MANUAL_MEMORY: RequirementManualMemoryRecord = {
 const EMPTY_REQUIREMENT_DERIVED_MEMORY: RequirementDerivedMemoryRecord = {
   linkedProjects: [],
   linkedThreads: [],
+  threadSummaries: [],
+  recentTurns: [],
   recentReviews: [],
   recentArtifacts: [],
   recentChanges: [],

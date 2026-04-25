@@ -110,7 +110,13 @@ interface AppState {
   sendTurn: (input: string, selectedSkillIds?: string[], attachments?: TurnInputAttachment[], includeIdeContext?: boolean) => Promise<void>;
   steerTurn: (turnId: string, input: string, priority?: TurnSteerRecord["priority"]) => Promise<TurnSteerRecord>;
   interruptTurn: (turnId: string) => Promise<void>;
-  startReview: (params: { projectId?: string; threadId?: string; source?: ReviewRecord["source"]; instructions?: string }) => Promise<ReviewRecord>;
+  startReview: (params: {
+    projectId?: string;
+    requirementId?: string;
+    threadId?: string;
+    source?: ReviewRecord["source"];
+    instructions?: string;
+  }) => Promise<ReviewRecord>;
   respondApproval: (approvalId: string, decision: "approve" | "reject", scope?: "once" | "session") => Promise<void>;
   toggleSkill: (skillId: string) => Promise<void>;
   updateConfig: (config: Partial<AppConfig>) => Promise<void>;
@@ -242,7 +248,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     await get().refreshRuntimeProjectState(result.project.id);
   },
   createAutomation: async (params) => {
-    const result = (await window.myAgent.createAutomation(params)) as { automation: AutomationRecord };
+    const requirementId = params.requirementId ?? get().activeRequirementId;
+    const result = (await window.myAgent.createAutomation({ ...params, requirementId })) as { automation: AutomationRecord };
     set((state) => ({
       automations: upsertAutomation(state.automations, result.automation),
     }));
@@ -411,9 +418,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
   },
   unassignThreadFromRequirement: async (threadId) => {
-    const result = (await window.myAgent.unassignThreadFromRequirement({ threadId })) as { thread: ThreadRecord };
+    const result = (await window.myAgent.unassignThreadFromRequirement({ threadId })) as {
+      thread: ThreadRecord;
+      requirementId?: string;
+      memory?: RequirementMemoryRecord;
+    };
     set((state) => ({
       threads: state.threads.map((thread) => (thread.id === result.thread.id ? result.thread : thread)),
+      requirementMemories: result.memory ? upsertRequirementMemory(state.requirementMemories, result.memory) : state.requirementMemories,
       activeRequirementId: state.activeThreadId === threadId ? result.thread.requirementId : state.activeRequirementId,
       config:
         state.config && state.activeThreadId === threadId
@@ -542,7 +554,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
   },
   startReview: async (params) => {
-    const result = (await window.myAgent.startReview(params)) as { review: ReviewRecord };
+    const thread = params.threadId ? get().threads.find((entry) => entry.id === params.threadId) : undefined;
+    const requirementId = params.requirementId ?? thread?.requirementId ?? get().activeRequirementId;
+    const result = (await window.myAgent.startReview({ ...params, requirementId })) as { review: ReviewRecord };
     set((state) => ({
       reviews: upsertReview(state.reviews, result.review),
     }));

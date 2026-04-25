@@ -224,6 +224,22 @@ export interface RequirementDerivedThreadLink {
   latestTurnStatus?: TurnRecord["status"] | "idle";
 }
 
+export interface RequirementDerivedThreadSummary extends RequirementDerivedThreadLink {
+  latestTurnId?: string;
+  latestFinalMessage?: string;
+}
+
+export interface RequirementDerivedTurnSummary {
+  turnId: string;
+  threadId: string;
+  threadTitle: string;
+  hidden: boolean;
+  status: TurnRecord["status"];
+  input: string;
+  finalMessage?: string;
+  updatedAt: string;
+}
+
 export interface RequirementDerivedReviewLink {
   reviewId: string;
   status: ReviewRecord["status"];
@@ -242,6 +258,8 @@ export interface RequirementDerivedArtifactLink {
 export interface RequirementDerivedMemoryRecord {
   linkedProjects: RequirementDerivedProjectLink[];
   linkedThreads: RequirementDerivedThreadLink[];
+  threadSummaries?: RequirementDerivedThreadSummary[];
+  recentTurns?: RequirementDerivedTurnSummary[];
   recentReviews: RequirementDerivedReviewLink[];
   recentArtifacts: RequirementDerivedArtifactLink[];
   recentChanges: string[];
@@ -515,6 +533,7 @@ export interface ReviewRecord {
 
 export interface ReviewStartParams {
   projectId?: string;
+  requirementId?: string;
   threadId?: string;
   source?: ReviewSource;
   instructions?: string;
@@ -647,6 +666,8 @@ export interface RequirementUnassignThreadParams {
 
 export interface RequirementUnassignThreadResult {
   thread: ThreadRecord;
+  requirementId?: string;
+  memory?: RequirementMemoryRecord;
 }
 
 export interface UpdateThreadResult {
@@ -1298,6 +1319,7 @@ export interface EnvironmentDetectParams {
 export interface WorkflowRunParams {
   workflowId: string;
   projectId: string;
+  requirementId?: string;
   threadId?: string;
   nonInteractive?: boolean;
   runId?: string;

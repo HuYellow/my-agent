@@ -100,6 +100,7 @@ export class RequirementService {
     const thread = this.requireThread(threadId);
     const now = new Date().toISOString();
     let nextRequirement = requirement;
+    const previousRequirementId = thread.requirementId;
 
     if (thread.projectId !== requirement.primaryProjectId && !requirement.relatedProjectIds.includes(thread.projectId)) {
       nextRequirement = this.database.updateRequirement({
@@ -116,6 +117,9 @@ export class RequirementService {
       updatedAt: now,
     });
     const memory = this.memoryManager.rebuild(nextRequirement.id);
+    if (previousRequirementId && previousRequirementId !== nextRequirement.id) {
+      this.memoryManager.rebuild(previousRequirementId);
+    }
     return {
       requirement: nextRequirement,
       memory,
@@ -123,19 +127,24 @@ export class RequirementService {
     };
   }
 
-  unassignThread(threadId: string): ThreadRecord {
+  unassignThread(threadId: string): { thread: ThreadRecord; requirementId?: string; memory?: RequirementMemoryRecord } {
     const thread = this.requireThread(threadId);
     const updated = this.database.updateThread({
       ...thread,
       requirementId: undefined,
       updatedAt: new Date().toISOString(),
     });
+    let memory: RequirementMemoryRecord | undefined;
 
     if (thread.requirementId) {
-      this.memoryManager.rebuild(thread.requirementId);
+      memory = this.memoryManager.rebuild(thread.requirementId);
     }
 
-    return updated;
+    return {
+      thread: updated,
+      requirementId: thread.requirementId,
+      memory,
+    };
   }
 
   rebuildMemory(requirementId: string): RequirementMemoryRecord {

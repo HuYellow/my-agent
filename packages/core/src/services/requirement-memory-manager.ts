@@ -5,6 +5,8 @@ import {
   type RequirementDerivedProjectLink,
   type RequirementDerivedReviewLink,
   type RequirementDerivedThreadLink,
+  type RequirementDerivedThreadSummary,
+  type RequirementDerivedTurnSummary,
   type RequirementManualMemoryRecord,
   type RequirementMemoryRecord,
   type RequirementRecord,
@@ -23,6 +25,8 @@ const EMPTY_MANUAL_MEMORY: RequirementManualMemoryRecord = {
 const EMPTY_DERIVED_MEMORY: RequirementDerivedMemoryRecord = {
   linkedProjects: [],
   linkedThreads: [],
+  threadSummaries: [],
+  recentTurns: [],
   recentReviews: [],
   recentArtifacts: [],
   recentChanges: [],
@@ -103,35 +107,55 @@ export class RequirementMemoryManager {
       `Related projects: ${relatedProjectNames.length > 0 ? relatedProjectNames.join(", ") : "None"}`,
     ];
 
+    sections.push("## Goals / Constraints / Decisions");
     if (memory.manual.brief.trim()) {
       sections.push(`Brief: ${memory.manual.brief.trim()}`);
     }
-
     sections.push(renderStringList("Goals", memory.manual.goals, 6));
     sections.push(renderStringList("Constraints", memory.manual.constraints, 6));
     sections.push(renderStringList("Decisions", memory.manual.decisions, 6));
     sections.push(renderStringList("Open questions", memory.manual.openQuestions, 6));
     sections.push(renderStringList("Definition of done", memory.manual.definitionOfDone, 6));
 
+    sections.push("## Current Activity Digest");
     if (memory.derived.activitySummary.trim()) {
-      sections.push(`Activity: ${memory.derived.activitySummary.trim()}`);
+      sections.push(memory.derived.activitySummary.trim());
+    } else {
+      sections.push("No requirement activity has been recorded yet.");
     }
 
+    const recentTurnSummaries = (memory.derived.recentTurns ?? [])
+      .map((turn) => `${turn.threadTitle}: ${turn.status}${turn.finalMessage ? ` - ${turn.finalMessage}` : ""}`)
+      .slice(0, 6);
+    sections.push(renderStringList("Latest turns", recentTurnSummaries, 6));
+
+    sections.push("## Recent Artifacts");
+    sections.push(renderArtifactGroup("Reviews", memory.derived.recentArtifacts.filter((artifact) => artifact.source === "review")));
+    sections.push(renderArtifactGroup("Workflows", memory.derived.recentArtifacts.filter((artifact) => artifact.source === "workflow")));
+    sections.push(renderArtifactGroup("Agents", memory.derived.recentArtifacts.filter((artifact) => artifact.source === "agent")));
     sections.push(
       renderStringList(
-        "Recent artifacts",
-        memory.derived.recentArtifacts.map((artifact) => `${artifact.source}:${artifact.sourceId} ${artifact.summary}`),
-        6,
-      ),
-    );
-    sections.push(
-      renderStringList(
-        "Recent review summaries",
+        "Review summaries",
         memory.derived.recentReviews.map((review) => `${review.status}: ${review.summary ?? review.reviewId}`),
         6,
       ),
     );
-    sections.push(renderStringList("Recent changed paths", memory.derived.recentChanges, 12));
+
+    sections.push("## Recent Changed Paths");
+    sections.push(renderStringList("Paths", memory.derived.recentChanges, 12));
+
+    sections.push("## Linked Thread Status");
+    sections.push(
+      renderStringList(
+        "Threads",
+        (memory.derived.threadSummaries ?? memory.derived.linkedThreads).map((thread) =>
+          `${thread.title}: ${thread.latestTurnStatus ?? "idle"}${thread.hidden ? " (delegated)" : ""}${
+            "latestFinalMessage" in thread && thread.latestFinalMessage ? ` - ${thread.latestFinalMessage}` : ""
+          }`,
+        ),
+        12,
+      ),
+    );
 
     return sections.filter(Boolean).join("\n");
   }
@@ -158,6 +182,8 @@ function buildDerivedMemory(database: HarnessDatabase, requirement: RequirementR
   const linkedThreadIds = new Set(threads.map((thread) => thread.id));
   const linkedProjects = buildLinkedProjects(database, requirement);
   const linkedThreads = buildLinkedThreads(database, threads);
+  const threadSummaries = buildThreadSummaries(database, threads);
+  const recentTurns = buildRecentTurns(database, threads);
   const reviews = database
     .listReviews()
     .filter((review) => review.requirementId === requirement.id || (review.threadId ? linkedThreadIds.has(review.threadId) : false))
@@ -184,6 +210,8 @@ function buildDerivedMemory(database: HarnessDatabase, requirement: RequirementR
   return {
     linkedProjects,
     linkedThreads,
+    threadSummaries,
+    recentTurns,
     recentReviews,
     recentArtifacts,
     recentChanges,
@@ -239,6 +267,48 @@ function buildLinkedThreads(database: HarnessDatabase, threads: ReturnType<Harne
       latestTurnStatus: latestTurn?.status ?? "idle",
     };
   });
+}
+
+function buildThreadSummaries(database: HarnessDatabase, threads: ReturnType<HarnessDatabase["listThreads"]>): RequirementDerivedThreadSummary[] {
+  return threads.slice(0, 12).map((thread) => {
+    const latestTurn = database.listTurns(thread.id).at(-1);
+
+    return {
+      threadId: thread.id,
+      title: thread.title,
+      projectId: thread.projectId,
+      updatedAt: thread.updatedAt,
+      hidden: Boolean(thread.hidden),
+      latestTurnStatus: latestTurn?.status ?? "idle",
+      latestTurnId: latestTurn?.id,
+      latestFinalMessage: latestTurn ? findLatestAgentMessage(database, thread.id, latestTurn.id) : undefined,
+    };
+  });
+}
+
+function buildRecentTurns(database: HarnessDatabase, threads: ReturnType<HarnessDatabase["listThreads"]>): RequirementDerivedTurnSummary[] {
+  const summaries: RequirementDerivedTurnSummary[] = [];
+
+  for (const thread of threads) {
+    const latestTurn = database.listTurns(thread.id).at(-1);
+
+    if (!latestTurn) {
+      continue;
+    }
+
+    summaries.push({
+      turnId: latestTurn.id,
+      threadId: thread.id,
+      threadTitle: thread.title,
+      hidden: Boolean(thread.hidden),
+      status: latestTurn.status,
+      input: truncateForSummary(latestTurn.input, 180),
+      finalMessage: findLatestAgentMessage(database, thread.id, latestTurn.id),
+      updatedAt: latestTurn.updatedAt,
+    });
+  }
+
+  return summaries.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).slice(0, 12);
 }
 
 function buildRecentArtifacts(
@@ -309,6 +379,15 @@ function buildRecentChanges(database: HarnessDatabase, threads: ReturnType<Harne
   return [...new Set([...fileChangePaths, ...taskPaths])].sort((left, right) => left.localeCompare(right)).slice(0, 24);
 }
 
+function findLatestAgentMessage(database: HarnessDatabase, threadId: string, turnId: string): string | undefined {
+  const item = database
+    .listItems(threadId)
+    .filter((entry) => entry.turnId === turnId && entry.kind === "agentMessage")
+    .at(-1);
+  const body = item?.body.trim();
+  return body ? truncateForSummary(body, 220) : undefined;
+}
+
 function buildActivitySummary(params: {
   threadCount: number;
   hiddenThreadCount: number;
@@ -348,4 +427,17 @@ function renderStringList(label: string, values: string[], limit: number): strin
   }
 
   return `${label}: ${values.slice(0, limit).join(" | ")}`;
+}
+
+function renderArtifactGroup(label: string, artifacts: Array<{ sourceId: string; summary: string }>): string {
+  return renderStringList(
+    label,
+    artifacts.map((artifact) => `${artifact.sourceId}: ${artifact.summary}`),
+    6,
+  );
+}
+
+function truncateForSummary(value: string, limit: number): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length <= limit ? normalized : `${normalized.slice(0, limit - 3)}...`;
 }

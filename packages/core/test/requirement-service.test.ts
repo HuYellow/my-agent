@@ -85,11 +85,55 @@ describe("RequirementService", () => {
       }),
     );
 
-    const unassignedThread = service.unassignThread("thread-1");
+    const unassigned = service.unassignThread("thread-1");
     const rebuiltMemory = memoryManager.get(requirement.id);
 
-    expect(unassignedThread.requirementId).toBeUndefined();
+    expect(unassigned.thread.requirementId).toBeUndefined();
+    expect(unassigned.requirementId).toBe(requirement.id);
+    expect(unassigned.memory?.requirementId).toBe(requirement.id);
     expect(rebuiltMemory.derived.linkedThreads).toEqual([]);
+  });
+
+  it("rebuilds source and target requirement memory when moving a thread", () => {
+    const root = mkdtempSync(join(tmpdir(), "my-agent-requirement-service-"));
+    const database = new HarnessDatabase(join(root, "app.db"));
+    const project = createProject(database, "project-primary", root);
+    const memoryManager = new RequirementMemoryManager(database, () => undefined);
+    const service = new RequirementService(database, memoryManager, vi.fn());
+    const sourceRequirement = service.create({
+      title: "Source requirement",
+      primaryProjectId: project.id,
+    }).requirement;
+    const targetRequirement = service.create({
+      title: "Target requirement",
+      primaryProjectId: project.id,
+    }).requirement;
+    const now = new Date().toISOString();
+
+    database.createThread({
+      id: "thread-moving",
+      title: "Moving thread",
+      projectId: project.id,
+      requirementId: sourceRequirement.id,
+      sandboxMode: project.sandboxMode,
+      hidden: false,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    memoryManager.rebuild(sourceRequirement.id);
+
+    const moved = service.assignThread(targetRequirement.id, "thread-moving");
+    const sourceMemory = memoryManager.get(sourceRequirement.id);
+    const targetMemory = memoryManager.get(targetRequirement.id);
+
+    expect(moved.thread.requirementId).toBe(targetRequirement.id);
+    expect(sourceMemory.derived.linkedThreads).toEqual([]);
+    expect(targetMemory.derived.linkedThreads).toMatchObject([
+      {
+        threadId: "thread-moving",
+      },
+    ]);
   });
 });
 

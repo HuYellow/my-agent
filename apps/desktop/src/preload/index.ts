@@ -83,7 +83,11 @@ const api = {
   assignThreadToRequirement: (params: { requirementId: string; threadId: string }) =>
     ipcRenderer.invoke("requirement:assign-thread", params) as Promise<{ requirement: RequirementRecord; memory: RequirementMemoryRecord; thread: import("@my-agent/protocol").ThreadRecord }>,
   unassignThreadFromRequirement: (params: { threadId: string }) =>
-    ipcRenderer.invoke("requirement:unassign-thread", params) as Promise<{ thread: import("@my-agent/protocol").ThreadRecord }>,
+    ipcRenderer.invoke("requirement:unassign-thread", params) as Promise<{
+      thread: import("@my-agent/protocol").ThreadRecord;
+      requirementId?: string;
+      memory?: RequirementMemoryRecord;
+    }>,
   updateThread: (params: UpdateThreadParams) => ipcRenderer.invoke("thread:update", params),
   startThread: (params: StartThreadParams) => ipcRenderer.invoke("thread:start", params),
   resumeThread: (threadId: string) => ipcRenderer.invoke("thread:resume", { threadId }),
@@ -123,7 +127,7 @@ const api = {
   listExecutionContexts: (projectId?: string) =>
     ipcRenderer.invoke("executionContext:list", { projectId }) as Promise<{ executionContexts: ExecutionContextRecord[] }>,
   listWorkflows: (projectId?: string) => ipcRenderer.invoke("workflow:list", { projectId }) as Promise<{ workflows: WorkflowRecord[] }>,
-  runWorkflow: (params: { workflowId: string; projectId: string; threadId?: string; nonInteractive?: boolean }) =>
+  runWorkflow: (params: { workflowId: string; projectId: string; requirementId?: string; threadId?: string; nonInteractive?: boolean }) =>
     ipcRenderer.invoke("workflow:run", params),
   listWorkflowRuns: (workflowId?: string) => ipcRenderer.invoke("workflow:runs", { workflowId }) as Promise<{ runs: WorkflowRunRecord[] }>,
   resumeWorkflow: (params: { runId: string; approvePausedSteps?: boolean; retryFailedStepIds?: string[] }) =>

@@ -90,6 +90,38 @@ describe("RequirementMemoryManager", () => {
       createdAt: now,
       updatedAt: now,
     });
+    database.createItem({
+      id: "item-agent-message",
+      threadId: visibleThread.id,
+      turnId: "turn-visible",
+      kind: "agentMessage",
+      status: "completed",
+      title: "Agent response",
+      body: "Requirement memory now explains current state.",
+      metadata: {},
+      createdAt: now,
+      updatedAt: now,
+    });
+    database.createTurn({
+      id: "turn-hidden",
+      threadId: hiddenThread.id,
+      status: "failed",
+      input: "Try a delegated update",
+      createdAt: now,
+      updatedAt: now,
+    });
+    database.createItem({
+      id: "item-hidden-agent-message",
+      threadId: hiddenThread.id,
+      turnId: "turn-hidden",
+      kind: "agentMessage",
+      status: "failed",
+      title: "Agent response",
+      body: "Delegated update failed during verification.",
+      metadata: {},
+      createdAt: now,
+      updatedAt: now,
+    });
     database.createReview({
       id: "review-1",
       projectId: primaryProject.id,
@@ -182,6 +214,109 @@ describe("RequirementMemoryManager", () => {
     expect(rebuilt.derived.activitySummary).toContain("1 delegated thread");
     expect(rebuilt.derived.activitySummary).toContain("1 review");
     expect(rebuilt.derived.activitySummary).toContain("1 workflow run");
+    expect((rebuilt.derived as any).threadSummaries).toMatchObject([
+      {
+        threadId: "thread-visible",
+        title: "Visible Thread",
+        hidden: false,
+        latestTurnStatus: "completed",
+        latestFinalMessage: "Requirement memory now explains current state.",
+      },
+      {
+        threadId: "thread-hidden",
+        title: "Delegated Thread",
+        hidden: true,
+        latestTurnStatus: "failed",
+        latestFinalMessage: "Delegated update failed during verification.",
+      },
+    ]);
+    expect((rebuilt.derived as any).recentTurns).toMatchObject([
+      {
+        turnId: "turn-visible",
+        threadId: "thread-visible",
+        threadTitle: "Visible Thread",
+        status: "completed",
+        finalMessage: "Requirement memory now explains current state.",
+      },
+      {
+        turnId: "turn-hidden",
+        threadId: "thread-hidden",
+        threadTitle: "Delegated Thread",
+        status: "failed",
+        finalMessage: "Delegated update failed during verification.",
+      },
+    ]);
+  });
+
+  it("renders prompt context in requirement memory order", () => {
+    const root = mkdtempSync(join(tmpdir(), "my-agent-req-memory-"));
+    const database = new HarnessDatabase(join(root, "app.db"));
+    const project = createProject(database, "project-primary", "Primary Project", root);
+    const requirement = createRequirement(database, "requirement-1", project.id);
+    const manager = new RequirementMemoryManager(database, () => undefined);
+    const now = new Date().toISOString();
+
+    manager.updateManualMemory(requirement.id, {
+      goals: ["Keep requirement context deterministic"],
+      decisions: ["Use structured runtime state only"],
+    });
+    createThread(database, {
+      id: "thread-1",
+      title: "Implementation thread",
+      projectId: project.id,
+      requirementId: requirement.id,
+      sandboxMode: project.sandboxMode,
+      hidden: false,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    database.createTurn({
+      id: "turn-1",
+      threadId: "thread-1",
+      status: "completed",
+      input: "Implement requirement context",
+      createdAt: now,
+      updatedAt: now,
+    });
+    database.createItem({
+      id: "item-final",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      kind: "agentMessage",
+      status: "completed",
+      title: "Agent response",
+      body: "Requirement context builder landed.",
+      metadata: {},
+      createdAt: now,
+      updatedAt: now,
+    });
+    database.createItem({
+      id: "item-change",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      kind: "fileChange",
+      status: "completed",
+      title: "File change: src/context.ts",
+      body: "{}",
+      metadata: { path: "src/context.ts" },
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    manager.rebuild(requirement.id);
+    const prompt = manager.buildPromptContextSection(requirement.id)!;
+
+    expect(prompt).toContain("## Goals / Constraints / Decisions");
+    expect(prompt).toContain("## Current Activity Digest");
+    expect(prompt).toContain("## Recent Artifacts");
+    expect(prompt).toContain("## Recent Changed Paths");
+    expect(prompt).toContain("## Linked Thread Status");
+    expect(prompt.indexOf("## Goals / Constraints / Decisions")).toBeLessThan(prompt.indexOf("## Current Activity Digest"));
+    expect(prompt.indexOf("## Current Activity Digest")).toBeLessThan(prompt.indexOf("## Recent Artifacts"));
+    expect(prompt.indexOf("## Recent Artifacts")).toBeLessThan(prompt.indexOf("## Recent Changed Paths"));
+    expect(prompt.indexOf("## Recent Changed Paths")).toBeLessThan(prompt.indexOf("## Linked Thread Status"));
+    expect(prompt).toContain("Implementation thread: completed");
   });
 });
 

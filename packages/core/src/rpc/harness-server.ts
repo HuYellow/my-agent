@@ -640,23 +640,27 @@ export class HarnessServer {
 
   private unassignThreadFromRequirement(params: RequirementUnassignThreadParams) {
     const previous = this.database.getThread(params.threadId);
-    const thread = this.requirementService.unassignThread(params.threadId);
+    const result = this.requirementService.unassignThread(params.threadId);
     const current = this.database.getConfig();
     const config = this.database.writeConfig({
       ...current,
       selectedRequirementId: current.selectedRequirementId === previous?.requirementId ? undefined : current.selectedRequirementId,
-      selectedProjectId: thread.projectId,
+      selectedProjectId: result.thread.projectId,
     });
     this.emit({
       type: "config/changed",
       payload: { config },
     });
-    return { thread };
+    return result;
   }
 
   private startThread(params: StartThreadParams): StartThreadResult {
     const config = this.database.getConfig();
-    const requirement = params.requirementId ? this.requireRequirement(params.requirementId) : undefined;
+    const requirement = params.requirementId
+      ? this.requireRequirement(params.requirementId)
+      : config.selectedRequirementId
+        ? this.requireRequirement(config.selectedRequirementId)
+        : undefined;
     const project = this.requireProject(params.projectId ?? requirement?.primaryProjectId ?? config.selectedProjectId);
     const now = new Date().toISOString();
     const thread: ThreadRecord = {
@@ -771,9 +775,6 @@ export class HarnessServer {
     };
 
     this.database.createThread(thread);
-    if (thread.requirementId) {
-      this.requirementService.rebuildMemory(thread.requirementId);
-    }
     const turnIdMap = new Map<string, string>();
 
     for (const turn of this.database.listTurns(source.id)) {
@@ -800,6 +801,9 @@ export class HarnessServer {
     }
     this.database.copySessionItems(source.id, thread.id);
     this.clearThreadSessionApprovals(thread.id);
+    if (thread.requirementId) {
+      this.requirementService.rebuildMemory(thread.requirementId);
+    }
 
     return { thread };
   }
@@ -956,11 +960,23 @@ export class HarnessServer {
 
   private startReview(params: ReviewStartParams): ReviewStartResult {
     const thread = params.threadId ? this.database.getThread(params.threadId) : null;
-    const project = this.requireProject(params.projectId ?? thread?.projectId);
+    const selectedRequirementId = this.database.getConfig().selectedRequirementId;
+    const requirement = params.requirementId
+      ? this.requireRequirement(params.requirementId)
+      : thread?.requirementId
+        ? this.requireRequirement(thread.requirementId)
+        : selectedRequirementId
+          ? this.requireRequirement(selectedRequirementId)
+          : undefined;
+    const projectId = params.projectId ?? thread?.projectId ?? requirement?.primaryProjectId;
+    if (!projectId) {
+      throw new Error("Review projectId is required when no thread or selected requirement is available.");
+    }
+    const project = this.requireProject(projectId);
     const review = this.reviewManager.start({
       project,
       provider: this.database.getConfig().provider,
-      requirementId: thread?.requirementId,
+      requirementId: requirement?.id,
       threadId: thread?.id,
       source: params.source,
       instructions: params.instructions,
@@ -1428,14 +1444,26 @@ export class HarnessServer {
   }
 
   private async runWorkflow(params: WorkflowRunParams): Promise<WorkflowRunResult> {
-    const project = this.requireProject(params.projectId);
     const thread = params.threadId ? this.database.getThread(params.threadId) : null;
+    const selectedRequirementId = this.database.getConfig().selectedRequirementId;
+    const requirement = params.requirementId
+      ? this.requireRequirement(params.requirementId)
+      : thread?.requirementId
+        ? this.requireRequirement(thread.requirementId)
+        : selectedRequirementId
+          ? this.requireRequirement(selectedRequirementId)
+          : undefined;
+    const projectId = params.projectId ?? thread?.projectId ?? requirement?.primaryProjectId;
+    if (!projectId) {
+      throw new Error("Workflow projectId is required when no thread or selected requirement is available.");
+    }
+    const project = this.requireProject(projectId);
     return this.workflowManager.run({
       workflowId: params.workflowId,
       project,
       provider: this.database.getConfig().provider,
       workspace: project,
-      requirementId: thread?.requirementId,
+      requirementId: requirement?.id,
       threadId: params.threadId,
       nonInteractive: params.nonInteractive,
       runId: params.runId,
@@ -1475,7 +1503,12 @@ export class HarnessServer {
 
   private createAutomation(params: CreateAutomationParams) {
     const project = this.requireProject(params.projectId);
-    const requirementId = params.requirementId ? this.requireRequirement(params.requirementId).id : undefined;
+    const selectedRequirementId = this.database.getConfig().selectedRequirementId;
+    const requirementId = params.requirementId
+      ? this.requireRequirement(params.requirementId).id
+      : selectedRequirementId
+        ? this.requireRequirement(selectedRequirementId).id
+        : undefined;
     const now = new Date().toISOString();
     const automation = this.database.createAutomation({
       id: createId("automation"),

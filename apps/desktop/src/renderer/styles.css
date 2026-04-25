@@ -1354,6 +1354,25 @@ code {
   gap: 14px;
 }
 
+.requirement-overview__preview {
+  margin-bottom: 18px;
+}
+
+.requirement-overview__preview pre {
+  margin: 0;
+  max-height: 280px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border: 1px solid color-mix(in srgb, var(--line) 88%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-strong) 86%, transparent);
+  color: var(--text);
+  padding: 14px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .requirement-overview__field {
   display: flex;
   flex-direction: column;

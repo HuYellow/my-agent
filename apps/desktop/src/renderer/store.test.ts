@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { ReviewArtifactRecord, ReviewRecord, ToolCatalogRecord } from "@my-agent/protocol";
+import type { RequirementMemoryRecord, ReviewArtifactRecord, ReviewRecord, ToolCatalogRecord } from "@my-agent/protocol";
 import { useAppStore } from "./store";
 
 const initialSession = {
@@ -38,6 +38,215 @@ afterEach(() => {
 });
 
 describe("desktop thread smoke", () => {
+  it("passes the active requirement into new threads, reviews, and automations", async () => {
+    const calls: { startThread: unknown[]; startReview: unknown[]; createAutomation: unknown[] } = {
+      startThread: [],
+      startReview: [],
+      createAutomation: [],
+    };
+    const now = new Date().toISOString();
+
+    (globalThis as any).window = {
+      myAgent: {
+        startThread: async (params: unknown) => {
+          calls.startThread.push(params);
+          return {
+            thread: {
+              id: "thread-created",
+              title: "New Thread",
+              projectId: "project-1",
+              requirementId: "requirement-1",
+              sandboxMode: "workspace-write",
+              createdAt: now,
+              updatedAt: now,
+              archivedAt: null,
+            },
+          };
+        },
+        startReview: async (params: unknown) => {
+          calls.startReview.push(params);
+          return {
+            review: {
+              id: "review-created",
+              projectId: "project-1",
+              requirementId: "requirement-1",
+              status: "running",
+              source: { kind: "workspace" },
+              findings: [],
+              createdAt: now,
+              updatedAt: now,
+            },
+          };
+        },
+        createAutomation: async (params: unknown) => {
+          calls.createAutomation.push(params);
+          return {
+            automation: {
+              id: "automation-created",
+              name: "Daily check",
+              kind: "prompt",
+              projectId: "project-1",
+              requirementId: "requirement-1",
+              prompt: "Check status",
+              scheduleType: "manual",
+              status: "active",
+              createdAt: now,
+              updatedAt: now,
+            },
+          };
+        },
+      },
+    };
+    useAppStore.setState({
+      projects: [
+        {
+          id: "project-1",
+          name: "Project",
+          rootPath: "/workspace",
+          shell: "bash",
+          sandboxMode: "workspace-write",
+          approvalPolicy: "on-request",
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      requirements: [
+        {
+          id: "requirement-1",
+          title: "Requirement",
+          status: "active",
+          primaryProjectId: "project-1",
+          relatedProjectIds: [],
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+        },
+      ],
+      activeProjectId: "project-1",
+      activeRequirementId: "requirement-1",
+      activeThreadId: undefined,
+      config: {
+        globalInstructions: "",
+        selectedProjectId: "project-1",
+        selectedRequirementId: "requirement-1",
+        provider: {
+          id: "provider",
+          name: "Provider",
+          baseUrl: "",
+          apiKey: "",
+          model: "model",
+          apiFlavor: "responses",
+        },
+        workspace: {
+          id: "workspace",
+          name: "Workspace",
+          rootPath: "/workspace",
+          shell: "bash",
+          sandboxMode: "workspace-write",
+          approvalPolicy: "on-request",
+        },
+        disabledSkillIds: [],
+      },
+    } as never);
+
+    await useAppStore.getState().createThread();
+    await useAppStore.getState().startReview({ projectId: "project-1", source: { kind: "workspace" } });
+    await useAppStore.getState().createAutomation({
+      name: "Daily check",
+      kind: "prompt",
+      projectId: "project-1",
+      prompt: "Check status",
+      scheduleType: "manual",
+    });
+
+    expect(calls.startThread[0]).toMatchObject({ requirementId: "requirement-1" });
+    expect(calls.startReview[0]).toMatchObject({ requirementId: "requirement-1" });
+    expect(calls.createAutomation[0]).toMatchObject({ requirementId: "requirement-1" });
+  });
+
+  it("updates requirement memory immediately from unassign responses", async () => {
+    const now = new Date().toISOString();
+    const refreshedMemory: RequirementMemoryRecord = {
+      requirementId: "requirement-1",
+      manual: {
+        brief: "",
+        goals: [],
+        constraints: [],
+        decisions: [],
+        openQuestions: [],
+        definitionOfDone: [],
+      },
+      derived: {
+        linkedProjects: [],
+        linkedThreads: [],
+        recentReviews: [],
+        recentArtifacts: [],
+        recentChanges: [],
+        activitySummary: "0 linked threads",
+      },
+      updatedAt: now,
+      lastRebuiltAt: now,
+    };
+
+    (globalThis as any).window = {
+      myAgent: {
+        unassignThreadFromRequirement: async () => ({
+          thread: {
+            id: "thread-1",
+            title: "Thread",
+            projectId: "project-1",
+            sandboxMode: "workspace-write",
+            createdAt: now,
+            updatedAt: now,
+            archivedAt: null,
+          },
+          requirementId: "requirement-1",
+          memory: refreshedMemory,
+        }),
+      },
+    };
+    useAppStore.setState({
+      activeRequirementId: "requirement-1",
+      activeThreadId: undefined,
+      threads: [
+        {
+          id: "thread-1",
+          title: "Thread",
+          projectId: "project-1",
+          requirementId: "requirement-1",
+          sandboxMode: "workspace-write",
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+        },
+      ],
+      requirementMemories: [
+        {
+          ...refreshedMemory,
+          derived: {
+            ...refreshedMemory.derived,
+            linkedThreads: [
+              {
+                threadId: "thread-1",
+                title: "Thread",
+                projectId: "project-1",
+                updatedAt: now,
+                hidden: false,
+              },
+            ],
+            activitySummary: "1 linked thread",
+          },
+        },
+      ],
+    } as never);
+
+    await useAppStore.getState().unassignThreadFromRequirement("thread-1");
+
+    expect(useAppStore.getState().threads[0]?.requirementId).toBeUndefined();
+    expect(useAppStore.getState().activeRequirementId).toBe("requirement-1");
+    expect(useAppStore.getState().requirementMemories[0]?.derived.linkedThreads).toEqual([]);
+  });
+
   it("binds steer and review events into UI state", () => {
     useAppStore.setState({
       reviews: [],

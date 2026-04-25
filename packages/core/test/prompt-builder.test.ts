@@ -49,6 +49,12 @@ describe("PromptBuilder", () => {
     expect(built.systemPrompt).toContain("# Run Completion Rules");
     expect(built.systemPrompt).toContain("Do not repeat the same tool call");
     expect(built.userMessage).toBe("explain the app");
+    expect(built.contextSections).toContainEqual(
+      expect.objectContaining({
+        key: "requirement_context",
+        included: true,
+      }),
+    );
   });
 
   it("renders AGENTS from repo root to the deepest matching directory", () => {
@@ -83,6 +89,13 @@ describe("PromptBuilder", () => {
 
     expect(built.systemPrompt.indexOf("Root rule: broad guidance.")).toBeLessThan(
       built.systemPrompt.indexOf("Nested rule: local override."),
+    );
+    expect(built.contextSections).toContainEqual(
+      expect.objectContaining({
+        key: "requirement_context",
+        included: false,
+        summary: "Requirement Context not included",
+      }),
     );
   });
 });

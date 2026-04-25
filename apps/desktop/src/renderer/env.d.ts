@@ -81,7 +81,11 @@ declare global {
       createRequirement: (params: CreateRequirementParams) => Promise<{ requirement: RequirementRecord; memory: RequirementMemoryRecord }>;
       updateRequirement: (params: UpdateRequirementParams) => Promise<{ requirement: RequirementRecord; memory: RequirementMemoryRecord }>;
       assignThreadToRequirement: (params: { requirementId: string; threadId: string }) => Promise<{ requirement: RequirementRecord; memory: RequirementMemoryRecord; thread: ThreadRecord }>;
-      unassignThreadFromRequirement: (params: { threadId: string }) => Promise<{ thread: ThreadRecord }>;
+      unassignThreadFromRequirement: (params: { threadId: string }) => Promise<{
+        thread: ThreadRecord;
+        requirementId?: string;
+        memory?: RequirementMemoryRecord;
+      }>;
       updateThread: (params: UpdateThreadParams) => Promise<{ thread: ThreadRecord }>;
       startThread: (params: StartThreadParams) => Promise<{ thread: ThreadRecord }>;
       resumeThread: (threadId: string) => Promise<{
@@ -121,7 +125,13 @@ declare global {
       detectEnvironment: (params: { projectId: string; threadId?: string; worktreeId?: string; cwd?: string }) => Promise<{ environment: EnvironmentRecord }>;
       listExecutionContexts: (projectId?: string) => Promise<{ executionContexts: ExecutionContextRecord[] }>;
       listWorkflows: (projectId?: string) => Promise<{ workflows: WorkflowRecord[] }>;
-      runWorkflow: (params: { workflowId: string; projectId: string; threadId?: string; nonInteractive?: boolean }) => Promise<unknown>;
+      runWorkflow: (params: {
+        workflowId: string;
+        projectId: string;
+        requirementId?: string;
+        threadId?: string;
+        nonInteractive?: boolean;
+      }) => Promise<unknown>;
       listWorkflowRuns: (workflowId?: string) => Promise<{ runs: WorkflowRunRecord[] }>;
       resumeWorkflow: (params: { runId: string; approvePausedSteps?: boolean; retryFailedStepIds?: string[] }) => Promise<unknown>;
       listAgentTasks: (projectId?: string) => Promise<{ tasks: AgentTaskRecord[] }>;

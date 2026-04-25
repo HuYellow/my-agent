@@ -2,6 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import type { WorkflowRecord } from "@my-agent/protocol";
 import { createRuntimeKernel } from "../src/runtime-kernel.js";
 
 describe("HarnessServer protocol compatibility", () => {
@@ -269,6 +270,166 @@ describe("HarnessServer protocol compatibility", () => {
 
       expect("result" in resumed && (resumed as any).result.turnPlans?.[0]?.steps?.length).toBe(3);
       expect("result" in resumed && (resumed as any).result.turnDiffs?.[0]?.files?.[0]?.path).toBe("src/runtime.ts");
+    } finally {
+      kernel.dispose();
+    }
+  });
+
+  it("inherits selected requirement for review, workflow, and automation entrypoints", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "my-agent-kernel-"));
+    const kernel = createRuntimeKernel({
+      homeDir,
+      emitEvent: () => undefined,
+    });
+
+    try {
+      const now = new Date().toISOString();
+      const project = kernel.database.listProjects()[0]!;
+      const requirement = kernel.database.createRequirement({
+        id: "requirement-selected",
+        title: "Selected requirement",
+        status: "active",
+        primaryProjectId: project.id,
+        relatedProjectIds: [],
+        createdAt: now,
+        updatedAt: now,
+        archivedAt: null,
+      });
+      kernel.database.writeConfig({
+        ...kernel.database.getConfig(),
+        selectedProjectId: project.id,
+        selectedRequirementId: requirement.id,
+      });
+      const workflow: WorkflowRecord = kernel.database.upsertWorkflow({
+        id: "workflow-selected",
+        name: "Selected requirement workflow",
+        description: "No-op workflow",
+        path: join(homeDir, "workflow.toml"),
+        source: "user",
+        steps: [],
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      const review = await kernel.server.handle({
+        jsonrpc: "2.0",
+        id: "review-start-selected",
+        method: "review/start",
+        params: {
+          projectId: project.id,
+          source: { kind: "workspace" },
+        },
+      });
+      const workflowRun = await kernel.server.handle({
+        jsonrpc: "2.0",
+        id: "workflow-run-selected",
+        method: "workflow/run",
+        params: {
+          workflowId: workflow.id,
+          projectId: project.id,
+          nonInteractive: true,
+        },
+      });
+      const automation = await kernel.server.handle({
+        jsonrpc: "2.0",
+        id: "automation-create-selected",
+        method: "automation/create",
+        params: {
+          name: "Selected automation",
+          kind: "workflow",
+          projectId: project.id,
+          workflowId: workflow.id,
+        },
+      });
+      const automationId = "result" in automation ? (automation as any).result.automation.id : undefined;
+      const automationRun = await kernel.server.handle({
+        jsonrpc: "2.0",
+        id: "automation-run-selected",
+        method: "automation/run",
+        params: {
+          automationId,
+        },
+      });
+
+      expect("result" in review && (review as any).result.review.requirementId).toBe(requirement.id);
+      expect("result" in workflowRun && (workflowRun as any).result.run.requirementId).toBe(requirement.id);
+      expect("result" in automation && (automation as any).result.automation.requirementId).toBe(requirement.id);
+      expect("result" in automationRun && (automationRun as any).result.run.requirementId).toBe(requirement.id);
+    } finally {
+      kernel.dispose();
+    }
+  });
+
+  it("uses thread requirement before selected requirement and returns refreshed memory when unassigning", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "my-agent-kernel-"));
+    const kernel = createRuntimeKernel({
+      homeDir,
+      emitEvent: () => undefined,
+    });
+
+    try {
+      const now = new Date().toISOString();
+      const project = kernel.database.listProjects()[0]!;
+      const selectedRequirement = kernel.database.createRequirement({
+        id: "requirement-selected",
+        title: "Selected requirement",
+        status: "active",
+        primaryProjectId: project.id,
+        relatedProjectIds: [],
+        createdAt: now,
+        updatedAt: now,
+        archivedAt: null,
+      });
+      const threadRequirement = kernel.database.createRequirement({
+        id: "requirement-thread",
+        title: "Thread requirement",
+        status: "active",
+        primaryProjectId: project.id,
+        relatedProjectIds: [],
+        createdAt: now,
+        updatedAt: now,
+        archivedAt: null,
+      });
+      const thread = kernel.database.createThread({
+        id: "thread-requirement",
+        title: "Requirement-bound thread",
+        projectId: project.id,
+        requirementId: threadRequirement.id,
+        sandboxMode: project.sandboxMode,
+        hidden: false,
+        createdAt: now,
+        updatedAt: now,
+        archivedAt: null,
+      });
+      kernel.database.writeConfig({
+        ...kernel.database.getConfig(),
+        selectedProjectId: project.id,
+        selectedRequirementId: selectedRequirement.id,
+      });
+
+      const review = await kernel.server.handle({
+        jsonrpc: "2.0",
+        id: "review-start-thread",
+        method: "review/start",
+        params: {
+          threadId: thread.id,
+          source: { kind: "workspace" },
+        },
+      });
+      const unassigned = await kernel.server.handle({
+        jsonrpc: "2.0",
+        id: "requirement-unassign",
+        method: "requirement/unassignThread",
+        params: {
+          threadId: thread.id,
+        },
+      });
+
+      expect("result" in review && (review as any).result.review.requirementId).toBe(threadRequirement.id);
+      expect("result" in unassigned && (unassigned as any).result.thread.requirementId).toBeUndefined();
+      expect("result" in unassigned && (unassigned as any).result.requirementId).toBe(threadRequirement.id);
+      expect("result" in unassigned && (unassigned as any).result.memory.requirementId).toBe(threadRequirement.id);
+      expect("result" in unassigned && (unassigned as any).result.memory.derived.linkedThreads).toEqual([]);
     } finally {
       kernel.dispose();
     }
