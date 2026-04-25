@@ -191,6 +191,14 @@ export class AgentTaskManager {
       return this.database.getAgentTask(agentId) ?? live.task;
     }
 
+    if (timeoutMs === Number.POSITIVE_INFINITY) {
+      return live.currentRun;
+    }
+
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      return this.database.getAgentTask(agentId) ?? live.task;
+    }
+
     return Promise.race([
       live.currentRun,
       new Promise<AgentTaskRecord>((resolve) => {

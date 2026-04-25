@@ -1,7 +1,7 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AgentTaskManager } from "../src/services/agent-task-manager.js";
 import { HarnessDatabase } from "../src/store/database.js";
 
@@ -139,5 +139,138 @@ describe("AgentTaskManager", () => {
       changedPaths: ["src/app.ts"],
     });
     expect(database.listThreads().map((thread) => thread.id)).toEqual(["thread-parent"]);
+  });
+
+  it("waits for a running task to settle when timeout is infinite", async () => {
+    vi.useFakeTimers();
+
+    try {
+      const root = mkdtempSync(join(tmpdir(), "my-agent-agent-"));
+      const database = new HarnessDatabase(join(root, "app.db"));
+      const project = database.listProjects()[0]!;
+      const now = new Date().toISOString();
+
+      database.createThread({
+        id: "thread-parent-infinite",
+        title: "Parent",
+        projectId: project.id,
+        hidden: false,
+        createdAt: now,
+        updatedAt: now,
+        archivedAt: null,
+      });
+
+      const manager = new AgentTaskManager(
+        database,
+        {
+          create: () => ({
+            id: "worktree-infinite",
+            projectId: project.id,
+            agentId: "agent-placeholder",
+            branch: "codex/test",
+            path: root,
+            status: "ready",
+            createdAt: now,
+            updatedAt: now,
+          }),
+          remove: () => undefined,
+        } as never,
+        {
+          detect: ({ threadId, worktreeId, cwd }: { threadId?: string; worktreeId?: string; cwd?: string }) => ({
+            id: "env-infinite",
+            projectId: project.id,
+            threadId,
+            worktreeId,
+            cwd: cwd ?? root,
+            shell: process.platform === "win32" ? "powershell" : "bash",
+            envJson: { PATH: process.env.PATH ?? "" },
+            detectedTools: ["git", "node"],
+            createdAt: now,
+            updatedAt: now,
+          }),
+        } as never,
+        {
+          create: ({ threadId, agentId, environment, worktree }: { threadId?: string; agentId?: string; environment: { id: string }; worktree?: { id: string } }) => ({
+            id: "exec-infinite",
+            projectId: project.id,
+            kind: "agent",
+            threadId,
+            agentId,
+            worktreeId: worktree?.id,
+            environmentId: environment.id,
+            cwd: root,
+            shell: process.platform === "win32" ? "powershell" : "bash",
+            envJson: { PATH: process.env.PATH ?? "" },
+            detectedTools: ["git", "node"],
+            createdAt: now,
+            updatedAt: now,
+          }),
+        } as never,
+        {
+          interruptTurn: () => true,
+          resumeAfterApproval: async () => {
+            throw new Error("not used");
+          },
+          runTurn: async (context: { turn: { id: string; threadId: string }; thread: { id: string } }) => {
+            await new Promise<void>((resolve) => setTimeout(resolve, 250));
+            const completedTurn = database.updateTurn({
+              ...database.getTurn(context.turn.id)!,
+              status: "completed",
+              updatedAt: new Date().toISOString(),
+            });
+
+            database.createItem({
+              id: "item-agent-message-infinite",
+              threadId: context.thread.id,
+              turnId: context.turn.id,
+              kind: "agentMessage",
+              status: "completed",
+              title: "Agent response",
+              body: "Infinite wait complete.",
+              createdAt: now,
+              updatedAt: now,
+            });
+
+            return completedTurn;
+          },
+        } as never,
+        () => undefined,
+      );
+
+      const task = manager.spawn({
+        provider: database.getConfig().provider,
+        workspace: {
+          id: project.id,
+          name: project.name,
+          rootPath: project.rootPath,
+          shell: project.shell,
+          sandboxMode: project.sandboxMode,
+          approvalPolicy: project.approvalPolicy,
+        },
+        project,
+        parentThreadId: "thread-parent-infinite",
+        parentTurnId: undefined,
+        title: "Delegated task",
+        input: "Fix the bug",
+        globalInstructions: "",
+      });
+
+      const settledPromise = manager.wait(task.id, Number.POSITIVE_INFINITY);
+      const earlyResult = await Promise.race([
+        settledPromise.then((settled) => settled.status),
+        Promise.resolve("still-waiting"),
+      ]);
+
+      expect(earlyResult).toBe("still-waiting");
+
+      await vi.advanceTimersByTimeAsync(250);
+
+      await expect(settledPromise).resolves.toMatchObject({
+        status: "completed",
+        finalOutput: "Infinite wait complete.",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

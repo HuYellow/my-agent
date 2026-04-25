@@ -35,6 +35,9 @@ export interface ExecutionUnitResources {
   executionContext: ReturnType<ExecutionContextManager["create"]>;
 }
 
+const DEFAULT_REVIEW_COMPLETION_TIMEOUT_MS = 10 * 60_000;
+const DEFAULT_REVIEW_COMPLETION_POLL_INTERVAL_MS = 250;
+
 export class ExecutionUnitRunner {
   constructor(
     private readonly worktreeManager: WorktreeManager,
@@ -174,60 +177,117 @@ async function executeExecutionUnitInternal(
   }
 
   if (step.type === "agent" && step.prompt) {
-    const scopedWorkspace = scopeWorkspaceToWorktree(context.workspace, resources.worktree?.path);
-    const scopedProject = scopeProjectToWorktree(context.project, resources.worktree?.path);
-    const task = agentTaskManager.spawn({
-      provider: context.provider,
-      workspace: scopedWorkspace,
-      project: scopedProject,
-      requirementId: context.run.requirementId,
-      parentThreadId: context.threadId ?? createId("workflow_thread"),
-      title: step.title,
-      input: step.prompt,
-    });
-    const finalTask = await agentTaskManager.wait(task.id, 120_000);
+    try {
+      const scopedWorkspace = scopeWorkspaceToWorktree(context.workspace, resources.worktree?.path);
+      const scopedProject = scopeProjectToWorktree(context.project, resources.worktree?.path);
+      const task = agentTaskManager.spawn({
+        provider: context.provider,
+        workspace: scopedWorkspace,
+        project: scopedProject,
+        requirementId: context.run.requirementId,
+        parentThreadId: context.threadId ?? createId("workflow_thread"),
+        title: step.title,
+        input: step.prompt,
+      });
+      const waitTimeoutMs = normalizeWorkflowStepTimeout(step.timeoutMs);
+      const finalTask = await agentTaskManager.wait(task.id, waitTimeoutMs ?? Number.POSITIVE_INFINITY);
 
-    return {
-      stepId: step.id,
-      status: finalTask.status === "completed" ? "completed" : "failed",
-      output: finalTask.finalOutput,
-      artifactSummary: summarizeExecutionUnitOutput(finalTask.summary?.finalMessage ?? finalTask.finalOutput),
-      worktreeId: resources.worktree?.id ?? finalTask.worktreeId,
-      environmentId: finalTask.environmentId ?? resources.environment.id,
-      executionContextId: finalTask.executionContextId ?? resources.executionContext.id,
-      agentId: finalTask.id,
-      startedAt,
-      completedAt: new Date().toISOString(),
-      attempts: 1,
-    };
+      if (finalTask.status === "running" || finalTask.status === "awaiting_approval") {
+        const output =
+          typeof waitTimeoutMs === "number"
+            ? `Timed out after ${waitTimeoutMs}ms waiting for delegated agent ${task.id} to finish. Last known status: ${finalTask.status}.`
+            : `Delegated agent ${task.id} did not reach a terminal state. Last known status: ${finalTask.status}.`;
+
+        return {
+          stepId: step.id,
+          status: "failed",
+          output,
+          artifactSummary: summarizeExecutionUnitOutput(output),
+          worktreeId: resources.worktree?.id ?? finalTask.worktreeId,
+          environmentId: finalTask.environmentId ?? resources.environment.id,
+          executionContextId: finalTask.executionContextId ?? resources.executionContext.id,
+          agentId: finalTask.id,
+          startedAt,
+          completedAt: new Date().toISOString(),
+          attempts: 1,
+        };
+      }
+
+      return {
+        stepId: step.id,
+        status: finalTask.status === "completed" ? "completed" : "failed",
+        output: finalTask.finalOutput,
+        artifactSummary: summarizeExecutionUnitOutput(finalTask.summary?.finalMessage ?? finalTask.finalOutput),
+        worktreeId: resources.worktree?.id ?? finalTask.worktreeId,
+        environmentId: finalTask.environmentId ?? resources.environment.id,
+        executionContextId: finalTask.executionContextId ?? resources.executionContext.id,
+        agentId: finalTask.id,
+        startedAt,
+        completedAt: new Date().toISOString(),
+        attempts: 1,
+      };
+    } catch (error) {
+      const output = error instanceof Error ? error.message : String(error);
+      return {
+        stepId: step.id,
+        status: "failed",
+        output,
+        artifactSummary: summarizeExecutionUnitOutput(output),
+        worktreeId: resources.worktree?.id,
+        environmentId: resources.environment.id,
+        executionContextId: resources.executionContext.id,
+        startedAt,
+        completedAt: new Date().toISOString(),
+        attempts: 1,
+      };
+    }
   }
 
   if (step.type === "review") {
-    const scopedProject = scopeProjectToWorktree(context.project, resources.worktree?.path);
-    const review = reviewManager.start({
-      project: scopedProject,
-      provider: context.provider,
-      requirementId: context.run.requirementId,
-      threadId: context.threadId,
-      source: step.reviewSource,
-      instructions: step.prompt,
-    });
-    const finalReview = await waitForReviewCompletion(database, review.id);
+    try {
+      const scopedProject = scopeProjectToWorktree(context.project, resources.worktree?.path);
+      const review = reviewManager.start({
+        project: scopedProject,
+        provider: context.provider,
+        requirementId: context.run.requirementId,
+        threadId: context.threadId,
+        source: step.reviewSource,
+        instructions: step.prompt,
+      });
+      const finalReview = await waitForReviewCompletion(database, review.id, {
+        timeoutMs: normalizeWorkflowStepTimeout(step.timeoutMs) ?? DEFAULT_REVIEW_COMPLETION_TIMEOUT_MS,
+        pollIntervalMs: DEFAULT_REVIEW_COMPLETION_POLL_INTERVAL_MS,
+      });
 
-    return {
-      stepId: step.id,
-      status: finalReview.status === "completed" ? "completed" : "failed",
-      output: finalReview.error ?? finalReview.summary,
-      artifactSummary: summarizeExecutionUnitOutput(
-        finalReview.summary ?? finalReview.error ?? `${finalReview.findings.length} findings`,
-      ),
-      environmentId: resources.environment.id,
-      executionContextId: finalReview.executionContextId ?? resources.executionContext.id,
-      worktreeId: resources.worktree?.id,
-      startedAt,
-      completedAt: new Date().toISOString(),
-      attempts: 1,
-    };
+      return {
+        stepId: step.id,
+        status: finalReview.status === "completed" ? "completed" : "failed",
+        output: finalReview.error ?? finalReview.summary,
+        artifactSummary: summarizeExecutionUnitOutput(
+          finalReview.summary ?? finalReview.error ?? `${finalReview.findings.length} findings`,
+        ),
+        environmentId: resources.environment.id,
+        executionContextId: finalReview.executionContextId ?? resources.executionContext.id,
+        worktreeId: resources.worktree?.id,
+        startedAt,
+        completedAt: new Date().toISOString(),
+        attempts: 1,
+      };
+    } catch (error) {
+      const output = error instanceof Error ? error.message : String(error);
+      return {
+        stepId: step.id,
+        status: "failed",
+        output,
+        artifactSummary: summarizeExecutionUnitOutput(output),
+        environmentId: resources.environment.id,
+        executionContextId: resources.executionContext.id,
+        worktreeId: resources.worktree?.id,
+        startedAt,
+        completedAt: new Date().toISOString(),
+        attempts: 1,
+      };
+    }
   }
 
   return {
@@ -253,8 +313,18 @@ export function summarizeExecutionUnitOutput(output: string | undefined): string
   return compact.length > 160 ? `${compact.slice(0, 157)}...` : compact;
 }
 
-async function waitForReviewCompletion(database: HarnessDatabase, reviewId: string) {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+async function waitForReviewCompletion(
+  database: HarnessDatabase,
+  reviewId: string,
+  options: {
+    timeoutMs: number;
+    pollIntervalMs: number;
+  },
+) {
+  const timeoutMs = Math.max(options.timeoutMs, options.pollIntervalMs);
+  const deadline = Date.now() + timeoutMs;
+
+  while (true) {
     const review = database.getReview(reviewId);
 
     if (!review) {
@@ -265,10 +335,20 @@ async function waitForReviewCompletion(database: HarnessDatabase, reviewId: stri
       return review;
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out waiting for review completion: ${reviewId}`);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, options.pollIntervalMs));
+  }
+}
+
+function normalizeWorkflowStepTimeout(timeoutMs: number | undefined): number | undefined {
+  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return undefined;
   }
 
-  throw new Error(`Timed out waiting for review completion: ${reviewId}`);
+  return Math.trunc(timeoutMs);
 }
 
 function scopeWorkspaceToWorktree(workspace: WorkspaceProfile, worktreePath?: string): WorkspaceProfile {

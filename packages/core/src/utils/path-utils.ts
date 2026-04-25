@@ -45,7 +45,7 @@ export function findAgentDocuments(start: string): string[] {
     current = parent;
   }
 
-  return documents;
+  return documents.reverse();
 }
 
 export function isPathInside(parent: string, candidate: string): boolean {

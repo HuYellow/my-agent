@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 import YAML from "yaml";
 import {
   type ArtifactCompatibilityRecord,
@@ -262,7 +263,7 @@ export class WorkflowManager {
 
 function discoverWorkflows(project?: ProjectRecord): WorkflowRecord[] {
   const roots: Array<{ source: WorkflowRecord["source"]; path: string }> = [
-    { source: "system", path: join(process.cwd(), "packages", "core", "system-workflows") },
+    { source: "system", path: getDefaultSystemWorkflowsRoot() },
     { source: "user", path: join(homedir(), ".my-agent", "workflows") },
     { source: "catalog", path: join(homedir(), ".my-agent", "catalogs", "workflows") },
   ];
@@ -351,6 +352,21 @@ function parseCompatibility(value: unknown): ArtifactCompatibilityRecord | undef
   };
 }
 
+function normalizeStepTimeoutMs(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.trunc(value);
+  }
+
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return Math.trunc(parsed);
+    }
+  }
+
+  return undefined;
+}
+
 function normalizeWorkflowStep(step: unknown, index: number): WorkflowStep {
   const record = typeof step === "object" && step !== null ? (step as Record<string, unknown>) : {};
   const type = record.type === "approval" || record.type === "agent" || record.type === "review" ? record.type : "command";
@@ -361,6 +377,7 @@ function normalizeWorkflowStep(step: unknown, index: number): WorkflowStep {
     title: typeof record.title === "string" ? record.title : `Step ${index + 1}`,
     command: typeof record.command === "string" ? record.command : undefined,
     prompt: typeof record.prompt === "string" ? record.prompt : undefined,
+    timeoutMs: normalizeStepTimeoutMs(record.timeoutMs ?? record.timeout_ms),
     reviewSource: normalizeWorkflowReviewSource(record),
     approvalMessage: typeof record.approvalMessage === "string" ? record.approvalMessage : undefined,
     worktreeStrategy: record.worktreeStrategy === "new" ? "new" : "inherit",
@@ -412,6 +429,10 @@ function normalizeWorkflowReviewSource(record: Record<string, unknown>) {
 
 function createIdFromPath(filePath: string): string {
   return `workflow_${Buffer.from(filePath).toString("base64url").slice(0, 16)}`;
+}
+
+function getDefaultSystemWorkflowsRoot(): string {
+  return resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "system-workflows");
 }
 
 function parseVerySmallToml(value: string): Record<string, unknown> {

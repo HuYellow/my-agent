@@ -884,6 +884,7 @@ export interface WorkflowStep {
   title: string;
   command?: string;
   prompt?: string;
+  timeoutMs?: number;
   reviewSource?: ReviewSource;
   approvalMessage?: string;
   worktreeStrategy?: "inherit" | "new";

@@ -50,4 +50,39 @@ describe("PromptBuilder", () => {
     expect(built.systemPrompt).toContain("Do not repeat the same tool call");
     expect(built.userMessage).toBe("explain the app");
   });
+
+  it("renders AGENTS from repo root to the deepest matching directory", () => {
+    const root = mkdtempSync(join(tmpdir(), "my-agent-prompt-order-"));
+    const systemRoot = join(root, "system");
+    const homeRoot = join(root, "home");
+    const workspace = join(root, "workspace");
+    const nested = join(workspace, "services", "payments");
+
+    mkdirSync(nested, { recursive: true });
+    writeFileSync(join(workspace, "AGENTS.md"), "Root rule: broad guidance.", "utf8");
+    writeFileSync(join(nested, "AGENTS.md"), "Nested rule: local override.", "utf8");
+
+    const service = new SkillService(systemRoot, homeRoot, () => undefined);
+    const builder = new PromptBuilder(service);
+    const built = builder.build({
+      cwd: nested,
+      workspace: {
+        id: "workspace",
+        name: "Workspace",
+        rootPath: workspace,
+        shell: "powershell",
+        sandboxMode: "workspace-write",
+        approvalPolicy: "on-request",
+      },
+      globalInstructions: "",
+      userInput: "explain the rules",
+      attachments: [],
+      selectedSkills: [],
+      discoveredSkills: [],
+    });
+
+    expect(built.systemPrompt.indexOf("Root rule: broad guidance.")).toBeLessThan(
+      built.systemPrompt.indexOf("Nested rule: local override."),
+    );
+  });
 });

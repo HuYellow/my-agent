@@ -218,6 +218,125 @@ describe("WorkflowManager", () => {
     expect(result.stepsRun[0]?.artifactSummary).toContain("No blocking issues found");
   });
 
+  it("waits long enough for slower review steps to finish", async () => {
+    const root = mkdtempSync(join(tmpdir(), "my-agent-workflow-"));
+    const database = new HarnessDatabase(join(root, "app.db"));
+    const project = database.listProjects()[0]!;
+    const now = new Date().toISOString();
+
+    const workflow = database.upsertWorkflow({
+      id: "workflow-review-slow",
+      name: "Slow review workflow",
+      description: "Run a slower review step",
+      path: join(root, "review-slow.toml"),
+      source: "user",
+      steps: [
+        {
+          id: "step-review-slow",
+          type: "review",
+          title: "Review staged changes slowly",
+          prompt: "Focus on correctness and missing tests.",
+          reviewSource: { kind: "staged" },
+          worktreeStrategy: "inherit",
+        },
+      ],
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const manager = new WorkflowManager(
+      database,
+      {
+        create: () => {
+          throw new Error("not needed");
+        },
+      } as never,
+      {
+        detect: ({ cwd }: { cwd?: string }) => ({
+          id: "env-slow-review",
+          projectId: project.id,
+          cwd: cwd ?? root,
+          shell: process.platform === "win32" ? "powershell" : "bash",
+          envJson: {},
+          detectedTools: ["git", "node"],
+          createdAt: now,
+          updatedAt: now,
+        }),
+      } as never,
+      {
+        create: () => ({
+          id: "exec-slow-review",
+          projectId: project.id,
+          kind: "workflow",
+          cwd: root,
+          shell: process.platform === "win32" ? "powershell" : "bash",
+          envJson: {},
+          detectedTools: ["git", "node"],
+          createdAt: now,
+          updatedAt: now,
+        }),
+      } as never,
+      {
+        start: () => {
+          const review = database.createReview({
+            id: "review-slow",
+            projectId: project.id,
+            status: "running",
+            source: { kind: "staged" },
+            findings: [],
+            createdAt: now,
+            updatedAt: now,
+          });
+
+          setTimeout(() => {
+            database.updateReview({
+              ...review,
+              status: "completed",
+              summary: "Completed after the legacy timeout window.",
+              executionContextId: "exec-review-slow-step",
+              findings: [],
+              updatedAt: new Date().toISOString(),
+              completedAt: new Date().toISOString(),
+            });
+          }, 2_600);
+
+          return review;
+        },
+      } as never,
+      {
+        spawn: () => {
+          throw new Error("not needed");
+        },
+      } as never,
+      () => undefined,
+      () => undefined,
+    );
+
+    const result = await manager.run({
+      workflowId: workflow.id,
+      project,
+      provider: database.getConfig().provider,
+      workspace: {
+        id: project.id,
+        name: project.name,
+        rootPath: project.rootPath,
+        shell: project.shell,
+        sandboxMode: project.sandboxMode,
+        approvalPolicy: "never",
+      },
+      nonInteractive: true,
+    });
+
+    expect(result.stepsRun).toMatchObject([
+      {
+        stepId: "step-review-slow",
+        status: "completed",
+        executionContextId: "exec-review-slow-step",
+      },
+    ]);
+    expect(result.stepsRun[0]?.artifactSummary).toContain("Completed after the legacy timeout window.");
+  });
+
   it("pauses on approval steps and resumes the remaining workflow", async () => {
     const root = mkdtempSync(join(tmpdir(), "my-agent-workflow-"));
     const database = new HarnessDatabase(join(root, "app.db"));
@@ -468,7 +587,7 @@ describe("WorkflowManager", () => {
         input: "Fix the regression and summarize the result.",
       }),
     );
-    expect(wait).toHaveBeenCalledWith("agent-1", 120_000);
+    expect(wait).toHaveBeenCalledWith("agent-1", Number.POSITIVE_INFINITY);
     expect(result.stepsRun).toMatchObject([
       {
         stepId: "delegate",
@@ -1105,5 +1224,68 @@ describe("WorkflowManager", () => {
     expect(resumed.run.steps.find((step) => step.stepId === "verify")?.worktreeId).toBe("worktree-3");
     expect(worktrees.get("worktree-2")?.status).toBe("removed");
     expect(worktrees.get("worktree-3")?.status).toBe("removed");
+  });
+
+  it("discovers system workflows without depending on process.cwd()", () => {
+    const root = mkdtempSync(join(tmpdir(), "my-agent-workflow-"));
+    const database = new HarnessDatabase(join(root, "app.db"));
+    const project = database.listProjects()[0]!;
+    const originalCwd = process.cwd();
+    const isolatedCwd = mkdtempSync(join(tmpdir(), "my-agent-workflow-cwd-"));
+
+    const manager = new WorkflowManager(
+      database,
+      {
+        create: () => {
+          throw new Error("not needed");
+        },
+      } as never,
+      {
+        detect: ({ cwd }: { cwd?: string }) => ({
+          id: "env-workflow-discovery",
+          projectId: project.id,
+          cwd: cwd ?? root,
+          shell: process.platform === "win32" ? "powershell" : "bash",
+          envJson: {},
+          detectedTools: ["git", "node"],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      } as never,
+      {
+        create: ({ environment }: { environment: { cwd: string; shell: string; envJson: {}; detectedTools: string[] } }) => ({
+          id: "exec-workflow-discovery",
+          projectId: project.id,
+          kind: "workflow",
+          cwd: environment.cwd,
+          shell: environment.shell,
+          envJson: environment.envJson,
+          detectedTools: environment.detectedTools,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      } as never,
+      {
+        start: () => {
+          throw new Error("not needed");
+        },
+      } as never,
+      {
+        spawn: () => {
+          throw new Error("not needed");
+        },
+      } as never,
+      () => undefined,
+      () => undefined,
+    );
+
+    process.chdir(isolatedCwd);
+
+    try {
+      const workflows = manager.list(project);
+      expect(workflows.map((workflow) => workflow.name)).toContain("Repo QA");
+    } finally {
+      process.chdir(originalCwd);
+    }
   });
 });

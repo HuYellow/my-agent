@@ -3,12 +3,21 @@ import { type McpMountRecord, type McpPromptRecord, type McpResourceRecord, type
 import { HarnessDatabase } from "../store/database.js";
 import { createId } from "../utils/ids.js";
 
+interface PendingStdioRequest {
+  resolve: (value: unknown) => void;
+  reject: (error: Error) => void;
+  timer: NodeJS.Timeout;
+}
+
 interface SessionCache {
   session: McpSessionRecord;
   transport: "stdio" | "http";
   process?: ChildProcessWithoutNullStreams;
-  buffer?: string;
   nextId: number;
+  initialized: boolean;
+  initialization?: Promise<McpSessionRecord>;
+  pendingRequests: Map<string, PendingStdioRequest>;
+  stdoutBuffer: string;
 }
 
 export class McpSessionManager {
@@ -25,19 +34,6 @@ export class McpSessionManager {
 
   async refreshMount(mount: McpMountRecord): Promise<{ session: McpSessionRecord; tools: McpToolRecord[]; prompts: McpPromptRecord[]; resources: McpResourceRecord[] }> {
     const session = await this.ensureSession(mount);
-    const initialized = await this.sendRequest(mount, session, "initialize", {
-      protocolVersion: "2024-11-05",
-      capabilities: {},
-      clientInfo: {
-        name: "my-agent",
-        version: "0.1.0",
-      },
-    });
-
-    if (initialized?.error) {
-      throw new Error(initialized.error.message);
-    }
-
     const tools = await this.safeCallList<McpToolRecord[]>(mount, session, "tools/list", "tools");
     const prompts = await this.safeCallList<McpPromptRecord[]>(mount, session, "prompts/list", "prompts");
     const resources = await this.safeCallList<McpResourceRecord[]>(mount, session, "resources/list", "resources");
@@ -105,10 +101,11 @@ export class McpSessionManager {
 
   async reconnect(mountId: string): Promise<void> {
     const live = this.sessions.get(mountId);
+    this.sessions.delete(mountId);
     if (live?.process) {
+      this.rejectPendingRequests(live, new Error(`MCP mount ${mountId} was reconnected.`));
       live.process.kill();
     }
-    this.sessions.delete(mountId);
     const existing = this.database.getMcpSessionByMountId(mountId);
     if (existing) {
       const closed = this.database.upsertMcpSession({
@@ -123,6 +120,9 @@ export class McpSessionManager {
   private async ensureSession(mount: McpMountRecord): Promise<McpSessionRecord> {
     const live = this.sessions.get(mount.id);
     if (live) {
+      if (live.initialization) {
+        return live.initialization;
+      }
       return live.session;
     }
 
@@ -140,6 +140,9 @@ export class McpSessionManager {
       session,
       transport: mount.transport,
       nextId: 1,
+      initialized: false,
+      pendingRequests: new Map(),
+      stdoutBuffer: "",
     };
 
     if (mount.transport === "stdio" && mount.command) {
@@ -149,17 +152,21 @@ export class McpSessionManager {
         windowsHide: true,
       });
       cache.process = child;
-      cache.buffer = "";
+      this.attachStdioParser(mount, cache, child);
+      this.attachChildLifecycle(mount, cache, child);
     }
 
-    cache.session = this.database.upsertMcpSession({
-      ...session,
-      status: "ready",
-      updatedAt: new Date().toISOString(),
-    });
     this.sessions.set(mount.id, cache);
     this.emit(cache.session);
-    return cache.session;
+    cache.initialization = this.initializeSession(mount, cache);
+
+    try {
+      return await cache.initialization;
+    } finally {
+      if (this.sessions.get(mount.id) === cache) {
+        cache.initialization = undefined;
+      }
+    }
   }
 
   private async safeCallList<T>(mount: McpMountRecord, session: McpSessionRecord, method: string, field: string): Promise<T> {
@@ -200,49 +207,153 @@ export class McpSessionManager {
       method,
       params,
     });
-    const child = live.process;
-
     return await new Promise<any>((resolve, reject) => {
-      let stdout = "";
-      let timer: NodeJS.Timeout | undefined;
-      const onData = (chunk: Buffer) => {
-        stdout += chunk.toString();
-        const parsed = tryParseMcpPayload(stdout);
-        if (!parsed) {
-          return;
-        }
-        cleanup();
-        resolve(parsed);
-      };
-      const onError = (error: Error) => {
-        cleanup();
-        reject(error);
-      };
-      const onExit = () => {
-        cleanup();
-        reject(new Error(`MCP mount ${mount.name} exited before responding.`));
-      };
-      const cleanup = () => {
-        child.stdout.off("data", onData);
-        child.stderr.off("data", onError as any);
-        child.off("exit", onExit);
-        if (timer) {
-          clearTimeout(timer);
-        }
-      };
-      child.stdout.on("data", onData);
-      child.on("exit", onExit);
-      timer = setTimeout(() => {
-        cleanup();
+      const timer = setTimeout(() => {
+        live.pendingRequests.delete(id);
         reject(new Error(`Timed out waiting for MCP response from ${mount.name}.`));
       }, 20_000);
       timer.unref?.();
-      child.stdin.write(`Content-Length: ${Buffer.byteLength(request, "utf8")}\r\n\r\n${request}`);
+
+      live.pendingRequests.set(id, {
+        resolve,
+        reject,
+        timer,
+      });
+
+      live.process!.stdin.write(`Content-Length: ${Buffer.byteLength(request, "utf8")}\r\n\r\n${request}`);
     });
+  }
+
+  private async initializeSession(mount: McpMountRecord, cache: SessionCache): Promise<McpSessionRecord> {
+    try {
+      const initialized = await this.sendRequest(mount, cache.session, "initialize", {
+        protocolVersion: "2024-11-05",
+        capabilities: {},
+        clientInfo: {
+          name: "my-agent",
+          version: "0.1.0",
+        },
+      });
+
+      if (initialized?.error) {
+        throw new Error(initialized.error.message);
+      }
+
+      cache.initialized = true;
+      cache.session = this.database.upsertMcpSession({
+        ...cache.session,
+        status: "ready",
+        lastConnectedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+      this.emit(cache.session);
+      return cache.session;
+    } catch (error) {
+      this.markSessionFailed(mount.id, cache);
+      throw error;
+    }
+  }
+
+  private attachChildLifecycle(
+    mount: McpMountRecord,
+    cache: SessionCache,
+    child: ChildProcessWithoutNullStreams,
+  ): void {
+    child.on("error", (error) => {
+      this.rejectPendingRequests(cache, error);
+      this.markSessionFailed(mount.id, cache);
+    });
+    child.on("exit", () => {
+      this.rejectPendingRequests(cache, new Error(`MCP mount ${mount.name} exited before responding.`));
+      if (this.sessions.get(mount.id) !== cache || cache.session.status === "failed") {
+        return;
+      }
+
+      cache.session = this.database.upsertMcpSession({
+        ...cache.session,
+        status: "closed",
+        updatedAt: new Date().toISOString(),
+      });
+      this.sessions.delete(mount.id);
+      this.emit(cache.session);
+    });
+  }
+
+  private markSessionFailed(mountId: string, cache: SessionCache): void {
+    if (this.sessions.get(mountId) !== cache || cache.session.status === "failed") {
+      return;
+    }
+
+    cache.session = this.database.upsertMcpSession({
+      ...cache.session,
+      status: "failed",
+      updatedAt: new Date().toISOString(),
+    });
+    this.sessions.delete(mountId);
+    this.emit(cache.session);
+
+    this.rejectPendingRequests(cache, new Error(`MCP mount ${cache.session.mountId} failed.`));
+
+    if (cache.process && !cache.process.killed) {
+      cache.process.kill();
+    }
+  }
+
+  private attachStdioParser(
+    mount: McpMountRecord,
+    cache: SessionCache,
+    child: ChildProcessWithoutNullStreams,
+  ): void {
+    child.stdout.on("data", (chunk: Buffer) => {
+      cache.stdoutBuffer += chunk.toString();
+
+      while (true) {
+        const parsed = tryParseMcpPayload(cache.stdoutBuffer);
+        if (!parsed) {
+          break;
+        }
+
+        cache.stdoutBuffer = parsed.rest;
+        this.resolveStdioPayload(mount, cache, parsed.payload);
+      }
+    });
+  }
+
+  private resolveStdioPayload(mount: McpMountRecord, cache: SessionCache, payload: unknown): void {
+    if (!payload || typeof payload !== "object" || !("id" in payload)) {
+      return;
+    }
+
+    const id = String((payload as { id: unknown }).id);
+    const pending = cache.pendingRequests.get(id);
+    if (!pending) {
+      return;
+    }
+
+    cache.pendingRequests.delete(id);
+    clearTimeout(pending.timer);
+
+    const error = (payload as { error?: { message?: unknown } }).error;
+    if (error) {
+      pending.reject(new Error(typeof error.message === "string" ? error.message : `MCP request ${id} failed for ${mount.name}.`));
+      return;
+    }
+
+    pending.resolve(payload);
+  }
+
+  private rejectPendingRequests(cache: SessionCache, error: Error): void {
+    const pendingRequests = [...cache.pendingRequests.values()];
+    cache.pendingRequests.clear();
+
+    for (const pending of pendingRequests) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
   }
 }
 
-function tryParseMcpPayload(buffer: string): unknown | null {
+function tryParseMcpPayload(buffer: string): { payload: unknown; rest: string } | null {
   const separatorIndex = buffer.indexOf("\r\n\r\n");
   if (separatorIndex === -1) {
     return null;
@@ -257,5 +368,8 @@ function tryParseMcpPayload(buffer: string): unknown | null {
   if (body.length < length) {
     return null;
   }
-  return JSON.parse(body.slice(0, length));
+  return {
+    payload: JSON.parse(body.slice(0, length)),
+    rest: body.slice(length),
+  };
 }
