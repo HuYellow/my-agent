@@ -7670,12 +7670,179 @@ html[data-theme="dark"] .main-content {
   box-shadow: var(--shadow-lift);
 }
 
+.main-header {
+  position: relative;
+  z-index: 40;
+  overflow: visible;
+}
+
+.review-popover-anchor {
+  position: relative;
+  z-index: 45;
+  isolation: isolate;
+}
+
+.review-popover-anchor .main-header__action {
+  min-height: 40px;
+  padding: 0 14px;
+  border: 1px solid #ececec;
+  border-radius: 20px;
+  background: #ffffff;
+  color: #858585;
+  font-size: 14px;
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.review-popover-anchor .main-header__action:hover:not(:disabled),
+.review-popover-anchor .main-header__action:focus-visible:not(:disabled) {
+  background: #f7f7f7;
+  color: #555555;
+}
+
+.review-popover-anchor .main-header__action svg {
+  color: #9b9b9b;
+}
+
+.review-popover-scrim {
+  z-index: 70;
+}
+
+.review-popover {
+  z-index: 80;
+  width: min(336px, calc(100vw - 40px));
+  padding: 8px;
+  border: 1px solid #e8e8e8;
+  border-radius: 18px;
+  background: #ffffff;
+  color: #333333;
+  box-shadow:
+    0 16px 44px rgba(0, 0, 0, 0.12),
+    0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.review-popover__header {
+  gap: 3px;
+  margin-bottom: 6px;
+  padding: 8px 10px 6px;
+}
+
+.review-popover__header strong {
+  color: #4d4d4d;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.review-popover__header small {
+  color: #969696;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.review-popover__options {
+  gap: 4px;
+}
+
+.review-popover__option {
+  min-height: 58px;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #454545;
+}
+
+.review-popover__option:hover {
+  background: #f7f7f7;
+}
+
+.review-popover__option--active {
+  border-color: #e6e6e6;
+  background: #f3f3f3;
+}
+
+.review-popover__option-body {
+  min-width: 0;
+  gap: 2px;
+}
+
+.review-popover__option-body strong {
+  color: #3f3f3f;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.review-popover__option-body small {
+  color: #8f8f8f;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.review-popover__field {
+  margin: 8px 2px 0;
+}
+
+.review-popover__field input {
+  border-color: #e5e5e5;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.review-popover__footer {
+  gap: 8px;
+  margin-top: 8px;
+  padding: 8px 2px 0;
+  border-top: 1px solid #eeeeee;
+}
+
+.review-popover__cancel,
+.review-popover__submit {
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.review-popover__cancel {
+  border-color: #e5e5e5;
+  background: #ffffff;
+  color: #4d4d4d;
+}
+
+.review-popover__cancel:hover {
+  background: #f7f7f7;
+}
+
 .button--primary,
 .review-popover__submit,
 .steer-card__submit {
   background: var(--accent);
   color: #ffffff;
   box-shadow: none;
+}
+
+html[data-theme="dark"] .review-popover-anchor .main-header__action,
+html[data-theme="dark"] .review-popover,
+html[data-theme="dark"] .review-popover__option,
+html[data-theme="dark"] .review-popover__field input,
+html[data-theme="dark"] .review-popover__cancel {
+  border-color: #343434;
+  background: #242424;
+  color: #ededed;
+}
+
+html[data-theme="dark"] .review-popover-anchor .main-header__action:hover:not(:disabled),
+html[data-theme="dark"] .review-popover-anchor .main-header__action:focus-visible:not(:disabled),
+html[data-theme="dark"] .review-popover__option:hover,
+html[data-theme="dark"] .review-popover__option--active,
+html[data-theme="dark"] .review-popover__cancel:hover {
+  background: #2d2d2d;
+}
+
+html[data-theme="dark"] .review-popover__footer {
+  border-top-color: #343434;
 }
 
 @media (max-width: 900px) {

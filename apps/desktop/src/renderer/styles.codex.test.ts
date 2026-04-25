@@ -29,4 +29,11 @@ describe("Codex-inspired desktop shell styling", () => {
     expect(styles).toContain(".main-content:has(.empty-state) .composer-bar");
     expect(styles).toContain(".composer-main {\n  min-height: 134px;");
   });
+
+  it("keeps the review source dropdown above message content with a solid shell", () => {
+    expect(styles).toMatch(/\.main-header\s*\{[^}]*z-index:\s*40;/s);
+    expect(styles).toMatch(/\.review-popover-anchor\s*\{[^}]*z-index:\s*45;/s);
+    expect(styles).toMatch(/\.review-popover\s*\{[^}]*z-index:\s*80;[^}]*background:\s*#ffffff;/s);
+    expect(styles).toMatch(/\.review-popover__option\s*\{[^}]*background:\s*#ffffff;/s);
+  });
 });
