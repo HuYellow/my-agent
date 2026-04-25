@@ -1,14 +1,31 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createRequire } from "node:module";
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import { type TerminalBackendCapability, type TerminalSessionRecord, type WorkspaceProfile } from "@my-agent/protocol";
 import { HarnessDatabase } from "../store/database.js";
 import { createId } from "../utils/ids.js";
+import { isPathInside } from "../utils/path-utils.js";
 
 type NodePtyModule = typeof import("node-pty");
 
 const require = createRequire(import.meta.url);
 const MAX_TERMINAL_BUFFER_CHARS = 24_000;
+const ALLOWED_TERMINAL_SHELLS = new Set([
+  "bash",
+  "bash.exe",
+  "sh",
+  "sh.exe",
+  "zsh",
+  "zsh.exe",
+  "fish",
+  "fish.exe",
+  "cmd",
+  "cmd.exe",
+  "powershell",
+  "powershell.exe",
+  "pwsh",
+  "pwsh.exe",
+]);
 
 interface TerminalBackendHandle {
   readonly pid?: number;
@@ -53,8 +70,8 @@ export class TerminalManager {
   }
 
   createSession(workspace: WorkspaceProfile, options: { threadId?: string; cwd?: string; shell?: string; cols?: number; rows?: number }): TerminalSessionRecord {
-    const shell = options.shell ?? workspace.shell;
-    const cwd = options.cwd ? resolve(workspace.rootPath, options.cwd) : workspace.rootPath;
+    const shell = resolveTerminalShell(workspace, options.shell);
+    const cwd = resolveTerminalCwd(workspace, options.cwd);
     const now = new Date().toISOString();
     const handle = this.defaultBackend.start({
       shell,
@@ -534,6 +551,31 @@ function spawnShell(shell: string, cwd: string): ChildProcessWithoutNullStreams 
     env: process.env,
     windowsHide: true,
   });
+}
+
+function resolveTerminalCwd(workspace: WorkspaceProfile, cwd?: string): string {
+  const resolved = cwd ? resolve(workspace.rootPath, cwd) : workspace.rootPath;
+
+  if (workspace.sandboxMode !== "danger-full-access" && !isPathInside(workspace.rootPath, resolved)) {
+    throw new Error(`Terminal cwd is outside the workspace: ${resolved}`);
+  }
+
+  return resolved;
+}
+
+function resolveTerminalShell(workspace: WorkspaceProfile, shell?: string): string {
+  const candidate = shell ?? workspace.shell;
+  const shellName = basename(candidate).toLowerCase();
+
+  if (!ALLOWED_TERMINAL_SHELLS.has(shellName)) {
+    throw new Error(`Terminal shell is not allowed: ${candidate}`);
+  }
+
+  if (shell && shell !== workspace.shell && basename(shell) !== shell) {
+    throw new Error(`Terminal shell is not allowed: ${candidate}`);
+  }
+
+  return candidate;
 }
 
 function buildShellArgs(shell: string): string[] {

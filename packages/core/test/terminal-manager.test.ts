@@ -130,4 +130,55 @@ describe("TerminalManager", () => {
     expect(closed.status).toBe("closed");
     expect(closed.closedAt).toBeTruthy();
   });
+
+  it("rejects terminal cwd outside the workspace before spawning", () => {
+    const root = mkdtempSync(join(tmpdir(), "my-agent-terminal-"));
+    const outside = mkdtempSync(join(tmpdir(), "my-agent-terminal-outside-"));
+    const database = new HarnessDatabase(join(root, "app.db"));
+    const manager = new TerminalManager(database, () => undefined, () => undefined, () => undefined, () => undefined);
+
+    expect(() =>
+      manager.createSession(createWorkspace(root), {
+        cwd: outside,
+      }),
+    ).toThrow(/outside the workspace/);
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects unexpected terminal shells before spawning", () => {
+    const root = mkdtempSync(join(tmpdir(), "my-agent-terminal-"));
+    const database = new HarnessDatabase(join(root, "app.db"));
+    const manager = new TerminalManager(database, () => undefined, () => undefined, () => undefined, () => undefined);
+
+    expect(() =>
+      manager.createSession(createWorkspace(root), {
+        shell: join(root, "custom-shell.exe"),
+      }),
+    ).toThrow(/not allowed/);
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects unconfigured terminal shell paths before spawning", () => {
+    const root = mkdtempSync(join(tmpdir(), "my-agent-terminal-"));
+    const database = new HarnessDatabase(join(root, "app.db"));
+    const manager = new TerminalManager(database, () => undefined, () => undefined, () => undefined, () => undefined);
+
+    expect(() =>
+      manager.createSession(createWorkspace(root), {
+        shell: join(root, process.platform === "win32" ? "powershell.exe" : "bash"),
+      }),
+    ).toThrow(/not allowed/);
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
 });
+
+function createWorkspace(root: string) {
+  return {
+    id: "workspace-1",
+    name: "Workspace",
+    rootPath: root,
+    shell: process.platform === "win32" ? "powershell.exe" : "bash",
+    sandboxMode: "workspace-write" as const,
+    approvalPolicy: "never" as const,
+  };
+}

@@ -151,7 +151,10 @@ export class ReviewManager {
 function loadReviewDiff(cwd: string, source: ReviewSource): string {
   switch (source.kind) {
     case "workspace":
-      return runGit(cwd, ["diff", "--no-ext-diff", "--unified=3"]);
+      return joinDiffs(
+        runGit(cwd, ["diff", "--no-ext-diff", "--unified=3"]),
+        runGit(cwd, ["diff", "--staged", "--no-ext-diff", "--unified=3"]),
+      );
     case "staged":
       return runGit(cwd, ["diff", "--staged", "--no-ext-diff", "--unified=3"]);
     case "base_branch":
@@ -167,6 +170,13 @@ function loadReviewDiff(cwd: string, source: ReviewSource): string {
     default:
       return "";
   }
+}
+
+function joinDiffs(...diffs: string[]): string {
+  return diffs
+    .map((diff) => diff.trim())
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function runGit(cwd: string, args: string[]): string {

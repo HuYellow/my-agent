@@ -12,6 +12,10 @@
     "test": "npm run test --workspace @my-agent/core && npm run test --workspace @my-agent/app-server && npm run test --workspace @my-agent/mcp-server && npm run test --workspace @my-agent/github-action && npm run test --workspace @my-agent/desktop",
     "typecheck": "npm run typecheck --workspace @my-agent/protocol && npm run typecheck --workspace @my-agent/core && npm run typecheck --workspace @my-agent/app-server && npm run typecheck --workspace @my-agent/mcp-server && npm run typecheck --workspace @my-agent/github-action && npm run typecheck --workspace @my-agent/desktop"
   },
+  "overrides": {
+    "@hono/node-server": "1.19.13",
+    "hono": "4.12.15"
+  },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.3",
     "@types/node": "^22.15.3",

@@ -147,6 +147,31 @@ describe("ReviewManager", () => {
     });
   });
 
+  it("includes staged-only changes in workspace reviews", async () => {
+    const { manager, database, project } = createReviewHarness();
+    spawnSyncMock
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({
+        status: 0,
+        stdout: "diff --git a/src/staged.ts b/src/staged.ts\n+const staged = true;\n",
+        stderr: "",
+      });
+
+    const review = manager.start({
+      project,
+      provider: configuredProvider(),
+      source: { kind: "workspace" },
+    });
+
+    await vi.waitFor(() => {
+      expect(database.getReview(review.id)?.status).toBe("completed");
+    });
+
+    expect(spawnSyncMock).toHaveBeenCalledWith("git", ["-c", "core.quotepath=false", "diff", "--no-ext-diff", "--unified=3"], expect.any(Object));
+    expect(spawnSyncMock).toHaveBeenCalledWith("git", ["-c", "core.quotepath=false", "diff", "--staged", "--no-ext-diff", "--unified=3"], expect.any(Object));
+    expect(database.getReview(review.id)?.summary).toBe("No findings.");
+  });
+
   it("fails the review when git diff collection fails", async () => {
     const { manager, database, project } = createReviewHarness();
     spawnSyncMock.mockReturnValue({ status: 1, stdout: "", stderr: "fatal: bad revision" });

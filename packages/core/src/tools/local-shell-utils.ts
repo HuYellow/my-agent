@@ -117,8 +117,7 @@ export function buildShellAnalysis(command: string, cwd: string, workspaceRoot: 
     .map((_token, index) => tokens[index] ?? "")
     .filter((token) => isLikelyPathToken(token))
     .map((token) => resolve(cwd, stripWrappingQuotes(token)))
-    .filter((path, index, values) => values.indexOf(path) === index)
-    .filter((path) => path === workspaceRoot || path.startsWith(workspaceRoot));
+    .filter((path, index, values) => values.indexOf(path) === index);
 
   const riskLevel = privileged ? "privileged" : network ? "network" : interactive ? "interactive" : writes ? "write" : "safe_read";
 

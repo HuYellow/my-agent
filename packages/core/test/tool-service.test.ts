@@ -40,6 +40,25 @@ describe("ToolService", () => {
     expect(plan.permission.denialReason).toContain("Read-only sandbox");
   });
 
+  it("blocks shell commands that reference absolute paths outside the workspace", async () => {
+    const { database, workspace } = createWorkspace({
+      sandboxMode: "workspace-write",
+      approvalPolicy: "never",
+    });
+    const outsidePath = join(tmpdir(), `my-agent-outside-${Date.now()}.txt`);
+    writeFileSync(outsidePath, "outside secret", "utf8");
+    const service = new ToolService(workspace, { database, threadId: "thread-1" });
+    const command = process.platform === "win32" ? `Get-Content ${JSON.stringify(outsidePath)}` : `cat ${JSON.stringify(outsidePath)}`;
+
+    const plan = service.planExecution("run_shell", { command });
+
+    expect(plan.permission.allowed).toBe(false);
+    expect(plan.permission.denialReason).toContain("outside the workspace");
+    await expect(
+      service.executeTool("run_shell", { command }, { workspace, emitCommandDelta: () => undefined }),
+    ).rejects.toBeInstanceOf(ToolBlockedError);
+  });
+
   it("requires approval for direct writes when approval policy is on-request", async () => {
     const { database, workspace, root } = createWorkspace({
       sandboxMode: "workspace-write",
