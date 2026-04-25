@@ -27,6 +27,7 @@ import {
   ChevronDown,
   ChevronRight,
   Minus,
+  Rabbit,
   Square,
   X,
   ImagePlus,
@@ -1510,7 +1511,7 @@ export function App() {
             aria-label={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
             title={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
           >
-            <Square className="app-toolbar__logo" aria-hidden="true" size={13} strokeWidth={1.8} />
+            <Rabbit className="app-toolbar__logo" aria-hidden="true" size={15} strokeWidth={1.9} />
           </button>
           <button
             className="app-toolbar__theme-toggle"

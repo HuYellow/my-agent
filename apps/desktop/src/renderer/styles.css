@@ -7074,6 +7074,9 @@ html[data-theme="dark"] .app-toolbar {
 .app-toolbar__theme-toggle {
   width: 24px;
   height: 24px;
+  display: grid;
+  place-items: center;
+  padding: 0;
   border: none;
   border-radius: 6px;
   background: transparent;
@@ -7082,12 +7085,12 @@ html[data-theme="dark"] .app-toolbar {
 }
 
 .app-toolbar__theme-toggle {
-  display: none;
+  flex: 0 0 24px;
 }
 
 .app-toolbar__logo {
-  width: 14px;
-  height: 14px;
+  width: 15px;
+  height: 15px;
 }
 
 .app-toolbar__menu-button {
@@ -7843,6 +7846,83 @@ html[data-theme="dark"] .review-popover__cancel:hover {
 
 html[data-theme="dark"] .review-popover__footer {
   border-top-color: #343434;
+}
+
+html[data-theme="dark"] .workspace-toggle {
+  border-color: #343434;
+  background: #242424;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.26);
+}
+
+html[data-theme="dark"] .workspace-toggle__button {
+  color: #9b9b9b;
+}
+
+html[data-theme="dark"] .workspace-toggle__button--active,
+html[data-theme="dark"] .workspace-toggle__button:hover {
+  background: #303030;
+  color: #ededed;
+}
+
+html[data-theme="dark"] .main-header__action {
+  border-color: #343434;
+  background: #242424;
+  color: #bdbdbd;
+}
+
+html[data-theme="dark"] .main-header__action:hover {
+  background: #2d2d2d;
+  color: #ededed;
+}
+
+html[data-theme="dark"] .composer-main {
+  border-color: #343434;
+  background: #242424;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.26),
+    0 18px 44px rgba(0, 0, 0, 0.22);
+}
+
+html[data-theme="dark"] .composer-main:focus-within {
+  border-color: #4a4a4a;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.04),
+    0 20px 48px rgba(0, 0, 0, 0.28);
+}
+
+html[data-theme="dark"] .composer-input {
+  color: var(--text);
+}
+
+html[data-theme="dark"] .composer-input::placeholder {
+  color: #747474;
+}
+
+html[data-theme="dark"] .composer-tool-button,
+html[data-theme="dark"] .composer-pill,
+html[data-theme="dark"] .composer-status-button {
+  color: #a7a7a7;
+}
+
+html[data-theme="dark"] .composer-tool-button:hover:not(:disabled),
+html[data-theme="dark"] .composer-tool-button:focus-visible:not(:disabled),
+html[data-theme="dark"] .composer-pill:hover,
+html[data-theme="dark"] .composer-pill:focus-visible {
+  background: #303030;
+  color: #ededed;
+}
+
+html[data-theme="dark"] .composer-footer {
+  border-top: 1px solid #303030;
+  background: #1f1f1f;
+}
+
+html[data-theme="dark"] .composer-context-card__pie {
+  background: conic-gradient(var(--accent) 0 var(--context-angle), #444444 var(--context-angle) 360deg);
+}
+
+html[data-theme="dark"] .composer-context-card__pie::after {
+  background: #1f1f1f;
 }
 
 @media (max-width: 900px) {

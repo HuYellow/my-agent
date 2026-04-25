@@ -18,4 +18,11 @@ describe("Codex-inspired shell composition", () => {
   it("hides the requirements group when there are no matching requirements", () => {
     expect(appSource).toContain("{(filteredRequirements.length > 0 || searchTerm) && (");
   });
+
+  it("keeps the rabbit brand mark and theme toggle in the title bar", () => {
+    expect(appSource).toContain("Rabbit,");
+    expect(appSource).toContain('<Rabbit className="app-toolbar__logo"');
+    expect(appSource).toContain('className="app-toolbar__theme-toggle"');
+    expect(appSource).toContain('setThemeMode((current) => (current === "light" ? "dark" : "light"))');
+  });
 });

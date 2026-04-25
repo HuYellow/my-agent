@@ -36,4 +36,17 @@ describe("Codex-inspired desktop shell styling", () => {
     expect(styles).toMatch(/\.review-popover\s*\{[^}]*z-index:\s*80;[^}]*background:\s*#ffffff;/s);
     expect(styles).toMatch(/\.review-popover__option\s*\{[^}]*background:\s*#ffffff;/s);
   });
+
+  it("keeps the theme toggle visible in the toolbar", () => {
+    expect(styles).not.toContain(".app-toolbar__theme-toggle {\n  display: none;");
+    expect(styles).toMatch(/\.app-toolbar__theme-toggle\s*\{[^}]*display:\s*grid;/s);
+  });
+
+  it("keeps header controls and composer surfaces dark in dark mode", () => {
+    expect(styles).toMatch(/html\[data-theme="dark"\]\s+\.workspace-toggle\s*\{[^}]*background:\s*#242424;/s);
+    expect(styles).toMatch(/html\[data-theme="dark"\]\s+\.workspace-toggle__button--active,[^{]*\{[^}]*background:\s*#303030;/s);
+    expect(styles).toMatch(/html\[data-theme="dark"\]\s+\.composer-main\s*\{[^}]*background:\s*#242424;/s);
+    expect(styles).toMatch(/html\[data-theme="dark"\]\s+\.composer-footer\s*\{[^}]*background:\s*#1f1f1f;/s);
+    expect(styles).toMatch(/html\[data-theme="dark"\]\s+\.composer-input\s*\{[^}]*color:\s*var\(--text\);/s);
+  });
 });
