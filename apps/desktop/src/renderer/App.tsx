@@ -35,7 +35,6 @@ import {
   Box,
   Sun,
   Moon,
-  Rabbit,
   MoreHorizontal,
   Copy,
   Key,
@@ -104,10 +103,10 @@ type ThemeMode = "light" | "dark";
 type ReviewSourceKind = ReviewRecord["source"]["kind"];
 type ThreadWorkspaceView = "conversation" | "plan" | "review" | "diff" | "runtime";
 
-const SIDEBAR_WIDTH_STORAGE_KEY = "my-agent-sidebar-width-ratio";
-const SIDEBAR_MIN_RATIO = 0.18;
+const SIDEBAR_WIDTH_STORAGE_KEY = "my-agent-sidebar-width-ratio-v2";
+const SIDEBAR_MIN_RATIO = 0.16;
 const SIDEBAR_MAX_RATIO = 0.34;
-const SIDEBAR_DEFAULT_RATIO = 0.22;
+const SIDEBAR_DEFAULT_RATIO = 0.20;
 
 const REASONING_OPTIONS: Array<{ value: ModelReasoningEffort; label: string; hint: string }> = [
   { value: "minimal", label: "Minimal", hint: "Fastest, uses fewer tokens" },
@@ -161,11 +160,11 @@ const ITEM_LABELS: Record<ItemKind, string> = {
 };
 
 const APP_MENU_ITEMS = [
-  { id: "file", label: "File" },
-  { id: "edit", label: "Edit" },
-  { id: "view", label: "View" },
-  { id: "window", label: "Window" },
-  { id: "help", label: "Help" },
+  { id: "file", label: "文件" },
+  { id: "edit", label: "编辑" },
+  { id: "view", label: "查看" },
+  { id: "window", label: "窗口" },
+  { id: "help", label: "帮助" },
 ] as const;
 
 type ConversationEntry =
@@ -1511,7 +1510,7 @@ export function App() {
             aria-label={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
             title={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
           >
-            <Rabbit className="app-toolbar__logo" aria-hidden="true" size={15} strokeWidth={1.9} />
+            <Square className="app-toolbar__logo" aria-hidden="true" size={13} strokeWidth={1.8} />
           </button>
           <button
             className="app-toolbar__theme-toggle"
@@ -1567,25 +1566,31 @@ export function App() {
           <nav className="sidebar__nav">
             <NavButton
               icon={<MessageSquarePlus size={18} />}
-              label="Workspace"
+              label="新对话"
               active={activeView === "threads"}
+              onClick={() => void handleCreateThread(activeProjectId, activeRequirementId)}
+            />
+            <NavButton
+              icon={<Search size={18} />}
+              label="搜索"
+              active={false}
               onClick={() => setActiveView("threads")}
             />
             <NavButton
               icon={<Zap size={18} />}
-              label="Skills"
+              label="技能"
               active={activeView === "skills"}
               onClick={() => setActiveView("skills")}
             />
             <NavButton
               icon={<Grid3X3 size={18} />}
-              label="Plugins"
+              label="插件"
               active={activeView === "plugins"}
               onClick={() => setActiveView("plugins")}
             />
             <NavButton
               icon={<GitBranch size={18} />}
-              label="Automation"
+              label="自动化"
               active={activeView === "automation"}
               onClick={() => setActiveView("automation")}
             />
@@ -1625,7 +1630,7 @@ export function App() {
         <div className="sidebar__section sidebar__section--footer">
           <NavButton
             icon={<Settings size={18} />}
-            label="Settings"
+            label="设置"
             active={activeView === "settings"}
             onClick={() => setActiveView("settings")}
           />
@@ -1897,7 +1902,7 @@ export function App() {
               />
             )}
 
-            {showingThreadWorkspace && activeThreadId && (
+            {showingThreadWorkspace && activeThreadId && threadTerminals.length > 0 && (
               <TerminalCard
                 sessions={threadTerminals}
                 session={activeTerminal}
@@ -2289,7 +2294,7 @@ function RequirementsPanel({
     <div className="sidebar-secondary__content thread-sidebar requirement-sidebar">
       <div className="thread-sidebar__header">
         <div className="thread-sidebar__title-row">
-          <span className="thread-sidebar__title">Requirements</span>
+          <span className="thread-sidebar__title">项目</span>
           <div className="thread-sidebar__actions">
             <button
               className="thread-sidebar__action"
@@ -2306,7 +2311,7 @@ function RequirementsPanel({
             <Search size={14} />
             <input
               type="text"
-              placeholder="Search requirements or threads"
+              placeholder="搜索对话或需求"
               value={search}
               onChange={(event) => onSearchChange(event.target.value)}
             />
@@ -2315,7 +2320,7 @@ function RequirementsPanel({
         <div className="requirement-sidebar__composer">
           <input
             type="text"
-            placeholder="New requirement title"
+            placeholder="新需求标题"
             value={newRequirementTitle}
             onChange={(event) => onNewRequirementTitleChange(event.target.value)}
           />
@@ -2325,7 +2330,7 @@ function RequirementsPanel({
               onChange={(event) => onNewRequirementProjectIdChange(event.target.value)}
             >
               <option value="" disabled>
-                Select primary project
+                选择主项目
               </option>
               {projects.map((project) => (
                 <option key={project.id} value={project.id}>
@@ -2339,53 +2344,55 @@ function RequirementsPanel({
               disabled={savingRequirement || !newRequirementTitle.trim() || !newRequirementProjectId}
             >
               <Plus size={14} />
-              Create
+              创建
             </button>
           </div>
         </div>
       </div>
 
       <div className="thread-sidebar__list">
-        <div className="requirement-sidebar__section">
-          <div className="requirement-sidebar__section-header">
-            <strong>Active Requirements</strong>
-            <span>{filteredRequirements.length}</span>
-          </div>
-          {filteredRequirements.length > 0 ? (
-            <div className="requirement-sidebar__requirements">
-              {filteredRequirements.map((requirement) => {
-                const project = projects.find((entry) => entry.id === requirement.primaryProjectId);
-                const memory = requirementMemories.find((entry) => entry.requirementId === requirement.id);
-                const linkedThreadCount = memory?.derived.linkedThreads.length ?? threads.filter((thread) => thread.requirementId === requirement.id).length;
-
-                return (
-                  <button
-                    key={requirement.id}
-                    type="button"
-                    className={`requirement-sidebar__requirement ${requirement.id === activeRequirementId ? "requirement-sidebar__requirement--active" : ""}`}
-                    onClick={() => void onSelectRequirement(requirement.id)}
-                  >
-                    <div className="requirement-sidebar__requirement-head">
-                      <strong>{requirement.title}</strong>
-                      <span>{formatRequirementStatusLabel(requirement.status)}</span>
-                    </div>
-                    <small>{project?.name ?? requirement.primaryProjectId}</small>
-                    <div className="requirement-sidebar__requirement-meta">
-                      <span>{linkedThreadCount} thread{linkedThreadCount === 1 ? "" : "s"}</span>
-                      <span>{formatRelativeTime(requirement.updatedAt)}</span>
-                    </div>
-                  </button>
-                );
-              })}
+        {(filteredRequirements.length > 0 || searchTerm) && (
+          <div className="requirement-sidebar__section">
+            <div className="requirement-sidebar__section-header">
+              <strong>活跃需求</strong>
+              <span>{filteredRequirements.length}</span>
             </div>
-          ) : (
-            <div className="project-tree__empty">No matching requirements.</div>
-          )}
-        </div>
+            {filteredRequirements.length > 0 ? (
+              <div className="requirement-sidebar__requirements">
+                {filteredRequirements.map((requirement) => {
+                  const project = projects.find((entry) => entry.id === requirement.primaryProjectId);
+                  const memory = requirementMemories.find((entry) => entry.requirementId === requirement.id);
+                  const linkedThreadCount = memory?.derived.linkedThreads.length ?? threads.filter((thread) => thread.requirementId === requirement.id).length;
+
+                  return (
+                    <button
+                      key={requirement.id}
+                      type="button"
+                      className={`requirement-sidebar__requirement ${requirement.id === activeRequirementId ? "requirement-sidebar__requirement--active" : ""}`}
+                      onClick={() => void onSelectRequirement(requirement.id)}
+                    >
+                      <div className="requirement-sidebar__requirement-head">
+                        <strong>{requirement.title}</strong>
+                        <span>{formatRequirementStatusLabel(requirement.status)}</span>
+                      </div>
+                      <small>{project?.name ?? requirement.primaryProjectId}</small>
+                      <div className="requirement-sidebar__requirement-meta">
+                        <span>{linkedThreadCount} thread{linkedThreadCount === 1 ? "" : "s"}</span>
+                        <span>{formatRelativeTime(requirement.updatedAt)}</span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="project-tree__empty">没有匹配的需求。</div>
+            )}
+          </div>
+        )}
 
         <div className="requirement-sidebar__section">
           <div className="requirement-sidebar__section-header">
-            <strong>Unassigned Threads</strong>
+            <strong>未归档对话</strong>
             <span>{unassignedThreadsByProject.reduce((count, group) => count + group.threads.length, 0)}</span>
           </div>
           <div className="project-tree">
@@ -5026,8 +5033,8 @@ function EmptyState() {
       <div className="empty-state__icon">
         <MessageSquarePlus size={48} />
       </div>
-      <h2>Start a conversation</h2>
-      <p>Ask anything to begin exploring your workspace</p>
+      <h2>要在 my-agent 中构建什么？</h2>
+      <p>向 my-agent 描述你的想法，或粘贴图片和文件开始协作。</p>
     </div>
   );
 }
@@ -6736,7 +6743,7 @@ function ComposerBar({
           <textarea
             ref={textareaRef}
             className="composer-input"
-            placeholder="Ask my-agent anything, or paste an image or file"
+            placeholder="问 my-agent 任何事。输入 @ 使用插件或提交文件"
             value={input}
             onChange={(e) => handleInputChange(e.target.value, e.target.selectionStart)}
             onKeyDown={handleTextareaKeyDown}

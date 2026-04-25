@@ -650,7 +650,7 @@ describe("desktop thread smoke", () => {
     expect(source).toContain("RequirementsPanel");
     expect(source).toContain("activeRequirementId");
     expect(source).toContain("Requirement Memory");
-    expect(source).toContain("Unassigned Threads");
+    expect(source).toContain("未归档对话");
     expect(source).toContain("RunContextCard");
     expect(source).toContain("Create Automation");
     expect(source).toContain("Run Automation");
