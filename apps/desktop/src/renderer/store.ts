@@ -15,6 +15,7 @@ import {
   type InitializeResult,
   type ItemRecord,
   type PendingApproval,
+  type PluginInstallParams,
   type ProtocolCompatibilityRecord,
   type ProjectRecord,
   type ProviderProfile,
@@ -123,6 +124,7 @@ interface AppState {
   testProvider: (provider?: Partial<ProviderProfile>) => Promise<void>;
   refreshProviderModels: (provider?: Partial<ProviderProfile>) => Promise<void>;
   refreshToolCatalog: (params?: { projectId?: string; threadId?: string }) => Promise<void>;
+  installPlugin: (params: PluginInstallParams) => Promise<void>;
   scaffoldTemplate: (params: TemplateScaffoldParams) => Promise<{ rootPath: string; createdPaths: string[] }>;
   refreshRuntimeProjectState: (projectId?: string) => Promise<void>;
   handleEvent: (event: HarnessEvent) => void;
@@ -662,6 +664,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({
       runtimeTools: result.tools,
     });
+  },
+  installPlugin: async (params) => {
+    await window.myAgent.installPlugin(params);
+    await get().refreshToolCatalog({ projectId: get().activeProjectId });
   },
   scaffoldTemplate: async (params) => {
     const result = await window.myAgent.scaffoldTemplate(params);

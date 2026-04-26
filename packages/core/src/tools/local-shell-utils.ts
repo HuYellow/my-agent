@@ -143,7 +143,7 @@ export function executeShellCommand(command: string, context: ToolExecutionConte
   }
 
   return new Promise((resolvePromise, rejectPromise) => {
-    const child = spawnCommand(command, cwd, context.workspace.shell);
+    const child = spawnCommand(command, cwd, context.workspace.shell, context.env);
     let finished = false;
     let stdout = "";
     let stderr = "";
@@ -211,13 +211,14 @@ export function quoteShellArg(value: string): string {
   return `'${value.replace(/'/g, `'\"'\"'`)}'`;
 }
 
-function spawnCommand(command: string, cwd: string, shell: string): ChildProcessWithoutNullStreams {
+function spawnCommand(command: string, cwd: string, shell: string, env: Record<string, string> = {}): ChildProcessWithoutNullStreams {
   const normalized = shell.toLowerCase();
+  const childEnv = { ...process.env, ...env };
 
   if (normalized.includes("powershell")) {
     return spawn(shell, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command], {
       cwd,
-      env: process.env,
+      env: childEnv,
       windowsHide: true,
     });
   }
@@ -225,7 +226,7 @@ function spawnCommand(command: string, cwd: string, shell: string): ChildProcess
   if (normalized.includes("bash")) {
     return spawn(shell, ["-lc", command], {
       cwd,
-      env: process.env,
+      env: childEnv,
       windowsHide: true,
     });
   }
@@ -233,7 +234,7 @@ function spawnCommand(command: string, cwd: string, shell: string): ChildProcess
   return spawn(command, {
     cwd,
     shell: true,
-    env: process.env,
+    env: childEnv,
     windowsHide: true,
   });
 }

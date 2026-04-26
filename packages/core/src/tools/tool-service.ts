@@ -7,6 +7,8 @@ import { McpToolProvider } from "./mcp-tool-provider.js";
 import { PluginToolProvider } from "./plugin-tool-provider.js";
 import { SandboxPolicy } from "./sandbox-policy.js";
 import { McpManager } from "../services/mcp-manager.js";
+import { collectOpenCodeShellEnv, runOpenCodeAfterHooks, runOpenCodeBeforeHooks } from "../services/opencode-plugin-runner.js";
+import { isPluginRunnable } from "../services/plugin-registry.js";
 import {
   ApprovalRequiredError,
   buildToolReference,
@@ -116,33 +118,58 @@ export class ToolService {
   }
 
   async executePlanned(plan: PlannedToolExecution, context: ToolExecutionContext): Promise<string> {
-    if (!plan.permission.allowed) {
+    const hookPluginPaths = this.getTrustedOpenCodePluginPaths();
+    let effectivePlan = plan;
+
+    if (hookPluginPaths.length > 0) {
+      const before = await runOpenCodeBeforeHooks(hookPluginPaths, plan.definition.name, plan.args);
+
+      if (before.block) {
+        throw new ToolBlockedError(before.block, plan.tool);
+      }
+
+      if (before.args) {
+        effectivePlan = this.planExecution(plan.definition.name, before.args);
+      }
+    }
+
+    if (!effectivePlan.permission.allowed) {
       throw new ToolBlockedError(
-        plan.permission.denialReason ?? `Tool ${plan.definition.name} is blocked by the current sandbox policy.`,
-        plan.tool,
+        effectivePlan.permission.denialReason ?? `Tool ${effectivePlan.definition.name} is blocked by the current sandbox policy.`,
+        effectivePlan.tool,
       );
     }
 
-    if (plan.permission.requiresApproval) {
+    if (effectivePlan.permission.requiresApproval) {
       throw new ApprovalRequiredError(
-        plan.permission.approvalReason ?? `Tool ${plan.definition.name} requires approval before it can run.`,
-        plan.permission,
-        plan.tool,
+        effectivePlan.permission.approvalReason ?? `Tool ${effectivePlan.definition.name} requires approval before it can run.`,
+        effectivePlan.permission,
+        effectivePlan.tool,
       );
     }
 
-    if (plan.permission.approvalMode === "deferred") {
+    if (effectivePlan.permission.approvalMode === "deferred") {
       throw new DeferredApprovalRequiredError(
-        plan.permission.approvalReason ?? `Tool ${plan.definition.name} requires approval before it can be retried.`,
-        plan.permission,
-        plan.tool,
+        effectivePlan.permission.approvalReason ?? `Tool ${effectivePlan.definition.name} requires approval before it can be retried.`,
+        effectivePlan.permission,
+        effectivePlan.tool,
       );
     }
 
     try {
-      return await plan.definition.execute(plan.args, context);
+      const env = effectivePlan.definition.name === "run_shell" && hookPluginPaths.length > 0 ? await collectOpenCodeShellEnv(hookPluginPaths) : undefined;
+      const output = await effectivePlan.definition.execute(effectivePlan.args, { ...context, env: { ...context.env, ...env } });
+      if (hookPluginPaths.length > 0) {
+        await runOpenCodeAfterHooks(hookPluginPaths, effectivePlan.definition.name, effectivePlan.args, { output });
+      }
+      return output;
     } catch (error) {
-      throw this.normalizeError(error, plan.tool);
+      if (hookPluginPaths.length > 0) {
+        await runOpenCodeAfterHooks(hookPluginPaths, effectivePlan.definition.name, effectivePlan.args, {
+          error: error instanceof Error ? error.message : String(error),
+        }).catch(() => undefined);
+      }
+      throw this.normalizeError(error, effectivePlan.tool);
     }
   }
 
@@ -196,6 +223,12 @@ export class ToolService {
     }
 
     return new ToolExecutionFailedError(String(error), tool);
+  }
+
+  private getTrustedOpenCodePluginPaths(): string[] {
+    return (this.options.database?.listPlugins() ?? [])
+      .filter((plugin) => plugin.format === "opencode" && isPluginRunnable(plugin))
+      .map((plugin) => plugin.path);
   }
 }
 

@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { type WorkspaceProfile } from "@my-agent/protocol";
 import { HarnessDatabase } from "../store/database.js";
+import { executeOpenCodePluginTool, inspectOpenCodePlugin } from "../services/opencode-plugin-runner.js";
 import { discoverPluginEntries, type PluginManifest } from "../services/plugin-registry.js";
 import { ToolExecutionAbortedError, type RuntimeToolCapability, type RuntimeToolDefinition, type RuntimeToolSourceMetadata, type ToolProvider } from "./types.js";
 
@@ -18,7 +19,15 @@ export class PluginToolProvider implements ToolProvider {
       persisted: this.database?.listPlugins(),
       homeDir: this.homeDir,
     }).flatMap(({ manifest: plugin, record }) => {
-      if (!plugin || !record.enabled || !record.trusted || record.validationErrors.length > 0 || !plugin.command || !plugin.tool) {
+      if (!record.enabled || !record.trusted || record.validationErrors.length > 0) {
+        return [];
+      }
+
+      if (record.format === "opencode") {
+        return buildOpenCodeDefinitions(record);
+      }
+
+      if (!plugin || !plugin.command || !plugin.tool) {
         return [];
       }
 
@@ -53,6 +62,52 @@ export class PluginToolProvider implements ToolProvider {
       ];
     });
   }
+}
+
+function buildOpenCodeDefinitions(record: import("@my-agent/protocol").PluginRecord): RuntimeToolDefinition[] {
+  let inspected: ReturnType<typeof inspectOpenCodePlugin>;
+
+  try {
+    inspected = inspectOpenCodePlugin(record.path);
+  } catch {
+    return [];
+  }
+
+  return inspected.tools.map((tool) => {
+    const source: RuntimeToolSourceMetadata = {
+      type: "plugin",
+      id: record.id,
+      label: record.display?.displayName ?? record.name,
+      path: record.path,
+      details: {
+        version: record.version,
+        format: "opencode",
+      },
+    };
+    const capability = buildOpenCodeCapability(record);
+
+    return {
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+      strict: true,
+      source,
+      capability,
+      parseArgs: (input) => (typeof input === "object" && input !== null && !Array.isArray(input) ? (input as Record<string, unknown>) : {}),
+      buildDescriptor: (args) => ({
+        source,
+        preview: `${record.name}:${tool.name}`,
+        scopeKey: `${record.id}:${tool.name}:${JSON.stringify(args)}`,
+        paths: [record.path],
+        risky: true,
+        writes: true,
+        network: true,
+        timeoutMs: 30_000,
+        approvalReason: `OpenCode plugin tool ${tool.name} from ${record.name} requires approval.`,
+      }),
+      execute: async (args) => executeOpenCodePluginTool(record.path, tool.name, args),
+    };
+  });
 }
 
 function executePluginCommand(
@@ -131,7 +186,21 @@ function buildPluginSource(plugin: PluginManifest, pluginPath: string, manifestP
     details: {
       version: plugin.version,
       command: pluginPath,
+      format: "my-agent",
     },
+  };
+}
+
+function buildOpenCodeCapability(_plugin: import("@my-agent/protocol").PluginRecord): RuntimeToolCapability {
+  return {
+    writes: true,
+    network: true,
+    interactive: false,
+    approvalModes: ["preflight", "deferred"],
+    riskLevel: "network",
+    timeoutMs: 30_000,
+    streamedOutput: false,
+    resumable: false,
   };
 }
 

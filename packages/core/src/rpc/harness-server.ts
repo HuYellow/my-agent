@@ -27,6 +27,8 @@ import {
   type McpListResult,
   type McpSessionsResult,
   type McpToolsResult,
+  type PluginInstallParams,
+  type PluginInstallResult,
   type PluginListParams,
   type PluginListResult,
   type UpdatePluginParams,
@@ -254,6 +256,7 @@ export class HarnessServer {
         payload: { plugin },
       });
       this.emitToolCatalogUpdated();
+      this.refreshSkills();
     });
     this.internalToolManager = new InternalToolManager(this.database, (internalTool) => {
       this.emit({
@@ -436,6 +439,8 @@ export class HarnessServer {
         return this.listAutomationRunLogs(message.params as AutomationRunLogsParams | undefined);
       case "plugin/list":
         return this.listPlugins((message.params ?? {}) as PluginListParams);
+      case "plugin/install":
+        return this.installPlugin(message.params as PluginInstallParams);
       case "plugin/update":
         return this.updatePlugin(message.params as UpdatePluginParams);
       case "internalTool/list":
@@ -1781,8 +1786,17 @@ export class HarnessServer {
     };
   }
 
+  private installPlugin(params: PluginInstallParams): PluginInstallResult {
+    const project = this.requireProject(this.database.getConfig().selectedProjectId);
+    const result = this.pluginManager.install(params, project);
+    this.emitToolCatalogUpdated(project.id);
+    this.refreshSkills(project.id);
+    return result;
+  }
+
   private updatePlugin(params: UpdatePluginParams) {
     const plugin = this.pluginManager.update(params.pluginId, params.patch);
+    this.refreshSkills();
     return { plugin };
   }
 

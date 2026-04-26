@@ -60,6 +60,7 @@ import {
   type McpMountRecord,
   type McpSessionRecord,
   type PendingApproval,
+  type PluginInstallParams,
   type PluginRecord,
   type ProjectRecord,
   type ProviderProfile,
@@ -86,6 +87,9 @@ import {
   type WorkflowRecord,
   type WorkflowRunRecord,
 } from "@my-agent/protocol";
+import { LoadingShell, PlaceholderPanel, StartupErrorShell } from "./components/shell";
+import { NavButton } from "./components/sidebar";
+import { SettingsNavItem } from "./components/settings";
 import { useAppStore } from "./store";
 
 interface ProviderFormState {
@@ -124,10 +128,10 @@ const SANDBOX_MODE_OPTIONS: Array<{ value: SandboxMode; label: string; hint: str
 ];
 
 const REVIEW_SOURCE_OPTIONS: Array<{ value: ReviewSourceKind; label: string; hint: string }> = [
-  { value: "workspace", label: "Workspace diff", hint: "Review current unstaged and staged changes against HEAD." },
-  { value: "staged", label: "Staged diff", hint: "Review only what is currently staged for commit." },
-  { value: "base_branch", label: "Base branch", hint: "Review the diff from a target base branch to HEAD." },
-  { value: "commit", label: "Commit", hint: "Review a specific commit patch by SHA." },
+  { value: "workspace", label: "工作区 Diff", hint: "评审当前未暂存和已暂存的改动。" },
+  { value: "staged", label: "已暂存 Diff", hint: "只评审当前已暂存的提交内容。" },
+  { value: "base_branch", label: "基准分支", hint: "评审目标基准分支到 HEAD 的差异。" },
+  { value: "commit", label: "指定提交", hint: "按 SHA 评审一个提交补丁。" },
 ];
 
 interface BranchSummary {
@@ -316,6 +320,7 @@ export function App() {
     testProvider,
     refreshProviderModels,
     refreshToolCatalog,
+    installPlugin,
     scaffoldTemplate,
   } = useAppStore();
 
@@ -407,7 +412,6 @@ export function App() {
 
     const prefersDark = window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
     setThemeMode(prefersDark ? "dark" : "light");
-    // hiddenInset 闂傚倸鍊搁崐椋庣矆娓氣偓楠炴牠顢曢妶鍥╃厠闂佸湱铏庨崰鏍ㄦ償婵犲洦鐓犵痪鏉垮船婢ь垱銇勯锝嗙闁哄苯绉归崺鈩冩媴閸涘﹥顔勬俊鐐€栧ú婵囥仈閹间礁绠為柕濞垮剻閻旂厧浼犻柛鏇ㄥ墯閻︼絾绻濋悽闈涗粶闁绘鎳樺畷锟犲箮閽樺鎽曞┑鐐村灟閸ㄧ懓螞濮椻偓閹綊宕堕妸銉хシ濡炪値鍋勫ú顓烆潖濞差亝鐒婚柣鎰蔼鐎氭澘顭胯閸ｏ綁寮诲☉娆戠瘈闁稿本绋戞禒鎾倵鐟欏嫭纾搁柛銊ㄥГ娣囧﹪鎳滈棃娑氱獮闁诲函缍嗛崑鍛存偟椤愶附鈷戦悹鍥皺缁犳娊鏌涚€ｎ剙鏋涚€规洘鍨块獮妯肩磼濡粯顏熼梻渚€娼чˇ顐﹀疾濠婂牆鐓曢柟鐑橆殕閻撴洟鏌曟径妯虹仯闁告帗婢橀湁婵犲﹤鐗忛悾鐑樻叏婵犲洨绱伴柕鍥ㄥ姍楠炴帡骞橀幘顔芥殬濠碉紕鍋戦崐鏍垂閻㈢绠犻煫鍥ㄧ☉缁犵偤鏌曟繛鐐珔闁绘挻鐩弻娑㈠箛閵婏附鐝斿銈呭閻╊垰顫忓ú顏勫窛濠电姴鍟惁鐑芥⒑閸涘﹣绶遍柛鐘冲哺閸┾偓妞ゆ帒顦顔芥叏婵犲啯銇濈€规洦鍋婂畷鐔碱敇婢跺牆鐏紒缁樼☉椤斿繘顢欓悡搴ｇ潉闂備線娼уΛ妤呭磹閸︻厾鐭夐柟鐑樻煛閸嬫捇鏁愭惔婵堢泿闂佸摜鍋戦崝鎴澪涢崨鎼晝闁靛繆鍓濋幃娆愪繆閵堝洤校闁诡喖鍊块獮鍡樻媴閸撹尙鍙嗛梺鍓插亞閸犳捇宕?    // void window.myAgent.setTitleBarTheme("dark");
   }, []);
 
   useEffect(() => {
@@ -762,13 +766,13 @@ export function App() {
   const reviewSourceLabel = useMemo(() => {
     switch (reviewSourceKind) {
       case "staged":
-        return "Staged";
+        return "已暂存";
       case "base_branch":
-        return `Base: ${reviewBaseBranch.trim() || "branch"}`;
+        return `基准: ${reviewBaseBranch.trim() || "branch"}`;
       case "commit":
-        return `Commit: ${reviewCommit.trim() ? reviewCommit.trim().slice(0, 10) : "SHA"}`;
+        return `提交: ${reviewCommit.trim() ? reviewCommit.trim().slice(0, 10) : "SHA"}`;
       default:
-        return "Workspace";
+        return "工作区";
     }
   }, [reviewBaseBranch, reviewCommit, reviewSourceKind]);
   const canStartReview = useMemo(() => {
@@ -1560,9 +1564,7 @@ export function App() {
         </div>
       </header>
       <div className="app-container" ref={appContainerRef}>
-      {/* 闂傚倷娴囬褎顨ラ崫銉х濠电姴鍋嗛悞浠嬫煠婵劕鈧澹曢懞銉﹀弿婵☆垱瀵х涵楣冩煟閵堝鐣洪柡灞诲€楃划娆戞崉閵娿倗椹崇紓鍌氬€哥粔鏉懨洪銏犵畺鐎瑰嫭澹嬮弸搴ㄧ叓閸ャ劍鎯勫ù灏栧亾闂傚倷鑳剁涵鍫曞疾濞戔懞鍥偨缁嬭儻鎽曢梺闈涱焾閸庮喖危閸喓绠鹃柛鈩兠悘鈺呮煕濞嗘劗绠樼紒杈ㄦ尰閹峰懘鐛径鍛婂媰闂備胶鍘ч悿鍥春閺嶎偆鐭夐柟鐑橆殕閺呮繈鏌涚仦鐐殤闁挎稒绮岄埞鎴︽偐鐠囇冧紣闂佺懓鍟跨换鎺撶缁嬪簱鏀介悗锝庡亐閹?*/}
       <aside className="sidebar">
-        {/* 缂傚倸鍊搁崐鎼佸磹閻戣姤鍊块柨鏇炲€堕埀顒€鍟崇粻娑樷槈濡⒈妲繝鐢靛仦閸ㄨ泛顫濋妸鈺佺婵鍩栭崐鐢告煟閵忕姵鍟炴繛鍛矋缁绘稑鐣濇繝渚€鍋楅梺鍝勬湰缁嬫垿鎮惧┑鍫氬亾閿濆簼鎲炬繛宸幘缁辨挻鎷呴悷鏉款潔濡炪們鍔岄敃顏勵嚕鐠囨祴妲堥柕蹇曞Х閻嫰姊虹粙鎸庢拱缁炬澘绉归幃姗€宕卞☉娆屾嫼缂備礁顑堝▔鏇犵不閺屻儲鐓忛柛顐犲灲閸忔 */}
         <div className="sidebar__section sidebar__section--tabs">
           <nav className="sidebar__nav">
             <NavButton
@@ -1598,7 +1600,6 @@ export function App() {
           </nav>
         </div>
 
-        {/* 缂傚倸鍊搁崐鎼佸磹閻戣姤鍊块柨鏇炲€堕埀顒€鍟崇粻娑樷槈濡⒈妲繝鐢靛仦閸ㄨ埖绌遍悜妯诲弿闁规儼濮ら悡鍐煕濠靛棗顏╅柡鍡樻礃缁绘稑鐣濇繝渚€鍋楅梺鍝勬湰缁嬫垿鎮惧┑鍫氬亾閿濆簼鎲炬繛宸幘缁辨挻鎷呴悷鏉款潔闂侀潧妫楃粣宸搄ect闂傚倷娴囬褍顫濋敃鍌︾稏濠㈣埖鍔曠粻鏍煕椤愶絾绀€缁炬儳娼￠弻鐔封枔閸喗鐏撶紓浣插亾濠电姴娲﹂悡娑㈡煕閹扳晛濡垮褎鐩弻?*/}
         <div className="sidebar__section sidebar__section--projects">
           <RequirementsPanel
             requirements={requirements}
@@ -1627,7 +1628,6 @@ export function App() {
           />
         </div>
 
-        {/* 缂傚倸鍊搁崐鎼佸磹閻戣姤鍊块柨鏇炲€堕埀顒€鍟崇粻娑樷槈濡⒈妲繝鐢靛仦閸ㄨ泛顫濋妸褏涓嶉柡鍌涳紩瑜版帗鏅查柛顐ゅ枂閳ь剙鍟换娑樼暆婵犱線鍋楅梺鍝勬湰缁嬫垿鎮惧┑鍫氬亾閿濆簼鎲炬繛宸幘缁辨挻鎷呴悷鏉款潔濡炪們鍔岄敃顏堢嵁閸愵亝鍠嗛柛鏇ㄥ墮椤庢挾绱撴担鍓插剰缂併劑浜堕獮鎰板礃椤旇В鎷?*/}
         <div className="sidebar__section sidebar__section--footer">
           <NavButton
             icon={<Settings size={18} />}
@@ -1645,18 +1645,16 @@ export function App() {
         aria-label="Resize sidebar"
       />
 
-      {/* 婵犵數濮烽弫鎼佸磻閻愬搫鍨傞柛顐ｆ礀缁犳彃銆掑锝呬壕濡炪們鍨烘穱娲囬崷顓涘亾鐟欏嫭澶勯柛鎾寸洴閸┾偓妞ゆ帒鍊归弳鈺冪棯椤撶偟鍩ｇ€规洘鍨块獮妯兼嫚閸欏绁舵俊鐐€栭幐楣冨窗鎼粹檧鏋旂€光偓閸曨剛鍘?*/}
       <main className="main-content">
         {activeView === "threads" ? (
           <>
-            {/* 婵犵數濮烽。顔炬閺囥垹纾婚柟杈剧畱绾惧綊鏌￠崶銉ョ仾闁稿顦埞鎴﹀磼濠婂海鍔哥紒鐐劤濞硷繝寮婚悢铏圭＜闁靛繒濮甸悘鍫ユ⒑閸涘﹤濮€闁稿鎹囧缁樻媴鐟欏嫬浠╅梺绋垮濡炶棄鐣峰鍫熸櫇闁稿本纰嶆潏鍫濐渻閵堝棛澧遍柛瀣仱閹?*/}
             <header className="main-header">
               <div className="main-header__title">
-                <h1>{showingThreadWorkspace ? activeThread?.title ?? "New Thread" : activeRequirement?.title ?? "Requirements"}</h1>
+                  <h1>{showingThreadWorkspace ? activeThread?.title ?? "新对话" : activeRequirement?.title ?? "需求工作区"}</h1>
                 <span className="main-header__project">
                   {showingThreadWorkspace
-                    ? activeProject?.name ?? "Current Project"
-                    : activeRequirementPrimaryProject?.name ?? activeProject?.name ?? "Requirement Workspace"}
+                    ? activeProject?.name ?? "当前项目"
+                    : activeRequirementPrimaryProject?.name ?? activeProject?.name ?? "需求工作区"}
                 </span>
               </div>
               <div className="main-header__actions">
@@ -1671,7 +1669,7 @@ export function App() {
                         onClick={() => setThreadWorkspaceView("conversation")}
                       >
                         <MessageSquarePlus size={14} />
-                        <span>Transcript</span>
+                        <span>对话</span>
                       </button>
                       <button
                         type="button"
@@ -1681,7 +1679,7 @@ export function App() {
                         onClick={() => setThreadWorkspaceView("plan")}
                       >
                         <Grid3X3 size={14} />
-                        <span>Plan</span>
+                        <span>计划</span>
                         {latestTurnPlan && <span className="workspace-toggle__badge">{latestTurnPlan.steps.length}</span>}
                       </button>
                       <button
@@ -1692,7 +1690,7 @@ export function App() {
                         onClick={() => setThreadWorkspaceView("review")}
                       >
                         <Shield size={14} />
-                        <span>Review Findings</span>
+                        <span>评审</span>
                         {latestReviewArtifact && <span className="workspace-toggle__badge">{latestReviewArtifact.findingCounts.total}</span>}
                       </button>
                       <button
@@ -1704,7 +1702,7 @@ export function App() {
                         disabled={threadChangeSets.length === 0}
                       >
                         <FileText size={14} />
-                        <span>Diff / Patch</span>
+                        <span>Diff</span>
                         {threadChangedFileCount > 0 && <span className="workspace-toggle__badge">{threadChangedFileCount}</span>}
                       </button>
                       <button
@@ -1729,7 +1727,7 @@ export function App() {
                         disabled={!activeProjectId || reviewRunning}
                       >
                         <Shield size={14} />
-                        <span>{reviewRunning ? "Reviewing…" : `Review · ${reviewSourceLabel}`}</span>
+                        <span>{reviewRunning ? "评审中..." : `评审 · ${reviewSourceLabel}`}</span>
                         <ChevronDown size={12} />
                       </button>
 
@@ -1743,8 +1741,8 @@ export function App() {
                           />
                           <div className="review-popover">
                             <div className="review-popover__header">
-                              <strong>Review source</strong>
-                              <small>Choose which diff to review before launching.</small>
+                              <strong>评审来源</strong>
+                              <small>选择本次要评审的 Diff 范围。</small>
                             </div>
 
                             <div className="review-popover__options">
@@ -1766,7 +1764,7 @@ export function App() {
 
                             {reviewSourceKind === "base_branch" && (
                               <label className="review-popover__field">
-                                <span>Base branch</span>
+                                <span>基准分支</span>
                                 <input
                                   type="text"
                                   value={reviewBaseBranch}
@@ -1778,7 +1776,7 @@ export function App() {
 
                             {reviewSourceKind === "commit" && (
                               <label className="review-popover__field">
-                                <span>Commit SHA</span>
+                                <span>提交 SHA</span>
                                 <input
                                   type="text"
                                   value={reviewCommit}
@@ -1790,10 +1788,10 @@ export function App() {
 
                             <div className="review-popover__footer">
                               <button type="button" className="review-popover__cancel" onClick={() => setReviewMenuOpen(false)}>
-                                Cancel
+                                取消
                               </button>
                               <button type="button" className="review-popover__submit" onClick={() => void triggerReview()} disabled={!canStartReview}>
-                                Start review
+                                开始评审
                               </button>
                             </div>
                           </div>
@@ -1809,13 +1807,12 @@ export function App() {
                     disabled={!activeRequirement}
                   >
                     <Plus size={14} />
-                    <span>New Thread</span>
+                    <span>新对话</span>
                   </button>
                 )}
               </div>
             </header>
 
-            {/* 濠电姷鏁告慨鐑藉极閹间礁纾婚柣鎰惈閸ㄥ倿鏌ｉ姀鐘冲暈闁稿顑呴埞鎴︽偐閹绘帗娈銈嗘礋娴滃爼寮诲☉妯锋婵炲棙鍔楃粙鍥╃磽娴ｆ彃浜鹃梺绯曞墲鐪夌紒璇叉閺屾洟宕煎┑鍥ф濡炪倕绻堥崕鐢稿蓟?*/}
             <div className="message-area" ref={messageAreaRef}>
               {showingThreadWorkspace ? (
                 threadWorkspaceView === "diff" ? (
@@ -1924,7 +1921,6 @@ export function App() {
               />
             )}
 
-            {/* 闂傚倸鍊风粈浣革耿闁秴鍌ㄧ憸鏃堝箖濞差亜惟闁靛鍟浠嬪箖閵忋倖鍋傞幖杈剧秶缁辩敻姊虹拠鎻掝劉缂佸甯熼幗顐ょ磽閸屾氨孝婵炲樊鍙冨濠氭偄閻撳海鐣鹃悷婊冪Ч瀵櫕娼忛埞鎯т壕婵炲牆鐏濋弸鐔封攽閻愯韬€?*/}
             {showingThreadWorkspace ? (
             <ComposerBar
               input={input}
@@ -2043,6 +2039,13 @@ export function App() {
                 refreshRuntimeSurfaces(activeProjectId),
               ]);
             }}
+            onInstallPlugin={async (params) => {
+              await installPlugin(params);
+              await Promise.all([
+                refreshToolCatalog(activeProjectId ? { projectId: activeProjectId } : undefined),
+                refreshRuntimeSurfaces(activeProjectId),
+              ]);
+            }}
             onUpdateInternalTool={async (internalToolId, patch) => {
               await window.myAgent.updateInternalTool({ internalToolId, patch });
               await Promise.all([
@@ -2133,7 +2136,6 @@ export function App() {
         </main>
       </div>
 
-      {/* 闂傚倸鍊搁崐鐑芥嚄閸洖绠犻柟鍓х帛閸婂爼鏌涢鐘插姎缁炬儳顭烽弻鐔煎礈瑜忕敮娑㈡煟閹捐泛鈻堥柡灞剧洴楠炲洭顢橀悩顔间沪闂備胶顭堥鍡涘箲閸ヮ剙绠栭柕鍫濇婵挳鏌涘☉姗堝姛闁哄缍婂濠氬磼濞嗘劗銈板銈嗘礃閻楃姴鐣风憴鍕嚤闁哄鍨归悿鍥煙閸忓吋鍎楅柣鎾崇墦瀵偆鈧綆鍋佹禍婊堟煛閸愩劌鈧憡绂嶆ィ鍐╁€垫慨姗嗗幘椤ｈ尙绱掔紒妯肩疄婵☆偄鍟埥澶娾枎閹存瑥浜归梻鍌欐祰閵嗏偓闁?*/}
       <Dialog.Root open={Boolean(currentSkillDetail)} onOpenChange={(open) => !open && setSkillDetailId(null)}>
         <Dialog.Portal>
           <Dialog.Overlay className="dialog-overlay" />
@@ -2209,20 +2211,6 @@ export function App() {
         </Dialog.Portal>
       </Dialog.Root>
     </div>
-  );
-}
-
-function NavButton({ icon, label, active, onClick }: { icon: React.ReactNode; label: string; active: boolean; onClick: () => void }) {
-  return (
-    <button
-      className={`nav-button ${active ? "nav-button--active" : ""}`}
-      onClick={onClick}
-      title={label}
-      aria-label={label}
-    >
-      <span className="nav-button__icon">{icon}</span>
-      <span className="nav-button__label">{label}</span>
-    </button>
   );
 }
 
@@ -2406,8 +2394,8 @@ function RequirementsPanel({
                   <button
                     className="project-tree__control"
                     onClick={() => void onCreateThread(project?.id)}
-                    aria-label={`Create a new thread in ${project?.name ?? "project"}`}
-                    title="New thread"
+                    aria-label={`在 ${project?.name ?? "项目"} 中创建新对话`}
+                    title="新建对话"
                   >
                     <MessageSquarePlus size={14} />
                   </button>
@@ -2681,8 +2669,8 @@ function ThreadsPanel({
                         <button
                           className="project-tree__control"
                           onClick={() => void onCreateThread(entry.id)}
-                          aria-label={`Create a new thread in ${entry.name}`}
-                          title="New thread"
+                          aria-label={`在 ${entry.name} 中创建新对话`}
+                          title="新建对话"
                         >
                           <MessageSquarePlus size={14} />
                         </button>
@@ -2763,8 +2751,8 @@ function RequirementOverview({
   if (!requirement) {
     return (
       <PlaceholderPanel
-        title="Requirement Workspace"
-        description="Create or select a requirement to manage shared memory, linked threads, and cross-project context."
+        title="需求工作区"
+        description="创建或选择一个需求，用来管理共享记忆、关联对话和跨项目上下文。"
       />
     );
   }
@@ -2790,7 +2778,7 @@ function RequirementOverview({
         <div className="requirement-overview__actions">
           <button className="button button--primary" onClick={onCreateThread}>
             <MessageSquarePlus size={14} />
-            New Thread
+            新对话
           </button>
         </div>
       </div>
@@ -3144,6 +3132,7 @@ function RuntimePluginsPanel({
   activeProjectId,
   onRespondTerminalApproval,
   onUpdatePlugin,
+  onInstallPlugin,
   onUpdateInternalTool,
   onRefreshMount,
 }: {
@@ -3158,11 +3147,15 @@ function RuntimePluginsPanel({
   activeProjectId?: string;
   onRespondTerminalApproval: (sessionId: string, decision: "approve" | "reject", scope?: "once" | "session") => Promise<unknown>;
   onUpdatePlugin: (pluginId: string, patch: Partial<Pick<PluginRecord, "enabled" | "trusted">>) => Promise<unknown>;
+  onInstallPlugin: (params: PluginInstallParams) => Promise<unknown>;
   onUpdateInternalTool: (internalToolId: string, patch: Partial<Pick<InternalToolRecord, "enabled">>) => Promise<unknown>;
   onRefreshMount: (mountId: string) => Promise<unknown>;
 }) {
   const [pendingActionKey, setPendingActionKey] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [pluginInstallMode, setPluginInstallMode] = useState<PluginInstallParams["source"]>("git");
+  const [pluginInstallValue, setPluginInstallValue] = useState("");
+  const [pluginInstallRef, setPluginInstallRef] = useState("");
   const visibleTerminalSessions = activeProjectId
     ? terminalSessions.filter((session) => session.workspaceId === activeProjectId)
     : terminalSessions;
@@ -3183,6 +3176,33 @@ function RuntimePluginsPanel({
       await onUpdatePlugin(pluginId, patch);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Unable to update plugin.");
+    } finally {
+      setPendingActionKey(null);
+    }
+  }
+
+  async function handlePluginInstall() {
+    const value = pluginInstallValue.trim();
+
+    if (!value) {
+      setActionError(pluginInstallMode === "git" ? "Git URL is required." : "npm package is required.");
+      return;
+    }
+
+    const params: PluginInstallParams =
+      pluginInstallMode === "git"
+        ? { source: "git", url: value, ref: pluginInstallRef.trim() || undefined }
+        : { source: "npm", packageName: value, version: pluginInstallRef.trim() || undefined };
+
+    setPendingActionKey("plugin:install");
+    setActionError(null);
+
+    try {
+      await onInstallPlugin(params);
+      setPluginInstallValue("");
+      setPluginInstallRef("");
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "无法安装插件。");
     } finally {
       setPendingActionKey(null);
     }
@@ -3223,6 +3243,34 @@ function RuntimePluginsPanel({
         </span>
       </div>
       {actionError ? <div className="thread-shell__empty">{actionError}</div> : null}
+      <div className="skill-card runtime-install-card">
+        <div className="skill-card__header">
+          <div>
+            <h3>安装插件</h3>
+            <span>Git URL 或 npm package</span>
+          </div>
+          <span className="skill-card__status">New</span>
+        </div>
+        <div className="runtime-install-card__controls">
+          <select value={pluginInstallMode} onChange={(event) => setPluginInstallMode(event.target.value as PluginInstallParams["source"])}>
+            <option value="git">Git URL</option>
+            <option value="npm">npm package</option>
+          </select>
+          <input
+            value={pluginInstallValue}
+            onChange={(event) => setPluginInstallValue(event.target.value)}
+            placeholder={pluginInstallMode === "git" ? "Git URL" : "npm package"}
+          />
+          <input
+            value={pluginInstallRef}
+            onChange={(event) => setPluginInstallRef(event.target.value)}
+            placeholder={pluginInstallMode === "git" ? "branch, tag, or commit" : "version"}
+          />
+          <button className="button" disabled={pendingActionKey === "plugin:install"} onClick={() => void handlePluginInstall()}>
+            <span>安装插件</span>
+          </button>
+        </div>
+      </div>
       <div className="skills-grid">
         {compatibility ? (
           <div className="skill-card">
@@ -3346,6 +3394,13 @@ function RuntimePluginsPanel({
             </div>
             <p>{plugin.path}</p>
             <pre>
+              format={plugin.format ?? "my-agent"}
+              {`\n`}source={formatPluginInstallSource(plugin.installSource)}
+              {plugin.marketplaceName ? `\nmarketplace=${plugin.marketplaceName}` : ""}
+              {`\n`}components={formatPluginComponents(plugin.components)}
+              {plugin.hookNames?.length ? `\nhooks=${plugin.hookNames.join(", ")}` : ""}
+              {`\n`}display={plugin.display?.displayName ?? plugin.name}
+              {`\n`}
               manifest={plugin.manifestPath}
               {`\n`}tool={plugin.toolName ?? "unconfigured"}
               {`\n`}capabilities={plugin.capabilities.join(", ") || "none"}
@@ -3720,7 +3775,7 @@ function RuntimeAutomationPanel({
             }
             onClick={() => void handleCreateAutomation()}
           >
-            Create Automation
+            创建自动化
           </button>
         </div>
 
@@ -3750,7 +3805,7 @@ function RuntimeAutomationPanel({
                   disabled={pendingActionKey === `automation:run:${automation.id}`}
                   onClick={() => void handleRunAutomation(automation.id)}
                 >
-                  Run Automation
+                  运行自动化
                 </button>
                 <button
                   className="button button--ghost"
@@ -3915,24 +3970,24 @@ function RuntimeAutomationPanel({
                               {step.artifactSummary && <small>{step.artifactSummary}</small>}
                               {step.executionContextId && <code>{step.executionContextId}</code>}
                               {step.environmentId && <code>{step.environmentId}</code>}
-                              <small>Attempt {step.attempts}</small>
+                              <small>第 {step.attempts} 次尝试</small>
                             </div>
                             {(step.status === "failed" || (step.retainedFailures?.length ?? 0) > 0) && (
                               <details className="workflow-step-row__details">
-                                <summary>Failure artifacts</summary>
+                                <summary>失败产物</summary>
                                 {step.status === "failed" ? (
                                   <div className="workflow-step-row__failure">
-                                    <strong>Current failure</strong>
-                                    {step.output ? <pre>{step.output}</pre> : <small>No failure output captured.</small>}
+                                    <strong>当前失败</strong>
+                                    {step.output ? <pre>{step.output}</pre> : <small>未捕获失败输出。</small>}
                                   </div>
                                 ) : null}
                                 {step.retainedFailures?.map((failure, index) => (
                                   <div key={`${run.id}:${step.stepId}:failure:${index}`} className="workflow-step-row__failure">
                                     <strong>
-                                      Attempt {failure.attempt} retained {formatRelativeTime(failure.retainedAt)}
+                                      第 {failure.attempt} 次尝试 · 保留于 {formatRelativeTime(failure.retainedAt)}
                                     </strong>
                                     {failure.artifactSummary ? <small>{failure.artifactSummary}</small> : null}
-                                    {failure.output ? <pre>{failure.output}</pre> : <small>No failure output captured.</small>}
+                                    {failure.output ? <pre>{failure.output}</pre> : <small>未捕获失败输出。</small>}
                                   </div>
                                 ))}
                               </details>
@@ -3949,7 +4004,7 @@ function RuntimeAutomationPanel({
                                     })
                                   }
                                 >
-                                  Retry step
+                                  重试步骤
                                 </button>
                               </div>
                             ) : null}
@@ -3960,8 +4015,8 @@ function RuntimeAutomationPanel({
                     <div className="workflow-runtime-grid">
                       <RuntimeAgentTree roots={relatedAgentTree} />
                       <RuntimeMetaSection
-                        title="Execution Contexts"
-                        emptyLabel="No execution contexts."
+                        title="执行上下文"
+                        emptyLabel="暂无执行上下文。"
                         items={relatedExecutionContexts.map((executionContext) => ({
                           id: executionContext.id,
                           title: `${executionContext.kind} · ${executionContext.cwd}`,
@@ -4001,9 +4056,9 @@ function RuntimeAutomationPanel({
 function RuntimeContextLineage({ nodes, selectedNodeId }: { nodes: ContextLineageNode[]; selectedNodeId?: string }) {
   return (
     <div className="workflow-runtime-section workflow-runtime-section--lineage">
-      <strong>Execution Context Lineage</strong>
+      <strong>执行上下文链路</strong>
       {nodes.length === 0 ? (
-        <span className="workflow-runtime-section__empty">No linked execution contexts.</span>
+        <span className="workflow-runtime-section__empty">暂无关联执行上下文。</span>
       ) : (
         <div className="context-lineage">
           {nodes.map((node) => (
@@ -4186,8 +4241,8 @@ function RuntimeSelectionDetail({
     <section className="review-card">
       <div className="review-card__header">
         <div>
-          <div className="review-card__title">Runtime Detail</div>
-          <div className="review-card__status review-card__status--completed">Focused</div>
+          <div className="review-card__title">Runtime 详情</div>
+          <div className="review-card__status review-card__status--completed">当前焦点</div>
         </div>
       </div>
       <div className="review-card__findings">
@@ -4209,7 +4264,7 @@ function RuntimeSelectionDetail({
                   className="button button--ghost button--small"
                   onClick={() => onOpenThread(agent.childThreadId!)}
                 >
-                  Open Child Thread
+                  打开子线程
                 </button>
               </div>
             ) : null}
@@ -4495,30 +4550,6 @@ function buildContextDetailTokens(
   ].filter((value): value is string => Boolean(value));
 }
 
-function SettingsNavItem({
-  icon,
-  label,
-  category,
-  activeCategory,
-  onClick,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  category: string;
-  activeCategory: string;
-  onClick: (category: any) => void;
-}) {
-  return (
-    <button
-      className={`settings-nav-item ${category === activeCategory ? 'settings-nav-item--active' : ''}`}
-      onClick={() => onClick(category)}
-    >
-      {icon}
-      <span>{label}</span>
-    </button>
-  );
-}
-
 function SettingsPanel({
   project,
   templates,
@@ -4558,19 +4589,19 @@ function SettingsPanel({
   const [activeCategory, setActiveCategory] = useState<SettingsCategory>("api");
 
   const categoryTitles: Record<SettingsCategory, string> = {
-    api: "API Configuration",
-    project: "Project Settings",
-    policy: "Approval Policy",
-    runtime: "System Diagnostics",
-    distribution: "Templates & Distribution",
+    api: "API 配置",
+    project: "项目设置",
+    policy: "审批策略",
+    runtime: "系统诊断",
+    distribution: "模板与分发",
   };
 
   const categoryDescriptions: Record<SettingsCategory, string> = {
-    api: "Configure your AI provider connection and model preferences",
-    project: "Manage project workspace and root path settings",
-    policy: "Set approval policies for automated actions",
-    runtime: "Monitor runtime environment and system diagnostics",
-    distribution: "Scaffold extension templates and review protocol compatibility guidance",
+    api: "配置模型服务连接和默认模型偏好。",
+    project: "管理当前项目的工作区路径。",
+    policy: "设置自动化动作和终端命令的审批边界。",
+    runtime: "查看运行环境、worktree 和诊断信息。",
+    distribution: "生成扩展模板并查看协议兼容信息。",
   };
 
   return (
@@ -4583,35 +4614,35 @@ function SettingsPanel({
         <nav className="settings-nav">
           <SettingsNavItem
             icon={<Key size={18} />}
-            label="API Configuration"
+            label="API 配置"
             category="api"
             activeCategory={activeCategory}
             onClick={setActiveCategory}
           />
           <SettingsNavItem
             icon={<FolderGit2 size={18} />}
-            label="Project Settings"
+            label="项目设置"
             category="project"
             activeCategory={activeCategory}
             onClick={setActiveCategory}
           />
           <SettingsNavItem
             icon={<Shield size={18} />}
-            label="Approval Policy"
+            label="审批策略"
             category="policy"
             activeCategory={activeCategory}
             onClick={setActiveCategory}
           />
           <SettingsNavItem
             icon={<Server size={18} />}
-            label="System Diagnostics"
+            label="系统诊断"
             category="runtime"
             activeCategory={activeCategory}
             onClick={setActiveCategory}
           />
           <SettingsNavItem
             icon={<Box size={18} />}
-            label="Templates & Distribution"
+            label="模板与分发"
             category="distribution"
             activeCategory={activeCategory}
             onClick={setActiveCategory}
@@ -4671,7 +4702,7 @@ function SettingsPanel({
           {/* 保存按钮 - 始终显示 */}
           <div className="settings-actions">
             <button className="button button--primary" onClick={onSaveConfig}>
-              Save Settings
+              保存设置
             </button>
           </div>
         </div>
@@ -4777,7 +4808,7 @@ function DistributionTemplatesCard({
                         });
                     }}
                   >
-                    {busyTemplateId === template.id ? "Scaffolding..." : "Scaffold Template"}
+                    {busyTemplateId === template.id ? "生成中..." : "生成模板"}
                   </button>
                 </div>
               </div>
@@ -4813,7 +4844,7 @@ function ApiConfigCard({
     <div className="settings-card">
       <div className="settings-card__header">
         <Key size={20} />
-        <h4>Provider Configuration</h4>
+          <h4>服务配置</h4>
       </div>
       <div className="settings-card__body">
         <div className="settings-field">
@@ -4852,7 +4883,7 @@ function ApiConfigCard({
         </div>
         <div className="settings-field">
           <label>
-            <span>Reasoning Effort</span>
+            <span>推理强度</span>
             <select
               value={providerForm.reasoningEffort}
               onChange={(e) =>
@@ -4880,10 +4911,10 @@ function ApiConfigCard({
         </div>
         <div className="settings-actions">
           <button className="button" onClick={() => void onRefreshModels()}>
-            {providerModelsLoading ? "Loading Models..." : "Refresh Models"}
+            {providerModelsLoading ? "模型加载中..." : "刷新模型"}
           </button>
           <button className="button" onClick={() => void onTestProvider()}>
-            Test Provider
+            测试连接
           </button>
         </div>
         {providerModelsError && <div className="settings-panel__message">{providerModelsError}</div>}
@@ -4927,12 +4958,12 @@ function ProjectConfigCard({
     <div className="settings-card">
       <div className="settings-card__header">
         <FolderGit2 size={20} />
-        <h4>{project ? `Project: ${project.name}` : "Project Workspace"}</h4>
+        <h4>{project ? `项目：${project.name}` : "项目工作区"}</h4>
       </div>
       <div className="settings-card__body">
         <div className="settings-field">
           <label>
-            <span>Root Path</span>
+            <span>根路径</span>
             <div className="settings-field__row">
               <input
                 value={providerForm.rootPath}
@@ -4963,12 +4994,12 @@ function PolicyConfigCard({
     <div className="settings-card">
       <div className="settings-card__header">
         <Shield size={20} />
-        <h4>Approval Policy</h4>
+        <h4>审批策略</h4>
       </div>
       <div className="settings-card__body">
         <div className="settings-field">
           <label>
-            <span>Policy Mode</span>
+            <span>策略模式</span>
             <select
               value={providerForm.approvalPolicy}
               onChange={(e) => setProviderForm((s) => ({ ...s, approvalPolicy: e.target.value as typeof s.approvalPolicy }))}
@@ -4995,7 +5026,7 @@ function RuntimeDiagnosticsCard({
     <div className="settings-card">
       <div className="settings-card__header">
         <Server size={20} />
-        <h4>Runtime Environment</h4>
+        <h4>运行环境</h4>
       </div>
       <div className="settings-card__body">
         <div className="runtime-stats">
@@ -5010,19 +5041,6 @@ function RuntimeDiagnosticsCard({
             <div className="runtime-stat__label">Environments</div>
           </div>
         </div>
-      </div>
-    </div>
-  );
-}
-
-function PlaceholderPanel({ title, description }: { title: string; description: string }) {
-  return (
-    <div className="sidebar-secondary__content">
-      <div className="sidebar-secondary__header">
-        <h2>{title}</h2>
-      </div>
-      <div className="sidebar-secondary__empty">
-        <p>{description}</p>
       </div>
     </div>
   );
@@ -5608,12 +5626,12 @@ function DiffPatchPanel({
     <section className="diff-panel">
       <div className="diff-panel__header">
         <div>
-          <span className="diff-panel__eyebrow">Workspace Panel</span>
+          <span className="diff-panel__eyebrow">工作区面板</span>
           <h2>Diff / Patch</h2>
         </div>
         <div className="diff-panel__meta">
-          <span>{changeSets.length} batch{changeSets.length === 1 ? "" : "es"}</span>
-          <span>{allFiles.length} file{allFiles.length === 1 ? "" : "s"}</span>
+          <span>{changeSets.length} 个批次</span>
+          <span>{allFiles.length} 个文件</span>
         </div>
       </div>
 
@@ -5799,19 +5817,19 @@ function PlanSummaryCard({
     <section className="review-card">
       <div className="review-card__header">
         <div>
-          <div className="review-card__title">Execution plan</div>
-          <div className="review-card__status review-card__status--running">Structured</div>
+          <div className="review-card__title">执行计划</div>
+          <div className="review-card__status review-card__status--running">结构化</div>
         </div>
         <div className="review-card__actions">
-          <div className="review-card__meta">{plan.steps.length} step{plan.steps.length === 1 ? "" : "s"}</div>
+          <div className="review-card__meta">{plan.steps.length} 个步骤</div>
           {onOpenTurn ? (
             <button type="button" className="button button--ghost button--small" onClick={() => onOpenTurn(plan)}>
-              Open Turn
+              打开回合
             </button>
           ) : null}
         </div>
       </div>
-      <p className="review-card__summary">{plan.summary ?? "Plan extracted from the latest planning turn."}</p>
+      <p className="review-card__summary">{plan.summary ?? "已从最近的计划回合提取。"}</p>
       <div className="review-card__findings">
         {plan.steps.map((step) => (
           <button
@@ -5881,19 +5899,19 @@ function ReviewSummaryCard({
         <div>
           <div className="review-card__title">Code review</div>
           <div className={`review-card__status review-card__status--${review.status}`}>
-            {review.status === "running" ? "Running" : review.status === "failed" ? "Failed" : "Completed"}
+            {review.status === "running" ? "运行中" : review.status === "failed" ? "失败" : "已完成"}
           </div>
         </div>
         <div className="review-card__actions">
           <div className="review-card__meta">{artifact?.sourceLabel ?? formatReviewSourceLabel(review.source)}</div>
           {onOpenReview ? (
             <button type="button" className="button button--ghost button--small" onClick={() => onOpenReview(review.id)}>
-              Open Review
+              打开评审
             </button>
           ) : null}
         </div>
       </div>
-      <p className="review-card__summary">{review.error ?? review.summary ?? "Review is in progress."}</p>
+      <p className="review-card__summary">{review.error ?? review.summary ?? "评审进行中。"}</p>
       {artifact?.diffStats && (
         <div className="run-context-card__meta">
           <span>{artifact.diffStats.fileCount} file{artifact.diffStats.fileCount === 1 ? "" : "s"}</span>
@@ -6001,7 +6019,7 @@ function ReviewFindingsPanel({
   }, [requestedFocus]);
 
   if (reviews.length === 0) {
-    return <div className="changed-file__empty">No structured review findings are available for this thread yet.</div>;
+    return <div className="changed-file__empty">这个线程还没有结构化评审发现。</div>;
   }
 
   return (
@@ -6392,10 +6410,10 @@ function TerminalCard({
 
       {session && (
         <>
-          <pre className="terminal-card__output">{output || "Terminal is open. Waiting for output…"}</pre>
+          <pre className="terminal-card__output">{output || "终端已打开，等待输出…"}</pre>
           {archives.length > 0 && (
             <div className="terminal-card__archives">
-              <strong>Archived output</strong>
+              <strong>归档输出</strong>
               <div className="terminal-card__archive-list">
                 {archives.slice(0, 5).map((archive) => (
                   <details key={archive.id} className="terminal-card__archive-item">
@@ -7051,37 +7069,6 @@ function ComposerBar({
             </div>
           </div>
         </div>
-      </div>
-    </div>
-  );
-}
-
-function LoadingShell() {
-  return (
-    <div className="app-shell app-shell--loading">
-      <header className="app-toolbar" />
-      <div className="app-container app-container--loading">
-        <aside className="sidebar sidebar--loading" />
-        <main className="main-content main-content--loading" />
-      </div>
-      <div className="startup-state">
-        <div className="startup-state__title">Starting my-agent</div>
-        <div className="startup-state__body">Loading the desktop shell and connecting to the local harness...</div>
-      </div>
-    </div>
-  );
-}
-
-function StartupErrorShell({ message, onRetry }: { message: string; onRetry: () => void }) {
-  return (
-    <div className="app-shell app-shell--loading">
-      <header className="app-toolbar" />
-      <div className="startup-state startup-state--error">
-        <div className="startup-state__title">Unable to start my-agent</div>
-        <div className="startup-state__body">{message}</div>
-        <button type="button" className="button" onClick={onRetry}>
-          Retry
-        </button>
       </div>
     </div>
   );
@@ -7855,6 +7842,38 @@ function renderDiffLines(diff: string) {
 
 function quoteGitPath(path: string): string {
   return `"${path.replace(/(["`$\\])/g, "`$1")}"`;
+}
+
+function formatPluginInstallSource(source: PluginRecord["installSource"]): string {
+  if (!source) {
+    return "discovered";
+  }
+
+  if (source.source === "git") {
+    return source.ref ? `git:${source.url}#${source.ref}` : `git:${source.url}`;
+  }
+
+  if (source.source === "npm") {
+    return source.version ? `npm:${source.packageName}@${source.version}` : `npm:${source.packageName}`;
+  }
+
+  return `local:${source.path}`;
+}
+
+function formatPluginComponents(components: PluginRecord["components"]): string {
+  if (!components) {
+    return "none";
+  }
+
+  return [
+    `skills:${components.skills}`,
+    `mcp:${components.mcpServers}`,
+    `tools:${components.tools}`,
+    `hooks:${components.hooks}`,
+    components.apps ? `apps:${components.apps}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(", ");
 }
 
 function mergeComposerAttachments(

@@ -26,6 +26,7 @@ import {
   type RequirementListParams,
   type RequirementUnassignThreadParams,
   type ReviewStartParams,
+  type PluginInstallParams,
   type PluginListParams,
   type StartThreadParams,
   type StartTurnParams,
@@ -475,6 +476,7 @@ ipcMain.handle("command:exec", (_event, params: CommandExecParams) => harness.re
   ipcMain.handle("tool:list", (_event, params: ToolListParams) => harness.request("tool/list", params));
   ipcMain.handle("template:list", () => harness.request("template/list"));
   ipcMain.handle("template:scaffold", (_event, params: TemplateScaffoldParams) => harness.request("template/scaffold", params));
+  ipcMain.handle("plugin:install", (_event, params: PluginInstallParams) => harness.request("plugin/install", params));
   ipcMain.handle("plugin:list", (_event, params: PluginListParams) => harness.request("plugin/list", params));
   ipcMain.handle("plugin:update", (_event, params: UpdatePluginParams) => harness.request("plugin/update", params));
   ipcMain.handle("internalTool:list", (_event, params: InternalToolListParams) => harness.request("internalTool/list", params));

@@ -37,6 +37,7 @@ import {
   type McpMountRecord,
   type McpSessionRecord,
   type WorkflowRunRecord,
+  type PluginInstallParams,
   type PluginListParams,
   type ToolCatalogRecord,
   type ToolListParams,
@@ -142,6 +143,7 @@ const api = {
       createdPaths: string[];
     }>,
   listPlugins: (params?: PluginListParams) => ipcRenderer.invoke("plugin:list", params ?? {}) as Promise<{ plugins: PluginRecord[] }>,
+  installPlugin: (params: PluginInstallParams) => ipcRenderer.invoke("plugin:install", params) as Promise<{ plugins: PluginRecord[] }>,
   updatePlugin: (params: UpdatePluginParams) => ipcRenderer.invoke("plugin:update", params) as Promise<{ plugin: PluginRecord }>,
   listInternalTools: (params?: { projectId?: string }) =>
     ipcRenderer.invoke("internalTool:list", params ?? {}) as Promise<{ internalTools: InternalToolRecord[] }>,

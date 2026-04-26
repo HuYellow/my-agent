@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { type McpMountRecord, type McpPromptRecord, type McpResourceRecord, type McpSessionRecord, type McpToolRecord } from "@my-agent/protocol";
 import { HarnessDatabase } from "../store/database.js";
 import { McpSessionManager } from "./mcp-session-manager.js";
+import { resolvePluginMcpMounts } from "./plugin-registry.js";
 
 export class McpManager {
   constructor(
@@ -13,7 +14,7 @@ export class McpManager {
   ) {}
 
   list(): McpMountRecord[] {
-    const discovered = discoverMcpMounts();
+    const discovered = discoverMcpMounts(this.database);
 
     for (const mount of discovered) {
       this.database.upsertMcpMount(mount);
@@ -98,17 +99,29 @@ export class McpManager {
   }
 }
 
-function discoverMcpMounts(): McpMountRecord[] {
+function discoverMcpMounts(database: HarnessDatabase): McpMountRecord[] {
   const configPath = join(homedir(), ".my-agent", "mcp.json");
+  const now = new Date().toISOString();
+  const pluginMounts: McpMountRecord[] = database.listPlugins().flatMap((plugin) =>
+    resolvePluginMcpMounts(plugin).map((mount) => ({
+      id: `mcp_plugin_${plugin.id}_${normalizeMountName(mount.name)}`,
+      name: `${plugin.name}:${mount.name}`,
+      transport: "stdio" as const,
+      command: mount.command,
+      args: mount.args,
+      enabled: plugin.enabled && plugin.trusted && plugin.validationErrors.length === 0,
+      createdAt: now,
+      updatedAt: now,
+    })),
+  );
 
   if (!existsSync(configPath)) {
-    return [];
+    return pluginMounts;
   }
 
   const parsed = JSON.parse(readFileSync(configPath, "utf8")) as { mounts?: Array<Record<string, unknown>> };
-  const now = new Date().toISOString();
 
-  return (parsed.mounts ?? []).map((mount, index) => ({
+  const configured: McpMountRecord[] = (parsed.mounts ?? []).map((mount, index) => ({
     id: typeof mount.id === "string" ? mount.id : `mcp_${index + 1}`,
     name: typeof mount.name === "string" ? mount.name : `mcp-${index + 1}`,
     transport: mount.transport === "http" ? "http" : "stdio",
@@ -119,4 +132,10 @@ function discoverMcpMounts(): McpMountRecord[] {
     createdAt: now,
     updatedAt: now,
   }));
+
+  return [...configured, ...pluginMounts];
+}
+
+function normalizeMountName(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "server";
 }

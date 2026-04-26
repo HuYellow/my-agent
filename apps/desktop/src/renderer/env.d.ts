@@ -21,6 +21,7 @@ import {
   type McpSessionRecord,
   type ProviderModelRecord,
   type PendingApproval,
+  type PluginInstallParams,
   type PluginRecord,
   type PluginListParams,
   type ProviderActionParams,
@@ -143,6 +144,7 @@ declare global {
         createdPaths: string[];
       }>;
       listPlugins: (params?: PluginListParams) => Promise<{ plugins: PluginRecord[] }>;
+      installPlugin: (params: PluginInstallParams) => Promise<{ plugins: PluginRecord[] }>;
       updatePlugin: (params: UpdatePluginParams) => Promise<{ plugin: PluginRecord }>;
       listInternalTools: (params?: { projectId?: string }) => Promise<{ internalTools: InternalToolRecord[] }>;
       updateInternalTool: (params: UpdateInternalToolParams) => Promise<{ internalTool: InternalToolRecord }>;

@@ -414,6 +414,13 @@ export class HarnessDatabase {
         sandbox_mode TEXT,
         command TEXT,
         args_json TEXT,
+        format TEXT,
+        install_source_json TEXT,
+        display_json TEXT,
+        components_json TEXT,
+        hook_names_json TEXT,
+        marketplace_name TEXT,
+        marketplace_category TEXT,
         validation_errors_json TEXT NOT NULL DEFAULT '[]',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -1613,9 +1620,9 @@ export class HarnessDatabase {
     this.db
       .prepare(
         `INSERT INTO plugins(
-           id, name, version, path, manifest_path, source, enabled, trusted, capabilities_json, manifest_version, compatibility_json, tool_name, sandbox_mode, command, args_json, validation_errors_json, created_at, updated_at
+           id, name, version, path, manifest_path, source, enabled, trusted, capabilities_json, manifest_version, compatibility_json, tool_name, sandbox_mode, command, args_json, format, install_source_json, display_json, components_json, hook_names_json, marketplace_name, marketplace_category, validation_errors_json, created_at, updated_at
          )
-         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            name = excluded.name,
            version = excluded.version,
@@ -1631,6 +1638,13 @@ export class HarnessDatabase {
            sandbox_mode = excluded.sandbox_mode,
            command = excluded.command,
            args_json = excluded.args_json,
+           format = excluded.format,
+           install_source_json = excluded.install_source_json,
+           display_json = excluded.display_json,
+           components_json = excluded.components_json,
+           hook_names_json = excluded.hook_names_json,
+           marketplace_name = excluded.marketplace_name,
+           marketplace_category = excluded.marketplace_category,
            validation_errors_json = excluded.validation_errors_json,
            updated_at = excluded.updated_at`,
       )
@@ -1650,6 +1664,13 @@ export class HarnessDatabase {
         plugin.sandboxMode ?? null,
         plugin.command ?? null,
         plugin.args ? JSON.stringify(plugin.args) : null,
+        plugin.format ?? null,
+        plugin.installSource ? JSON.stringify(plugin.installSource) : null,
+        plugin.display ? JSON.stringify(plugin.display) : null,
+        plugin.components ? JSON.stringify(plugin.components) : null,
+        plugin.hookNames ? JSON.stringify(plugin.hookNames) : null,
+        plugin.marketplaceName ?? null,
+        plugin.marketplaceCategory ?? null,
         JSON.stringify(plugin.validationErrors),
         plugin.createdAt,
         plugin.updatedAt,
@@ -2167,6 +2188,13 @@ export class HarnessDatabase {
       sandboxMode: row.sandbox_mode ? (String(row.sandbox_mode) as PluginRecord["sandboxMode"]) : undefined,
       command: row.command ? String(row.command) : undefined,
       args: row.args_json ? (JSON.parse(String(row.args_json)) as string[]) : undefined,
+      format: row.format ? (String(row.format) as PluginRecord["format"]) : undefined,
+      installSource: row.install_source_json ? JSON.parse(String(row.install_source_json)) : undefined,
+      display: row.display_json ? JSON.parse(String(row.display_json)) : undefined,
+      components: row.components_json ? JSON.parse(String(row.components_json)) : undefined,
+      hookNames: row.hook_names_json ? (JSON.parse(String(row.hook_names_json)) as string[]) : undefined,
+      marketplaceName: row.marketplace_name ? String(row.marketplace_name) : undefined,
+      marketplaceCategory: row.marketplace_category ? String(row.marketplace_category) : undefined,
       validationErrors: row.validation_errors_json ? (JSON.parse(String(row.validation_errors_json)) as string[]) : [],
       createdAt: String(row.created_at),
       updatedAt: String(row.updated_at),
@@ -2383,6 +2411,34 @@ export class HarnessDatabase {
 
     if (!this.columnExists("plugins", "compatibility_json")) {
       this.db.exec("ALTER TABLE plugins ADD COLUMN compatibility_json TEXT");
+    }
+
+    if (!this.columnExists("plugins", "format")) {
+      this.db.exec("ALTER TABLE plugins ADD COLUMN format TEXT");
+    }
+
+    if (!this.columnExists("plugins", "install_source_json")) {
+      this.db.exec("ALTER TABLE plugins ADD COLUMN install_source_json TEXT");
+    }
+
+    if (!this.columnExists("plugins", "display_json")) {
+      this.db.exec("ALTER TABLE plugins ADD COLUMN display_json TEXT");
+    }
+
+    if (!this.columnExists("plugins", "components_json")) {
+      this.db.exec("ALTER TABLE plugins ADD COLUMN components_json TEXT");
+    }
+
+    if (!this.columnExists("plugins", "hook_names_json")) {
+      this.db.exec("ALTER TABLE plugins ADD COLUMN hook_names_json TEXT");
+    }
+
+    if (!this.columnExists("plugins", "marketplace_name")) {
+      this.db.exec("ALTER TABLE plugins ADD COLUMN marketplace_name TEXT");
+    }
+
+    if (!this.columnExists("plugins", "marketplace_category")) {
+      this.db.exec("ALTER TABLE plugins ADD COLUMN marketplace_category TEXT");
     }
 
     if (!this.tableExists("internal_tools")) {

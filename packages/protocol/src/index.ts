@@ -38,7 +38,7 @@ export type SandboxMode = "read-only" | "workspace-write" | "danger-full-access"
 export type ApprovalPolicy = "on-request" | "on-failure" | "never";
 export type ApiFlavor = "chat_completions" | "responses";
 export type ModelReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
-export type SkillScope = "SYSTEM" | "USER" | "REPO" | "CATALOG" | "ADMIN";
+export type SkillScope = "SYSTEM" | "USER" | "REPO" | "CATALOG" | "ADMIN" | "PLUGIN";
 export type RuntimeRunMode = "no-tools" | "limited-tools" | "full-tools";
 export type RequirementStatus = "active" | "paused" | "completed" | "archived";
 export type AutomationStatus = "active" | "paused";
@@ -1063,9 +1063,51 @@ export interface PluginRecord {
   sandboxMode?: SandboxMode;
   command?: string;
   args?: string[];
+  format?: PluginFormat;
+  installSource?: PluginInstallSourceRecord;
+  display?: PluginDisplayRecord;
+  components?: PluginComponentRecord;
+  hookNames?: string[];
+  marketplaceName?: string;
+  marketplaceCategory?: string;
   validationErrors: string[];
   createdAt: string;
   updatedAt: string;
+}
+
+export type PluginFormat = "my-agent" | "codex" | "opencode";
+
+export type PluginInstallSourceRecord =
+  | {
+      source: "local";
+      path: string;
+    }
+  | {
+      source: "git";
+      url: string;
+      ref?: string;
+    }
+  | {
+      source: "npm";
+      packageName: string;
+      version?: string;
+    };
+
+export interface PluginDisplayRecord {
+  displayName?: string;
+  shortDescription?: string;
+  longDescription?: string;
+  developerName?: string;
+  category?: string;
+  brandColor?: string;
+}
+
+export interface PluginComponentRecord {
+  skills: number;
+  mcpServers: number;
+  tools: number;
+  hooks: number;
+  apps?: number;
 }
 
 export interface InternalToolRecord {
@@ -1336,6 +1378,22 @@ export interface PluginListParams {
 }
 
 export interface PluginListResult {
+  plugins: PluginRecord[];
+}
+
+export type PluginInstallParams =
+  | {
+      source: "git";
+      url: string;
+      ref?: string;
+    }
+  | {
+      source: "npm";
+      packageName: string;
+      version?: string;
+    };
+
+export interface PluginInstallResult {
   plugins: PluginRecord[];
 }
 

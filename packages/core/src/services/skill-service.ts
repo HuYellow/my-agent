@@ -5,7 +5,9 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type SkillDescriptor } from "@my-agent/protocol";
 import YAML from "yaml";
+import { HarnessDatabase } from "../store/database.js";
 import { findGitRoot, readTextIfExists } from "../utils/path-utils.js";
+import { resolvePluginSkillRoots } from "./plugin-registry.js";
 
 interface SkillFrontmatter {
   name?: string;
@@ -34,6 +36,7 @@ export class SkillService {
     private readonly systemSkillsRoot: string,
     private readonly homeDir: string,
     private readonly onChange: (skills: SkillDescriptor[]) => void,
+    private readonly database?: HarnessDatabase,
   ) {}
 
   dispose(): void {
@@ -128,6 +131,12 @@ export class SkillService {
 
     if (repoRoot) {
       roots.push({ scope: "REPO", path: join(repoRoot, ".agents", "skills") });
+    }
+
+    for (const plugin of this.database?.listPlugins() ?? []) {
+      for (const root of resolvePluginSkillRoots(plugin)) {
+        roots.push({ scope: "PLUGIN", path: root });
+      }
     }
 
     return roots;

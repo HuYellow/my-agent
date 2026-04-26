@@ -28,6 +28,7 @@ export interface ToolExecutionContext {
   workspace: WorkspaceProfile;
   emitCommandDelta: (delta: string) => void;
   signal?: AbortSignal;
+  env?: Record<string, string>;
 }
 
 export interface ToolDescriptorContext {
