@@ -20,6 +20,11 @@
     flex-direction: column;
   }
 
+  .runtime-page__summary {
+    max-width: 100%;
+    justify-content: flex-start;
+  }
+
   .skills-grid,
   .settings-layout,
   .requirement-overview__grid,

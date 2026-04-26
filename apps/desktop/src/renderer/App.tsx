@@ -1622,9 +1622,6 @@ export function App() {
             onNewRequirementProjectIdChange={setNewRequirementProjectId}
             savingRequirement={savingRequirement}
             unassignedThreadsByProject={unassignedThreadsByProject}
-            onRevealProject={async (projectPath) => {
-              await window.myAgent.revealProjectPath(projectPath).catch(() => null);
-            }}
           />
         </div>
 
@@ -2214,6 +2211,10 @@ export function App() {
   );
 }
 
+function getUnassignedProjectGroupId(project: ProjectRecord | null, projectThreads: ThreadRecord[]) {
+  return project?.id ?? `unassigned:${projectThreads[0]?.projectId ?? "unknown"}`;
+}
+
 function RequirementsPanel({
   requirements,
   requirementMemories,
@@ -2235,7 +2236,6 @@ function RequirementsPanel({
   onNewRequirementProjectIdChange,
   savingRequirement,
   unassignedThreadsByProject,
-  onRevealProject,
 }: {
   requirements: RequirementRecord[];
   requirementMemories: RequirementMemoryRecord[];
@@ -2257,9 +2257,14 @@ function RequirementsPanel({
   onNewRequirementProjectIdChange: (value: string) => void;
   savingRequirement: boolean;
   unassignedThreadsByProject: Array<{ project: ProjectRecord | null; threads: ThreadRecord[] }>;
-  onRevealProject: (projectPath: string) => void;
 }) {
   const searchTerm = search.trim().toLowerCase();
+  const unassignedProjectGroupIds = useMemo(
+    () => unassignedThreadsByProject.map(({ project, threads: projectThreads }) => getUnassignedProjectGroupId(project, projectThreads)),
+    [unassignedThreadsByProject],
+  );
+  const initializedUnassignedProjectIds = useRef(new Set(unassignedProjectGroupIds));
+  const [expandedUnassignedProjectIds, setExpandedUnassignedProjectIds] = useState<string[]>(() => unassignedProjectGroupIds);
   const filteredRequirements = requirements.filter((requirement) => {
     if (!searchTerm) {
       return true;
@@ -2278,6 +2283,32 @@ function RequirementsPanel({
 
     return haystack.includes(searchTerm);
   });
+
+  useEffect(() => {
+    setExpandedUnassignedProjectIds((current) => {
+      const visibleIds = new Set(unassignedProjectGroupIds);
+      const next = current.filter((projectId) => visibleIds.has(projectId));
+
+      for (const projectId of unassignedProjectGroupIds) {
+        if (!initializedUnassignedProjectIds.current.has(projectId)) {
+          initializedUnassignedProjectIds.current.add(projectId);
+          next.push(projectId);
+        }
+      }
+
+      return next.length === current.length && next.every((projectId, index) => projectId === current[index])
+        ? current
+        : next;
+    });
+  }, [unassignedProjectGroupIds]);
+
+  const toggleUnassignedProject = (projectGroupId: string) => {
+    setExpandedUnassignedProjectIds((current) =>
+      current.includes(projectGroupId)
+        ? current.filter((entry) => entry !== projectGroupId)
+        : [...current, projectGroupId],
+    );
+  };
 
   return (
     <div className="sidebar-secondary__content thread-sidebar requirement-sidebar">
@@ -2385,40 +2416,58 @@ function RequirementsPanel({
             <span>{unassignedThreadsByProject.reduce((count, group) => count + group.threads.length, 0)}</span>
           </div>
           <div className="project-tree">
-            {unassignedThreadsByProject.map(({ project, threads: projectThreads }) => (
-              <section key={project?.id ?? `unassigned:${projectThreads[0]?.projectId ?? "unknown"}`} className="project-tree__group">
-                <div className="project-tree__project">
-                  <button className="project-item" onClick={() => project && void onRevealProject(project.rootPath)}>
-                    <div className="project-item__name">{project?.name ?? "Unknown project"}</div>
-                  </button>
-                  <button
-                    className="project-tree__control"
-                    onClick={() => void onCreateThread(project?.id)}
-                    aria-label={`在 ${project?.name ?? "项目"} 中创建新对话`}
-                    title="新建对话"
-                  >
-                    <MessageSquarePlus size={14} />
-                  </button>
-                </div>
-                <div className="project-tree__threads">
-                  {projectThreads.map((thread) => (
+            {unassignedThreadsByProject.map(({ project, threads: projectThreads }) => {
+              const projectGroupId = getUnassignedProjectGroupId(project, projectThreads);
+              const projectName = project?.name ?? "Unknown project";
+              const expanded = expandedUnassignedProjectIds.includes(projectGroupId);
+
+              return (
+                <section key={projectGroupId} className="project-tree__group">
+                  <div className="project-tree__project">
                     <button
-                      key={thread.id}
-                      className={`thread-item thread-item--nested ${thread.id === activeThreadId ? "thread-item--active" : ""}`}
-                      onClick={() => void onSelectThread(thread.id)}
+                      className="project-item project-item--with-toggle"
+                      onClick={() => toggleUnassignedProject(projectGroupId)}
+                      aria-expanded={expanded}
+                      aria-label={expanded ? `收起 ${projectName}` : `展开 ${projectName}`}
                     >
-                      <div className="thread-item__content thread-item__content--compact">
-                        <div className="thread-item__title">
-                          {workingThreadIds.has(thread.id) && <span className="thread-item__spinner" aria-hidden="true" />}
-                          <span>{thread.title}</span>
-                        </div>
-                        <div className="thread-item__age">{formatRelativeTime(thread.updatedAt)}</div>
-                      </div>
+                      <ChevronRight
+                        className={`project-item__chevron ${expanded ? "project-item__chevron--open" : ""}`}
+                        size={14}
+                        aria-hidden="true"
+                      />
+                      <div className="project-item__name">{projectName}</div>
                     </button>
-                  ))}
-                </div>
-              </section>
-            ))}
+                    <button
+                      className="project-tree__control"
+                      onClick={() => void onCreateThread(project?.id)}
+                      aria-label={`在 ${project?.name ?? "项目"} 中创建新对话`}
+                      title="新建对话"
+                    >
+                      <MessageSquarePlus size={14} />
+                    </button>
+                  </div>
+                  {expanded && (
+                    <div className="project-tree__threads">
+                      {projectThreads.map((thread) => (
+                        <button
+                          key={thread.id}
+                          className={`thread-item thread-item--nested ${thread.id === activeThreadId ? "thread-item--active" : ""}`}
+                          onClick={() => void onSelectThread(thread.id)}
+                        >
+                          <div className="thread-item__content thread-item__content--compact">
+                            <div className="thread-item__title">
+                              {workingThreadIds.has(thread.id) && <span className="thread-item__spinner" aria-hidden="true" />}
+                              <span>{thread.title}</span>
+                            </div>
+                            <div className="thread-item__age">{formatRelativeTime(thread.updatedAt)}</div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </section>
+              );
+            })}
           </div>
         </div>
       </div>
@@ -2618,16 +2667,16 @@ function ThreadsPanel({
                 >
                   <div className="project-tree__project">
                     <button
-                      className={`project-tree__toggle ${expanded ? "project-tree__toggle--open" : ""}`}
+                      className={`project-item project-item--with-toggle ${isActiveProject ? "project-item--active" : ""}`}
                       onClick={() => toggleProject(entry.id)}
+                      aria-expanded={expanded}
                       aria-label={expanded ? `Collapse ${entry.name}` : `Expand ${entry.name}`}
                     >
-                      <ChevronRight size={14} />
-                    </button>
-                    <button
-                      className={`project-item ${isActiveProject ? "project-item--active" : ""}`}
-                      onClick={() => toggleProject(entry.id)}
-                    >
+                      <ChevronRight
+                        className={`project-item__chevron ${expanded ? "project-item__chevron--open" : ""}`}
+                        size={14}
+                        aria-hidden="true"
+                      />
                       <div className="project-item__name">{entry.name}</div>
                     </button>
 
@@ -3235,21 +3284,28 @@ function RuntimePluginsPanel({
   }
 
   return (
-    <div className="skills-page">
-      <div className="skills-page__header">
-        <h2 className="skills-page__title">Runtime Surfaces</h2>
-        <span className="skills-page__count">
-          {tools.length} tools · {plugins.length} plugins · {internalTools.length} internal tools · {mcpMounts.length} MCP mounts · {visibleTerminalSessions.length} terminal sessions
-        </span>
+    <div className="skills-page runtime-page">
+      <div className="skills-page__header runtime-page__header">
+        <div className="runtime-page__heading">
+          <h2 className="skills-page__title">插件与 Runtime</h2>
+          <p>管理插件安装、工具目录、终端后端、内部工具与 MCP mounts。</p>
+        </div>
+        <div className="runtime-page__summary" aria-label="Runtime 概览">
+          <span><strong>{tools.length}</strong> 工具</span>
+          <span><strong>{plugins.length}</strong> 插件</span>
+          <span><strong>{internalTools.length}</strong> 内部工具</span>
+          <span><strong>{mcpMounts.length}</strong> MCP mounts</span>
+          <span><strong>{visibleTerminalSessions.length}</strong> 终端会话</span>
+        </div>
       </div>
       {actionError ? <div className="thread-shell__empty">{actionError}</div> : null}
-      <div className="skill-card runtime-install-card">
+      <div className="skill-card runtime-install-card runtime-page__install">
         <div className="skill-card__header">
           <div>
             <h3>安装插件</h3>
             <span>Git URL 或 npm package</span>
           </div>
-          <span className="skill-card__status">New</span>
+          <span className="skill-card__status">新建</span>
         </div>
         <div className="runtime-install-card__controls">
           <select value={pluginInstallMode} onChange={(event) => setPluginInstallMode(event.target.value as PluginInstallParams["source"])}>
@@ -3264,24 +3320,24 @@ function RuntimePluginsPanel({
           <input
             value={pluginInstallRef}
             onChange={(event) => setPluginInstallRef(event.target.value)}
-            placeholder={pluginInstallMode === "git" ? "branch, tag, or commit" : "version"}
+            placeholder={pluginInstallMode === "git" ? "branch、tag 或 commit" : "version"}
           />
           <button className="button" disabled={pendingActionKey === "plugin:install"} onClick={() => void handlePluginInstall()}>
             <span>安装插件</span>
           </button>
         </div>
       </div>
-      <div className="skills-grid">
+      <div className="skills-grid runtime-page__grid">
         {compatibility ? (
           <div className="skill-card">
             <div className="skill-card__header">
               <div>
-                <h3>Protocol Compatibility</h3>
+                <h3>协议兼容</h3>
                 <span>{compatibility.protocolVersion}</span>
               </div>
-              <span className="skill-card__status skill-card__status--enabled">Stable</span>
+              <span className="skill-card__status skill-card__status--enabled">稳定</span>
             </div>
-            <p>{compatibility.documentationPath ?? "No protocol documentation path configured."}</p>
+            <p>{compatibility.documentationPath ?? "未配置协议文档路径。"}</p>
             <pre>
               additiveChangesOnly={String(compatibility.additiveChangesOnly)}
               {`\n`}requiredToolSources={compatibility.requiredToolSources.join(", ")}
@@ -3293,12 +3349,12 @@ function RuntimePluginsPanel({
           <div className="skill-card">
             <div className="skill-card__header">
               <div>
-                <h3>Governed Tool Catalog</h3>
+                <h3>工具目录</h3>
                 <span>{Object.entries(toolsBySource).map(([source, count]) => `${source}:${count}`).join(" · ")}</span>
               </div>
-              <span className="skill-card__status skill-card__status--enabled">Unified</span>
+              <span className="skill-card__status skill-card__status--enabled">统一</span>
             </div>
-            <p>All runtime tools are cataloged with a stable source kind and capability summary.</p>
+            <p>所有 Runtime 工具按来源、风险和审批能力统一归档。</p>
             <div className="runtime-tool-catalog">
               {tools.map((tool) => (
                 <div key={`${tool.source.type}:${tool.name}`} className="runtime-tool-row">
@@ -3320,14 +3376,14 @@ function RuntimePluginsPanel({
           <div key={`terminal-cap:${capability.kind}`} className="skill-card">
             <div className="skill-card__header">
               <div>
-                <h3>{capability.kind.toUpperCase()} terminal backend</h3>
-                <span>{capability.available ? "Available" : "Planned"}</span>
+                <h3>{capability.kind.toUpperCase()} 终端后端</h3>
+                <span>{capability.available ? "可用" : "规划中"}</span>
               </div>
               <span className={`skill-card__status ${capability.available ? "skill-card__status--enabled" : ""}`}>
-                {capability.available ? "Ready" : "Unavailable"}
+                {capability.available ? "就绪" : "不可用"}
               </span>
             </div>
-            <p>{capability.reason ?? "No detail available."}</p>
+            <p>{capability.reason ?? "暂无详情。"}</p>
             <pre>
               backendInteractive={String(capability.interactive)}
               {`\n`}supportsInteractiveCommands={String(capability.supportsInteractiveCommands)}
@@ -3389,7 +3445,7 @@ function RuntimePluginsPanel({
                 <span>{plugin.version} · {plugin.source}</span>
               </div>
               <span className={`skill-card__status ${plugin.enabled && plugin.trusted && plugin.validationErrors.length === 0 ? "skill-card__status--enabled" : ""}`}>
-                {plugin.validationErrors.length > 0 ? "Invalid" : plugin.trusted ? (plugin.enabled ? "Enabled" : "Disabled") : "Untrusted"}
+                {plugin.validationErrors.length > 0 ? "无效" : plugin.trusted ? (plugin.enabled ? "已启用" : "已停用") : "未信任"}
               </span>
             </div>
             <p>{plugin.path}</p>
@@ -3414,14 +3470,14 @@ function RuntimePluginsPanel({
                 disabled={pendingActionKey === `plugin:trust:${plugin.id}`}
                 onClick={() => void handlePluginUpdate(plugin.id, { trusted: !plugin.trusted }, `plugin:trust:${plugin.id}`)}
               >
-                {plugin.trusted ? "Untrust" : "Trust"}
+                {plugin.trusted ? "取消信任" : "信任"}
               </button>
               <button
                 className="button"
                 disabled={!plugin.trusted || plugin.validationErrors.length > 0 || pendingActionKey === `plugin:enable:${plugin.id}`}
                 onClick={() => void handlePluginUpdate(plugin.id, { enabled: !plugin.enabled }, `plugin:enable:${plugin.id}`)}
               >
-                {plugin.enabled ? "Disable" : "Enable"}
+                {plugin.enabled ? "停用" : "启用"}
               </button>
             </div>
           </div>
@@ -3434,7 +3490,7 @@ function RuntimePluginsPanel({
                 <span>{internalTool.source}</span>
               </div>
               <span className={`skill-card__status ${internalTool.enabled && internalTool.validationErrors.length === 0 ? "skill-card__status--enabled" : ""}`}>
-                {internalTool.validationErrors.length > 0 ? "Invalid" : internalTool.enabled ? "Enabled" : "Disabled"}
+                {internalTool.validationErrors.length > 0 ? "无效" : internalTool.enabled ? "已启用" : "已停用"}
               </span>
             </div>
             <p>{internalTool.description}</p>
@@ -3457,7 +3513,7 @@ function RuntimePluginsPanel({
                   )
                 }
               >
-                {internalTool.enabled ? "Disable" : "Enable"}
+                {internalTool.enabled ? "停用" : "启用"}
               </button>
             </div>
           </div>
@@ -3469,14 +3525,14 @@ function RuntimePluginsPanel({
                 <h3>{mount.name}</h3>
                 <span>{mount.transport.toUpperCase()}</span>
               </div>
-              <span className={`skill-card__status ${mount.enabled ? "skill-card__status--enabled" : ""}`}>{mount.enabled ? "Enabled" : "Disabled"}</span>
+              <span className={`skill-card__status ${mount.enabled ? "skill-card__status--enabled" : ""}`}>{mount.enabled ? "已启用" : "已停用"}</span>
             </div>
-            <p>{mount.url ?? mount.command ?? "No target configured"}</p>
+            <p>{mount.url ?? mount.command ?? "未配置目标"}</p>
             <pre>
               Session: {mcpSessions.find((session) => session.mountId === mount.id)?.status ?? "not connected"}
             </pre>
             <button className="button" disabled={pendingActionKey === `mcp:${mount.id}`} onClick={() => void handleRefreshMountAction(mount.id)}>
-              Refresh Mount
+              刷新 Mount
             </button>
           </div>
         ))}
@@ -7055,10 +7111,10 @@ function ComposerBar({
                   "--context-angle": `${Math.max(8, Math.round(contextSummary.usedRatio * 360))}deg`,
                 } as CSSProperties
               }
-              aria-label="Show context usage details"
-              title="Show context usage details"
+              aria-label="查看 Context window 用量"
+              aria-describedby="composer-context-tooltip"
             />
-            <div className="composer-context-card__tooltip" role="status">
+            <div id="composer-context-tooltip" className="composer-context-card__tooltip" role="tooltip">
               <strong>Context window</strong>
               <span>
                 {Math.round(contextSummary.usedRatio * 100)}% used ({Math.round((1 - contextSummary.usedRatio) * 100)}% remaining)

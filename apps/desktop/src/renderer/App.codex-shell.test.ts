@@ -40,6 +40,36 @@ describe("Codex-inspired shell composition", () => {
     expect(appSource).toContain("API 配置");
   });
 
+  it("gives the plugin runtime page a dedicated presentation shell", () => {
+    expect(appSource).toContain('className="skills-page runtime-page"');
+    expect(appSource).toContain('className="runtime-page__summary"');
+    expect(appSource).toContain('className="skills-grid runtime-page__grid"');
+    expect(appSource).toContain("插件与 Runtime");
+    expect(appSource).toContain("工具目录");
+  });
+
+  it("moves Context window copy into an accessible hover tooltip", () => {
+    expect(appSource).toContain('aria-describedby="composer-context-tooltip"');
+    expect(appSource).toContain('id="composer-context-tooltip"');
+    expect(appSource).toContain('role="tooltip"');
+    expect(appSource).toContain("Context window");
+    expect(appSource).not.toContain('role="status">\n              <strong>Context window</strong>');
+  });
+
+  it("toggles unassigned project groups from the project name instead of revealing folders", () => {
+    expect(appSource).toContain("const [expandedUnassignedProjectIds");
+    expect(appSource).toContain("const toggleUnassignedProject = (projectGroupId: string) => {");
+    expect(appSource).toContain('onClick={() => toggleUnassignedProject(projectGroupId)}');
+    expect(appSource).not.toContain('className="project-item" onClick={() => project && void onRevealProject(project.rootPath)}');
+  });
+
+  it("renders project expand affordances inside the project name buttons", () => {
+    expect(appSource).toContain('className={`project-item project-item--with-toggle ${isActiveProject ? "project-item--active" : ""}`}');
+    expect(appSource).toContain('className="project-item project-item--with-toggle"');
+    expect(appSource).toContain("project-item__chevron");
+    expect(appSource).not.toContain('className={`project-tree__toggle ${expanded ? "project-tree__toggle--open" : ""}`');
+  });
+
   it("does not keep mojibake comments in the renderer shell", () => {
     expect(appSource).not.toMatch(/[闂缂绗婵濡炲倸]/);
   });

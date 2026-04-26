@@ -39,10 +39,67 @@
   font-size: 13px;
 }
 
+.runtime-page {
+  padding: 22px 24px 28px;
+}
+
+.runtime-page__header {
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.runtime-page__heading {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.runtime-page__heading p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.runtime-page__summary {
+  max-width: min(760px, 58vw);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.runtime-page__summary span {
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px;
+  border: 1px solid var(--accent-soft);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.runtime-page__summary strong {
+  color: inherit;
+  font-size: 12px;
+}
+
 .skills-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: 12px;
+}
+
+.runtime-page__grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+  align-items: start;
 }
 
 .skill-card,
@@ -74,6 +131,24 @@
   gap: 12px;
 }
 
+.runtime-page .skill-card {
+  inline-size: 100%;
+  max-inline-size: 100%;
+  align-self: start;
+  overflow: hidden;
+  contain: inline-size;
+}
+
+.runtime-page .skill-card > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.runtime-page__install {
+  margin-bottom: 16px;
+  background: var(--surface-strong);
+}
+
 .skill-card:hover {
   border-color: var(--line-strong);
 }
@@ -85,6 +160,11 @@
 .skill-card__title,
 .skill-card__header > div,
 .plugin-card__header > div {
+  min-width: 0;
+}
+
+.runtime-page .skill-card__header,
+.runtime-page .skill-card__header > div {
   min-width: 0;
 }
 
@@ -102,10 +182,12 @@
 .skill-card__desc,
 .plugin-card p,
 .tool-card__description {
+  min-width: 0;
   margin: 0;
   color: var(--text-soft);
   font-size: 13px;
   line-height: 1.55;
+  overflow-wrap: anywhere;
 }
 
 .skill-card span,
@@ -130,6 +212,27 @@
   color: var(--text-soft);
   font-size: 12px;
   line-height: 1.5;
+}
+
+.runtime-page .skill-card pre,
+.runtime-page .runtime-terminal-meta__command {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.runtime-page .skill-card p,
+.runtime-page .skill-card small,
+.runtime-page .skill-card h3,
+.runtime-page .skill-card span {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .skill-card__toggle,
@@ -165,9 +268,24 @@
   gap: 8px;
 }
 
+.runtime-tool-catalog {
+  max-height: 360px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.runtime-tool-row {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
 .runtime-tool-row,
 .workflow-step-row,
 .terminal-card__archive-item {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
   padding: 10px;
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
@@ -176,12 +294,16 @@
 
 .runtime-tool-row strong,
 .workflow-step-row__title strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
   color: var(--text);
   font-size: 13px;
 }
 
 .runtime-tool-row small,
 .workflow-step-row__meta small {
+  min-width: 0;
+  overflow-wrap: anywhere;
   color: var(--muted);
   font-size: 12px;
 }

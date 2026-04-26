@@ -158,14 +158,14 @@
   justify-content: space-between;
   gap: 12px;
   padding: 0 16px;
-  border: 1px solid var(--line);
-  border-top: none;
+  border: none;
   border-bottom-right-radius: var(--radius-lg);
   border-bottom-left-radius: var(--radius-lg);
-  background: var(--surface-soft);
+  background: transparent;
 }
 
 .composer-context-card {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -177,8 +177,12 @@
   --context-angle: 0deg;
   width: 24px;
   height: 24px;
+  flex: 0 0 24px;
+  padding: 0;
+  border: none;
   border-radius: 50%;
   background: conic-gradient(var(--accent) 0 var(--context-angle), var(--line-strong) var(--context-angle) 360deg);
+  cursor: help;
 }
 
 .composer-context-card__pie::after {
@@ -188,7 +192,62 @@
   height: 14px;
   margin: 5px;
   border-radius: 50%;
-  background: var(--surface-soft);
+  background: var(--main-bg);
+}
+
+.composer-context-card__tooltip {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 10px);
+  z-index: 80;
+  width: max-content;
+  max-width: min(270px, calc(100vw - 32px));
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(4px);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-strong);
+  color: var(--text-soft);
+  box-shadow: var(--shadow-lift);
+  transition: opacity 120ms ease, transform 120ms ease, visibility 120ms ease;
+}
+
+.composer-context-card__tooltip::after {
+  content: "";
+  position: absolute;
+  right: 8px;
+  bottom: -5px;
+  width: 9px;
+  height: 9px;
+  transform: rotate(45deg);
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-strong);
+}
+
+.composer-context-card:hover .composer-context-card__tooltip,
+.composer-context-card:focus-within .composer-context-card__tooltip {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.composer-context-card__tooltip strong {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.composer-context-card__tooltip span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: nowrap;
 }
 
 .composer-attachments {
@@ -341,8 +400,8 @@ html[data-theme="dark"] .composer-main {
 }
 
 html[data-theme="dark"] .composer-footer {
-  border-top: 1px solid #303030;
-  background: #1f1f1f;
+  border: none;
+  background: transparent;
 }
 
 html[data-theme="dark"] .composer-input {
@@ -354,5 +413,5 @@ html[data-theme="dark"] .composer-context-card__pie {
 }
 
 html[data-theme="dark"] .composer-context-card__pie::after {
-  background: #1f1f1f;
+  background: var(--main-bg);
 }
