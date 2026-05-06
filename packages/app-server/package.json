@@ -1,0 +1,20 @@
+{
+  "name": "@my-agent/app-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "my-agent-app-server": "dist/index.js"
+  },
+  "scripts": {
+    "build": "npm run build --workspace @my-agent/protocol && npm run build --workspace @my-agent/core && node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
+    "test": "npm run build --workspace @my-agent/protocol && npm run build --workspace @my-agent/core && vitest run --passWithNoTests",
+    "typecheck": "npm run build --workspace @my-agent/protocol && npm run build --workspace @my-agent/core && tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@my-agent/core": "file:../core",
+    "@my-agent/protocol": "file:../protocol"
+  }
+}

@@ -1,0 +1,24 @@
+apiVersion: "my-agent/v1alpha1"
+templateVersion: "1.0"
+compatibility:
+  protocolVersion: "0.1.0"
+  serverVersion: "0.1.0"
+name: Release Review
+description: Review changes and draft a release-ready summary.
+steps:
+  - id: status
+    type: command
+    title: Inspect repository state
+    command: git status --short --branch
+  - id: review
+    type: review
+    title: Review workspace diff
+    prompt: Focus on regressions, upgrade notes, and missing release documentation.
+    reviewSource:
+      kind: workspace
+  - id: summarize
+    type: agent
+    title: Draft release summary
+    prompt: Summarize the changes as release notes with risk callouts and follow-up tasks.
+    dependsOn:
+      - review

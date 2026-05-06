@@ -1,0 +1,34 @@
+{
+  "schemaVersion": "1.0",
+  "name": "changelog-helper",
+  "version": "0.1.0",
+  "capabilities": [
+    "write"
+  ],
+  "sandboxMode": "workspace-write",
+  "command": "node",
+  "args": [
+    "src/index.js"
+  ],
+  "compatibility": {
+    "protocolVersion": "0.1.0",
+    "serverVersion": "0.1.0"
+  },
+  "tool": {
+    "name": "changelog_helper_run",
+    "description": "Generate a small changelog summary from stdin payload.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "task": {
+          "type": "string",
+          "description": "Task description for the changelog helper."
+        }
+      },
+      "required": [
+        "task"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "name": "@my-agent/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist-electron/main/index.cjs",
+  "scripts": {
+    "dev": "concurrently -k -n core,main,renderer,electron \"npm:dev:core\" \"npm:dev:main\" \"npm:dev:renderer\" \"npm:dev:electron\"",
+    "dev:core": "npm run dev --workspace @my-agent/core",
+    "dev:main": "tsup --config tsup.config.ts --watch",
+    "dev:renderer": "vite",
+    "dev:electron": "wait-on ../../packages/core/dist/index.js dist-electron/main/index.cjs dist-electron/preload/index.cjs tcp:5173 && cross-env MY_AGENT_DEV_SERVER_URL=http://127.0.0.1:5173 electron .",
+    "build": "npm run build --workspace @my-agent/protocol && npm run build --workspace @my-agent/core && npm run build:renderer && npm run build:main",
+    "build:renderer": "vite build",
+    "build:main": "tsup --config tsup.config.ts",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit"
+  },
+  "dependencies": {
+    "@my-agent/protocol": "file:../../packages/protocol",
+    "@radix-ui/react-dialog": "^1.1.13",
+    "lucide-react": "^1.7.0",
+    "pdf-parse": "^2.4.5",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "zustand": "^5.0.3"
+  }
+}

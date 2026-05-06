@@ -1,0 +1,8 @@
+@import "./styles/tokens.css";
+@import "./styles/shell.css";
+@import "./styles/sidebar.css";
+@import "./styles/workspace.css";
+@import "./styles/composer.css";
+@import "./styles/panels.css";
+@import "./styles/dialogs.css";
+@import "./styles/responsive.css";

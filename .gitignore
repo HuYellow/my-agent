@@ -1,0 +1,11 @@
+node_modules
+dist
+dist-electron
+out
+.vite
+coverage
+.DS_Store
+Thumbs.db
+npm-debug.log*
+.my-agent
+.qoder

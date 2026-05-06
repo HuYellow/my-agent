@@ -1,0 +1,9 @@
+interface:
+  display_name: Release Notes
+  short_description: Helps summarize changes into a release narrative
+policy:
+  allow_implicit_invocation: false
+compatibility:
+  protocol_version: "0.1.0"
+  server_version: "0.1.0"
+template_version: "1.0"

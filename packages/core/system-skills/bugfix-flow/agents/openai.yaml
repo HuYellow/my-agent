@@ -1,0 +1,6 @@
+interface:
+  display_name: "Bugfix Flow"
+  short_description: "Diagnose failures and propose targeted fixes."
+  brand_color: "#ef4444"
+policy:
+  allow_implicit_invocation: true

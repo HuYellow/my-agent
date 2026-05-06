@@ -1,0 +1,417 @@
+.composer-bar {
+  width: min(1012px, calc(100% - 56px));
+  flex: 0 0 auto;
+  margin: 0 auto 30px;
+  background: transparent;
+}
+
+.main-content:has(.empty-state) .composer-bar {
+  margin-bottom: auto;
+}
+
+.composer-shell {
+  position: relative;
+  display: grid;
+  gap: 8px;
+}
+
+.composer-main {
+  min-height: 128px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  padding: 16px 18px 54px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: 0 14px 36px rgba(31, 35, 32, 0.08);
+}
+
+.composer-main:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line-strong));
+  box-shadow: 0 0 0 3px var(--accent-soft), 0 16px 38px rgba(31, 35, 32, 0.1);
+}
+
+.composer-input {
+  width: 100%;
+  min-height: 58px;
+  max-height: 130px;
+  padding: 0;
+  border: none;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 16px;
+  line-height: 1.55;
+}
+
+.composer-input::placeholder {
+  color: var(--muted-strong);
+}
+
+.composer-toolbar {
+  position: absolute;
+  left: 14px;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.composer-toolbar__left,
+.composer-toolbar__right,
+.composer-footer__left,
+.composer-footer__right {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.composer-tool-button,
+.composer-pill,
+.composer-status-button {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.composer-tool-button--icon {
+  width: 34px;
+  padding: 0;
+}
+
+.composer-tool-button:hover:not(:disabled),
+.composer-tool-button:focus-visible:not(:disabled),
+.composer-pill:hover,
+.composer-pill:focus-visible,
+.composer-status-button:hover,
+.composer-status-button:focus-visible {
+  background: var(--surface-soft);
+  color: var(--text);
+}
+
+.composer-pill--accent,
+.composer-status-button--sandbox {
+  color: var(--warn);
+}
+
+.composer-pill--closing {
+  opacity: 0;
+  transform: scale(0.96);
+}
+
+.composer-pill__dismiss {
+  display: inline-flex;
+  color: currentColor;
+}
+
+.composer-bar__submit {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #ffffff;
+  transition: background 120ms ease, opacity 120ms ease;
+}
+
+.composer-bar__submit:hover:not(:disabled) {
+  background: var(--accent-strong);
+}
+
+.composer-bar__submit:disabled {
+  opacity: 0.42;
+}
+
+.composer-bar__submit--interrupt {
+  background: var(--danger);
+}
+
+.composer-bar__stop-icon {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: currentColor;
+}
+
+.composer-footer {
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 16px;
+  border: none;
+  border-bottom-right-radius: var(--radius-lg);
+  border-bottom-left-radius: var(--radius-lg);
+  background: transparent;
+}
+
+.composer-context-card {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.composer-context-card__pie {
+  --context-angle: 0deg;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: conic-gradient(var(--accent) 0 var(--context-angle), var(--line-strong) var(--context-angle) 360deg);
+  cursor: help;
+}
+
+.composer-context-card__pie::after {
+  content: "";
+  display: block;
+  width: 14px;
+  height: 14px;
+  margin: 5px;
+  border-radius: 50%;
+  background: var(--main-bg);
+}
+
+.composer-context-card__tooltip {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 10px);
+  z-index: 80;
+  width: max-content;
+  max-width: min(270px, calc(100vw - 32px));
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(4px);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-strong);
+  color: var(--text-soft);
+  box-shadow: var(--shadow-lift);
+  transition: opacity 120ms ease, transform 120ms ease, visibility 120ms ease;
+}
+
+.composer-context-card__tooltip::after {
+  content: "";
+  position: absolute;
+  right: 8px;
+  bottom: -5px;
+  width: 9px;
+  height: 9px;
+  transform: rotate(45deg);
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-strong);
+}
+
+.composer-context-card:hover .composer-context-card__tooltip,
+.composer-context-card:focus-within .composer-context-card__tooltip {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.composer-context-card__tooltip strong {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.composer-context-card__tooltip span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.composer-attachments {
+  margin-bottom: 6px;
+}
+
+.composer-attachment__remove {
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+}
+
+.composer-attachment__remove:hover {
+  background: var(--surface-soft);
+  color: var(--danger);
+}
+
+.composer-popover,
+.skill-mention-popover {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 10px);
+  z-index: 60;
+  min-width: 290px;
+  max-width: min(420px, calc(100vw - 36px));
+  max-height: min(420px, calc(100vh - 160px));
+  padding: 8px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-strong);
+  box-shadow: var(--shadow-lift);
+}
+
+.composer-popover--select {
+  min-width: 320px;
+}
+
+.composer-popover__header {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 8px 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.composer-popover__action,
+.composer-popover__toggle-row,
+.composer-option,
+.skill-mention-option {
+  width: 100%;
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-soft);
+  text-align: left;
+}
+
+.composer-popover__action:hover,
+.composer-popover__toggle-row:hover,
+.composer-option:hover,
+.composer-option--active,
+.skill-mention-option:hover,
+.skill-mention-option--active {
+  background: var(--surface-soft);
+  color: var(--text);
+}
+
+.composer-popover__copy,
+.composer-option__body,
+.skill-mention-option__body {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.composer-popover__copy strong,
+.composer-option__body strong,
+.skill-mention-option__body strong {
+  overflow: hidden;
+  color: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-popover__copy small,
+.composer-option__body small,
+.skill-mention-option__body small,
+.composer-popover__empty {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.composer-option-list {
+  display: grid;
+  gap: 3px;
+}
+
+.composer-switch {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  flex: 0 0 36px;
+  border-radius: 999px;
+  background: var(--line-strong);
+}
+
+.composer-switch--on {
+  background: var(--accent);
+}
+
+.composer-switch__thumb {
+  position: absolute;
+  left: 3px;
+  top: 3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #ffffff;
+  transition: transform 120ms ease;
+}
+
+.composer-switch--on .composer-switch__thumb {
+  transform: translateX(16px);
+}
+
+.composer-status-button__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+html[data-theme="dark"] .composer-main {
+  border-color: #343434;
+  background: #242424;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.22);
+}
+
+html[data-theme="dark"] .composer-footer {
+  border: none;
+  background: transparent;
+}
+
+html[data-theme="dark"] .composer-input {
+  color: var(--text);
+}
+
+html[data-theme="dark"] .composer-context-card__pie {
+  background: conic-gradient(var(--accent) 0 var(--context-angle), #444444 var(--context-angle) 360deg);
+}
+
+html[data-theme="dark"] .composer-context-card__pie::after {
+  background: var(--main-bg);
+}

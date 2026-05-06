@@ -1,0 +1,11 @@
+name: Repo QA
+description: Inspect the repository and summarize the main entry points.
+steps:
+  - id: git-status
+    type: command
+    title: Check repository status
+    command: git status --short --branch
+  - id: summarize
+    type: agent
+    title: Summarize repository state
+    prompt: Summarize the repository state and likely next coding entry points.

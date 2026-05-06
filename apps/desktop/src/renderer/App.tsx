@@ -1,0 +1,8008 @@
+﻿import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ClipboardEvent as ReactClipboardEvent,
+  type KeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
+import {
+  MessageSquarePlus,
+  Zap,
+  Grid3X3,
+  GitBranch,
+  Settings,
+  ArrowUp,
+  Plus,
+  Search,
+  FolderOpen,
+  AlertTriangle,
+  CheckCircle,
+  Check,
+  XCircle,
+  ChevronDown,
+  ChevronRight,
+  Minus,
+  Rabbit,
+  Square,
+  X,
+  ImagePlus,
+  Cpu,
+  FileText,
+  Box,
+  Sun,
+  Moon,
+  MoreHorizontal,
+  Copy,
+  Key,
+  FolderGit2,
+  Shield,
+  Server,
+} from "lucide-react";
+import * as Dialog from "@radix-ui/react-dialog";
+import {
+  type AgentTaskRecord,
+  type ApprovalPolicy,
+  type AutomationRecord,
+  type AutomationRunLogRecord,
+  type AutomationRunRecord,
+  type DistributionTarget,
+  type DistributionTemplateRecord,
+  type ExecutionContextRecord,
+  type InternalToolRecord,
+  type ItemKind,
+  type ItemRecord,
+  type ModelReasoningEffort,
+  type McpMountRecord,
+  type McpSessionRecord,
+  type PendingApproval,
+  type PluginInstallParams,
+  type PluginRecord,
+  type ProjectRecord,
+  type ProviderProfile,
+  type ProviderModelRecord,
+  type RequirementMemoryRecord,
+  type RequirementRecord,
+  type ReviewArtifactRecord,
+  type ReviewRecord,
+  type SandboxMode,
+  type SkillDescriptor,
+  type TerminalBackendCapability,
+  type TerminalSessionRecord,
+  type ToolErrorRecord,
+  type ToolReferenceRecord,
+  type ThreadRecord,
+  type TurnDiffFileRecord,
+  type TurnDiffRecord,
+  type TurnInputAttachment,
+  type TurnContextSnapshotRecord,
+  type TurnPlanRecord,
+  type TurnRecord,
+  type WorktreeRecord,
+  type EnvironmentRecord,
+  type WorkflowRecord,
+  type WorkflowRunRecord,
+} from "@my-agent/protocol";
+import { LoadingShell, PlaceholderPanel, StartupErrorShell } from "./components/shell";
+import { NavButton } from "./components/sidebar";
+import { SettingsNavItem } from "./components/settings";
+import { useAppStore } from "./store";
+
+interface ProviderFormState {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  reasoningEffort: ModelReasoningEffort;
+  rootPath: string;
+  approvalPolicy: ApprovalPolicy;
+  sandboxMode: SandboxMode;
+}
+
+type NavView = "threads" | "skills" | "plugins" | "automation" | "settings";
+type ComposerAttachment = TurnInputAttachment;
+type ThemeMode = "light" | "dark";
+type ReviewSourceKind = ReviewRecord["source"]["kind"];
+type ThreadWorkspaceView = "conversation" | "plan" | "review" | "diff" | "runtime";
+
+const SIDEBAR_WIDTH_STORAGE_KEY = "my-agent-sidebar-width-ratio-v2";
+const SIDEBAR_MIN_RATIO = 0.16;
+const SIDEBAR_MAX_RATIO = 0.34;
+const SIDEBAR_DEFAULT_RATIO = 0.20;
+
+const REASONING_OPTIONS: Array<{ value: ModelReasoningEffort; label: string; hint: string }> = [
+  { value: "minimal", label: "Minimal", hint: "Fastest, uses fewer tokens" },
+  { value: "low", label: "Low", hint: "Lightweight analysis" },
+  { value: "medium", label: "Medium", hint: "Balanced speed and depth" },
+  { value: "high", label: "High", hint: "Best for complex tasks" },
+  { value: "xhigh", label: "Max", hint: "Strongest reasoning, slowest" },
+];
+
+const SANDBOX_MODE_OPTIONS: Array<{ value: SandboxMode; label: string; hint: string }> = [
+  { value: "read-only", label: "Read only", hint: "Only allow reading files inside the workspace." },
+  { value: "workspace-write", label: "Workspace write", hint: "Allow editing files inside the workspace." },
+  { value: "danger-full-access", label: "Full access", hint: "Allow unrestricted filesystem and network access." },
+];
+
+const REVIEW_SOURCE_OPTIONS: Array<{ value: ReviewSourceKind; label: string; hint: string }> = [
+  { value: "workspace", label: "工作区 Diff", hint: "评审当前未暂存和已暂存的改动。" },
+  { value: "staged", label: "已暂存 Diff", hint: "只评审当前已暂存的提交内容。" },
+  { value: "base_branch", label: "基准分支", hint: "评审目标基准分支到 HEAD 的差异。" },
+  { value: "commit", label: "指定提交", hint: "按 SHA 评审一个提交补丁。" },
+];
+
+interface BranchSummary {
+  isGitRepo: boolean;
+  currentBranch: string | null;
+  branches: string[];
+  loading: boolean;
+  error?: string;
+}
+
+interface ContextSummary {
+  usedTokens: number;
+  totalTokens: number;
+  remainingTokens: number;
+  usedRatio: number;
+}
+
+const ITEM_LABELS: Record<ItemKind, string> = {
+  userMessage: "Question",
+  agentMessage: "Response",
+  reasoning: "Reasoning",
+  toolCall: "Tool call",
+  toolResult: "Tool result",
+  commandExecution: "Command",
+  fileChange: "File change",
+  approvalRequest: "Approval",
+  approvalResult: "Approval result",
+  terminalSession: "Terminal",
+  agentTask: "Agent task",
+  error: "Error",
+};
+
+const APP_MENU_ITEMS = [
+  { id: "file", label: "文件" },
+  { id: "edit", label: "编辑" },
+  { id: "view", label: "查看" },
+  { id: "window", label: "窗口" },
+  { id: "help", label: "帮助" },
+] as const;
+
+type ConversationEntry =
+  | { id: string; kind: "user"; item: ItemRecord }
+  | { id: string; kind: "thought"; items: ItemRecord[]; completed: boolean; durationMs: number; startedAtMs: number }
+  | { id: string; kind: "answer"; item: ItemRecord }
+  | { id: string; kind: "changes"; items: ItemRecord[] }
+  | { id: string; kind: "system"; item: ItemRecord };
+
+const THOUGHT_ITEM_KINDS: ItemKind[] = [
+  "reasoning",
+  "toolCall",
+  "toolResult",
+  "commandExecution",
+];
+
+interface ChangedFileReview {
+  path: string;
+  additions?: number;
+  deletions?: number;
+  diff?: string;
+  status: "idle" | "loading" | "ready" | "error";
+  error?: string;
+}
+
+type ThreadChangeFile = TurnDiffFileRecord;
+type ThreadChangeSet = TurnDiffRecord;
+
+interface ConversationFocusTarget {
+  token: number;
+  turnId?: string;
+  itemId?: string;
+}
+
+interface DiffFocusTarget {
+  token: number;
+  changeSetId?: string;
+  filePath?: string;
+}
+
+interface ReviewFocusTarget {
+  token: number;
+  reviewId?: string;
+  findingId?: string;
+}
+
+type RuntimeSelectionKind = "agent" | "executionContext" | "worktree" | "environment";
+
+interface RuntimeFocusTarget {
+  token: number;
+  kind: RuntimeSelectionKind;
+  id: string;
+}
+
+interface ComposerDraftState {
+  input: string;
+  attachments: ComposerAttachment[];
+  includeIdeContext: boolean;
+  planMode: boolean;
+}
+
+interface UserAttachmentSummary {
+  name: string;
+  path?: string;
+  kind: "image" | "text" | "binary";
+  mediaType?: string;
+  truncated?: boolean;
+  previewSrc?: string;
+}
+
+interface RequirementMemoryDraft {
+  brief: string;
+  goals: string;
+  constraints: string;
+  decisions: string;
+  openQuestions: string;
+  definitionOfDone: string;
+}
+
+interface AutomationDraftState {
+  name: string;
+  kind: AutomationRecord["kind"];
+  workflowId: string;
+  prompt: string;
+  threadTitle: string;
+  scheduleType: AutomationRecord["scheduleType"];
+  intervalMinutes: string;
+}
+
+export function App() {
+  const {
+    bootstrapped,
+    bootError,
+    loading,
+    projects,
+    requirements,
+    requirementMemories,
+    threads,
+    threadSessions,
+    reviews,
+    reviewArtifacts,
+    worktrees,
+    environments,
+    executionContexts,
+    workflows,
+    workflowRuns,
+    automations,
+    automationRuns,
+    automationRunLogs,
+    agentTasks,
+    terminals,
+    terminalOutputs,
+    terminalOutputArchives,
+    terminalCapabilities,
+    protocolCompatibility,
+    runtimeTools,
+    templates,
+    skills,
+    activeProjectId,
+    activeRequirementId,
+    activeThreadId,
+    config,
+    providerTestMessage,
+    providerModels,
+    providerModelsLoading,
+    providerModelsError,
+    bootstrap,
+    createProject,
+    createAutomation,
+    updateAutomation,
+    runAutomation,
+    createRequirement,
+    updateRequirement,
+    createThread,
+    assignThreadToRequirement,
+    unassignThreadFromRequirement,
+    updateProject,
+    updateThread,
+    selectRequirement,
+    selectThread,
+    sendTurn,
+    steerTurn,
+    interruptTurn,
+    startReview,
+    respondApproval,
+    toggleSkill,
+    updateConfig,
+    testProvider,
+    refreshProviderModels,
+    refreshToolCatalog,
+    installPlugin,
+    scaffoldTemplate,
+  } = useAppStore();
+
+  const [activeView, setActiveView] = useState<NavView>("threads");
+  const [composerDrafts, setComposerDrafts] = useState<Record<string, ComposerDraftState>>({});
+  const [composerMenuOpen, setComposerMenuOpen] = useState(false);
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const [reasoningMenuOpen, setReasoningMenuOpen] = useState(false);
+  const [themeMode, setThemeMode] = useState<ThemeMode>("light");
+  const [skillDetailId, setSkillDetailId] = useState<string | null>(null);
+  const [skillDocument, setSkillDocument] = useState("");
+  const [skillDocumentLoading, setSkillDocumentLoading] = useState(false);
+  const [skillDocumentError, setSkillDocumentError] = useState<string | null>(null);
+  const [runtimePlugins, setRuntimePlugins] = useState<PluginRecord[]>([]);
+  const [runtimeInternalTools, setRuntimeInternalTools] = useState<InternalToolRecord[]>([]);
+  const [runtimeMcpMounts, setRuntimeMcpMounts] = useState<McpMountRecord[]>([]);
+  const [runtimeMcpSessions, setRuntimeMcpSessions] = useState<McpSessionRecord[]>([]);
+  const [threadSearch, setThreadSearch] = useState("");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarWidthRatio, setSidebarWidthRatio] = useState(() => {
+    const stored = window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY);
+    const parsed = stored ? Number.parseFloat(stored) : Number.NaN;
+    return Number.isFinite(parsed) ? clamp(parsed, SIDEBAR_MIN_RATIO, SIDEBAR_MAX_RATIO) : SIDEBAR_DEFAULT_RATIO;
+  });
+  const [sandboxMenuOpen, setSandboxMenuOpen] = useState(false);
+  const [branchMenuOpen, setBranchMenuOpen] = useState(false);
+  const [branchSearch, setBranchSearch] = useState("");
+  const [reviewMenuOpen, setReviewMenuOpen] = useState(false);
+  const [reviewSourceKind, setReviewSourceKind] = useState<ReviewSourceKind>("workspace");
+  const [reviewBaseBranch, setReviewBaseBranch] = useState("main");
+  const [reviewCommit, setReviewCommit] = useState("");
+  const [threadWorkspaceView, setThreadWorkspaceView] = useState<ThreadWorkspaceView>("conversation");
+  const [conversationFocusTarget, setConversationFocusTarget] = useState<ConversationFocusTarget | null>(null);
+  const [diffFocusTarget, setDiffFocusTarget] = useState<DiffFocusTarget | null>(null);
+  const [reviewFocusTarget, setReviewFocusTarget] = useState<ReviewFocusTarget | null>(null);
+  const [runtimeFocusTarget, setRuntimeFocusTarget] = useState<RuntimeFocusTarget | null>(null);
+  const [steerInput, setSteerInput] = useState("");
+  const [selectedTerminalId, setSelectedTerminalId] = useState<string | null>(null);
+  const [terminalInput, setTerminalInput] = useState("");
+  const [branchSummary, setBranchSummary] = useState<BranchSummary>({
+    isGitRepo: false,
+    currentBranch: null,
+    branches: [],
+    loading: false,
+  });
+  const [providerForm, setProviderForm] = useState<ProviderFormState>({
+    baseUrl: "",
+    apiKey: "",
+    model: "",
+    reasoningEffort: "high",
+    rootPath: "",
+    approvalPolicy: "on-request",
+    sandboxMode: "workspace-write",
+  });
+  const [newRequirementTitle, setNewRequirementTitle] = useState("");
+  const [newRequirementProjectId, setNewRequirementProjectId] = useState<string | null>(null);
+  const [savingRequirement, setSavingRequirement] = useState(false);
+  const [requirementDraft, setRequirementDraft] = useState<RequirementMemoryDraft>({
+    brief: "",
+    goals: "",
+    constraints: "",
+    decisions: "",
+    openQuestions: "",
+    definitionOfDone: "",
+  });
+  const [requirementSaveMessage, setRequirementSaveMessage] = useState<string | null>(null);
+  const composerMenuRef = useRef<HTMLDivElement | null>(null);
+  const modelMenuRef = useRef<HTMLDivElement | null>(null);
+  const reasoningMenuRef = useRef<HTMLDivElement | null>(null);
+  const sandboxMenuRef = useRef<HTMLDivElement | null>(null);
+  const branchMenuRef = useRef<HTMLDivElement | null>(null);
+  const reviewMenuRef = useRef<HTMLDivElement | null>(null);
+  const appContainerRef = useRef<HTMLDivElement | null>(null);
+  const messageAreaRef = useRef<HTMLDivElement | null>(null);
+  const sidebarResizeStateRef = useRef<{ pointerId: number; startX: number; startRatio: number } | null>(null);
+  const pendingThreadScrollRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    void bootstrap();
+  }, [bootstrap]);
+
+  useEffect(() => {
+    const storedTheme = window.localStorage.getItem("my-agent-theme");
+
+    if (storedTheme === "light" || storedTheme === "dark") {
+      setThemeMode(storedTheme);
+      return;
+    }
+
+    const prefersDark = window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
+    setThemeMode(prefersDark ? "dark" : "light");
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = themeMode;
+    window.localStorage.setItem("my-agent-theme", themeMode);
+    void window.myAgent.setTitleBarTheme(themeMode);
+  }, [themeMode]);
+
+  useEffect(() => {
+    window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(sidebarWidthRatio));
+  }, [sidebarWidthRatio]);
+
+  useEffect(() => {
+    if (!config) {
+      return;
+    }
+
+    const selectedProject =
+      projects.find((project) => project.id === activeProjectId) ??
+      projects[0];
+
+    setProviderForm({
+      baseUrl: config.provider.baseUrl,
+      apiKey: config.provider.apiKey,
+      model: config.provider.model,
+      reasoningEffort: config.provider.reasoningEffort ?? "high",
+      rootPath: selectedProject?.rootPath ?? config.workspace.rootPath,
+      approvalPolicy: selectedProject?.approvalPolicy ?? config.workspace.approvalPolicy,
+      sandboxMode: selectedProject?.sandboxMode ?? config.workspace.sandboxMode,
+    });
+  }, [activeProjectId, config, projects]);
+
+  useEffect(() => {
+    if (!newRequirementProjectId) {
+      const selectedRequirement = activeRequirementId ? requirements.find((requirement) => requirement.id === activeRequirementId) : null;
+      setNewRequirementProjectId(selectedRequirement?.primaryProjectId ?? activeProjectId ?? projects[0]?.id ?? null);
+    }
+  }, [activeProjectId, activeRequirementId, newRequirementProjectId, projects, requirements]);
+
+  useEffect(() => {
+    const currentMemory = activeRequirementId
+      ? requirementMemories.find((memory) => memory.requirementId === activeRequirementId) ?? null
+      : null;
+
+    if (!currentMemory) {
+      setRequirementDraft({
+        brief: "",
+        goals: "",
+        constraints: "",
+        decisions: "",
+        openQuestions: "",
+        definitionOfDone: "",
+      });
+      return;
+    }
+
+    setRequirementDraft({
+      brief: currentMemory.manual.brief,
+      goals: currentMemory.manual.goals.join("\n"),
+      constraints: currentMemory.manual.constraints.join("\n"),
+      decisions: currentMemory.manual.decisions.join("\n"),
+      openQuestions: currentMemory.manual.openQuestions.join("\n"),
+      definitionOfDone: currentMemory.manual.definitionOfDone.join("\n"),
+    });
+  }, [activeRequirementId, requirementMemories]);
+
+  useEffect(() => {
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+
+      if (composerMenuRef.current && !composerMenuRef.current.contains(target)) {
+        setComposerMenuOpen(false);
+      }
+
+      if (modelMenuRef.current && !modelMenuRef.current.contains(target)) {
+        setModelMenuOpen(false);
+      }
+
+      if (reasoningMenuRef.current && !reasoningMenuRef.current.contains(target)) {
+        setReasoningMenuOpen(false);
+      }
+
+      if (sandboxMenuRef.current && !sandboxMenuRef.current.contains(target)) {
+        setSandboxMenuOpen(false);
+      }
+
+      if (branchMenuRef.current && !branchMenuRef.current.contains(target)) {
+        setBranchMenuOpen(false);
+      }
+
+      if (reviewMenuRef.current && !reviewMenuRef.current.contains(target)) {
+        setReviewMenuOpen(false);
+      }
+    };
+
+    window.addEventListener("pointerdown", handlePointerDown);
+    return () => window.removeEventListener("pointerdown", handlePointerDown);
+  }, []);
+
+  useEffect(() => {
+    if (!activeThreadId) {
+      pendingThreadScrollRef.current = null;
+      return;
+    }
+
+    pendingThreadScrollRef.current = activeThreadId;
+  }, [activeThreadId]);
+
+  useEffect(() => {
+    const handlePointerMove = (event: PointerEvent) => {
+      const resizeState = sidebarResizeStateRef.current;
+      const container = appContainerRef.current;
+
+      if (!resizeState || !container || event.pointerId !== resizeState.pointerId) {
+        return;
+      }
+
+      const rect = container.getBoundingClientRect();
+
+      if (rect.width <= 0) {
+        return;
+      }
+
+      const deltaRatio = (event.clientX - resizeState.startX) / rect.width;
+      setSidebarWidthRatio(clamp(resizeState.startRatio + deltaRatio, SIDEBAR_MIN_RATIO, SIDEBAR_MAX_RATIO));
+    };
+
+    const handlePointerEnd = (event: PointerEvent) => {
+      if (!sidebarResizeStateRef.current || event.pointerId !== sidebarResizeStateRef.current.pointerId) {
+        return;
+      }
+
+      sidebarResizeStateRef.current = null;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerEnd);
+    window.addEventListener("pointercancel", handlePointerEnd);
+
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerEnd);
+      window.removeEventListener("pointercancel", handlePointerEnd);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+  }, []);
+
+  const orderedThreads = useMemo(
+    () => [...threads].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
+    [threads],
+  );
+  const activeSession = useMemo(
+    () => (activeThreadId ? threadSessions[activeThreadId] ?? createEmptyThreadSessionView() : null),
+    [activeThreadId, threadSessions],
+  );
+  const orderedItems = useMemo(
+    () => [...(activeSession?.items ?? [])].sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
+    [activeSession?.items],
+  );
+  const conversationEntries = useMemo(
+    () => buildConversationEntries(orderedItems),
+    [orderedItems],
+  );
+  const threadChangeSets = useMemo(
+    () => activeSession?.turnDiffs ?? [],
+    [activeSession?.turnDiffs],
+  );
+  const threadChangedFileCount = useMemo(
+    () => new Set(threadChangeSets.flatMap((changeSet) => changeSet.files.map((file) => file.path))).size,
+    [threadChangeSets],
+  );
+  const activeThread = useMemo(
+    () => orderedThreads.find((thread) => thread.id === activeThreadId),
+    [activeThreadId, orderedThreads],
+  );
+  const activeProject = useMemo(
+    () => projects.find((project) => project.id === activeProjectId),
+    [activeProjectId, projects],
+  );
+  const activeRequirement = useMemo(
+    () => requirements.find((requirement) => requirement.id === activeRequirementId) ?? null,
+    [activeRequirementId, requirements],
+  );
+  const activeRequirementMemory = useMemo(
+    () =>
+      (activeRequirementId
+        ? requirementMemories.find((memory) => memory.requirementId === activeRequirementId)
+        : undefined) ?? null,
+    [activeRequirementId, requirementMemories],
+  );
+  const activeRequirementPrimaryProject = useMemo(
+    () => (activeRequirement ? projects.find((project) => project.id === activeRequirement.primaryProjectId) ?? null : null),
+    [activeRequirement, projects],
+  );
+  const requirementThreads = useMemo(
+    () =>
+      activeRequirementId
+        ? orderedThreads.filter((thread) => thread.requirementId === activeRequirementId)
+        : [],
+    [activeRequirementId, orderedThreads],
+  );
+  const unassignedThreadsByProject = useMemo(() => {
+    const grouped = new Map<string, ThreadRecord[]>();
+
+    for (const thread of orderedThreads.filter((entry) => !entry.requirementId)) {
+      const bucket = grouped.get(thread.projectId) ?? [];
+      bucket.push(thread);
+      grouped.set(thread.projectId, bucket);
+    }
+
+    return [...grouped.entries()].map(([projectId, projectThreads]) => ({
+      project: projects.find((project) => project.id === projectId) ?? null,
+      threads: projectThreads,
+    }));
+  }, [orderedThreads, projects]);
+  const activeTurn = useMemo(
+    () => [...(activeSession?.turns ?? [])].sort((left, right) => left.updatedAt.localeCompare(right.updatedAt)).at(-1),
+    [activeSession?.turns],
+  );
+  const latestTurnContext = useMemo(() => {
+    const contexts = activeSession?.turnContexts ?? [];
+
+    if (contexts.length === 0) {
+      return null;
+    }
+
+    if (activeTurn) {
+      return contexts.find((snapshot) => snapshot.turnId === activeTurn.id) ?? contexts.at(-1) ?? null;
+    }
+
+    return contexts.at(-1) ?? null;
+  }, [activeSession?.turnContexts, activeTurn]);
+  const latestTurnPlan = useMemo(() => {
+    const plans = activeSession?.turnPlans ?? [];
+
+    if (plans.length === 0) {
+      return null;
+    }
+
+    if (activeTurn) {
+      return plans.find((plan) => plan.turnId === activeTurn.id) ?? plans.at(-1) ?? null;
+    }
+
+    return plans.at(-1) ?? null;
+  }, [activeSession?.turnPlans, activeTurn]);
+  const showingThreadWorkspace = Boolean(activeThreadId && activeThread);
+  const interruptibleTurnId = useMemo(() => {
+    const candidate = [...(activeSession?.turns ?? [])]
+      .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt))
+      .reverse()
+      .find((turn) => turn.status === "running");
+
+    return candidate?.id;
+  }, [activeSession?.turns]);
+  const steerableTurnId = interruptibleTurnId;
+  const workingThreadIds = useMemo(
+    () =>
+      new Set(
+        Object.entries(threadSessions)
+          .filter(([, session]) => session.submitting || session.turns.some((turn) => turn.status === "running" || turn.status === "awaiting_approval"))
+          .map(([threadId]) => threadId),
+      ),
+    [threadSessions],
+  );
+  const currentThreadBusy = Boolean(activeThreadId && workingThreadIds.has(activeThreadId));
+  const canInterrupt = currentThreadBusy && Boolean(interruptibleTurnId);
+  const activeReviews = useMemo(
+    () =>
+      reviews.filter((review) => {
+        if (activeThreadId && review.threadId) {
+          return review.threadId === activeThreadId;
+        }
+
+        return Boolean(activeProjectId) && review.projectId === activeProjectId;
+      }),
+    [activeProjectId, activeThreadId, reviews],
+  );
+  const latestReview = activeReviews[0] ?? null;
+  const latestReviewArtifact = latestReview ? reviewArtifacts[latestReview.id] ?? buildReviewArtifactFallback(latestReview) : null;
+  const threadAgentTree = useMemo(() => {
+    if (!activeThreadId) {
+      return [] as AgentTreeNode[];
+    }
+
+    const seedAgentIds = new Set(agentTasks.filter((task) => task.parentThreadId === activeThreadId).map((task) => task.id));
+    return buildAgentTree(agentTasks, seedAgentIds);
+  }, [activeThreadId, agentTasks]);
+  const threadAgentIds = useMemo(() => new Set(collectAgentTreeIds(threadAgentTree)), [threadAgentTree]);
+  const threadExecutionContexts = useMemo(() => {
+    if (!activeThreadId) {
+      return [] as ExecutionContextRecord[];
+    }
+
+    return [...executionContexts]
+      .filter((executionContext) => executionContext.threadId === activeThreadId || (executionContext.agentId && threadAgentIds.has(executionContext.agentId)))
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  }, [activeThreadId, executionContexts, threadAgentIds]);
+  const threadWorktrees = useMemo(() => {
+    if (!activeThreadId) {
+      return [] as WorktreeRecord[];
+    }
+
+    const executionContextWorktreeIds = new Set(
+      threadExecutionContexts.map((executionContext) => executionContext.worktreeId).filter((value): value is string => Boolean(value)),
+    );
+
+    return [...worktrees]
+      .filter(
+        (worktree) =>
+          worktree.threadId === activeThreadId ||
+          executionContextWorktreeIds.has(worktree.id) ||
+          (worktree.agentId ? threadAgentIds.has(worktree.agentId) : false),
+      )
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  }, [activeThreadId, threadAgentIds, threadExecutionContexts, worktrees]);
+  const threadEnvironments = useMemo(() => {
+    if (!activeThreadId) {
+      return [] as EnvironmentRecord[];
+    }
+
+    const executionContextEnvironmentIds = new Set(
+      threadExecutionContexts.map((executionContext) => executionContext.environmentId).filter((value): value is string => Boolean(value)),
+    );
+    const threadWorktreeIds = new Set(threadWorktrees.map((worktree) => worktree.id));
+
+    return [...environments]
+      .filter(
+        (environment) =>
+          environment.threadId === activeThreadId ||
+          executionContextEnvironmentIds.has(environment.id) ||
+          (environment.worktreeId ? threadWorktreeIds.has(environment.worktreeId) : false),
+      )
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  }, [activeThreadId, environments, threadExecutionContexts, threadWorktrees]);
+  const threadContextLineage = useMemo(
+    () =>
+      activeThreadId
+        ? buildThreadExecutionContextLineage({
+            thread: activeThread ?? null,
+            executionContexts: threadExecutionContexts,
+            environments: threadEnvironments,
+            worktrees: threadWorktrees,
+            agentTree: threadAgentTree,
+          })
+        : ([] as ContextLineageNode[]),
+    [activeThread, activeThreadId, threadAgentTree, threadEnvironments, threadExecutionContexts, threadWorktrees],
+  );
+  const reviewRunning = activeReviews.some((review) => review.status === "running");
+  const reviewSourceLabel = useMemo(() => {
+    switch (reviewSourceKind) {
+      case "staged":
+        return "已暂存";
+      case "base_branch":
+        return `基准: ${reviewBaseBranch.trim() || "branch"}`;
+      case "commit":
+        return `提交: ${reviewCommit.trim() ? reviewCommit.trim().slice(0, 10) : "SHA"}`;
+      default:
+        return "工作区";
+    }
+  }, [reviewBaseBranch, reviewCommit, reviewSourceKind]);
+  const canStartReview = useMemo(() => {
+    if (!activeProjectId || reviewRunning) {
+      return false;
+    }
+
+    if (reviewSourceKind === "base_branch") {
+      return reviewBaseBranch.trim().length > 0;
+    }
+
+    if (reviewSourceKind === "commit") {
+      return reviewCommit.trim().length > 0;
+    }
+
+    return true;
+  }, [activeProjectId, reviewBaseBranch, reviewCommit, reviewRunning, reviewSourceKind]);
+  const threadTerminals = useMemo(() => {
+    if (!activeThreadId) {
+      return [] as TerminalSessionRecord[];
+    }
+
+    return [...terminals]
+      .filter((terminal) => terminal.threadId === activeThreadId)
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  }, [activeThreadId, terminals]);
+  const activeTerminal = useMemo(() => {
+    if (threadTerminals.length === 0) {
+      return null;
+    }
+
+    return threadTerminals.find((terminal) => terminal.id === selectedTerminalId) ?? threadTerminals[0] ?? null;
+  }, [selectedTerminalId, threadTerminals]);
+  const activeTerminalOutput = activeTerminal ? (terminalOutputs[activeTerminal.id] ?? "") : "";
+  const activeTerminalArchives = useMemo(
+    () => (activeTerminal ? terminalOutputArchives.filter((archive) => archive.sessionId === activeTerminal.id) : []),
+    [activeTerminal, terminalOutputArchives],
+  );
+  const enabledSkills = useMemo(() => skills.filter((skill) => skill.enabled), [skills]);
+  const currentSkillDetail = useMemo(
+    () => skills.find((skill) => skill.id === skillDetailId) ?? null,
+    [skillDetailId, skills],
+  );
+  const currentSandboxMode = activeThread?.sandboxMode ?? activeProject?.sandboxMode ?? config?.workspace.sandboxMode ?? "workspace-write";
+  const availableModels = useMemo(() => {
+    const merged = new Map<string, ProviderModelRecord>();
+
+    for (const model of providerModels) {
+      merged.set(model.id, model);
+    }
+
+    const configuredModel = config?.provider.model?.trim();
+
+    if (configuredModel && !merged.has(configuredModel)) {
+      merged.set(configuredModel, { id: configuredModel });
+    }
+
+    return [...merged.values()];
+  }, [config?.provider.model, providerModels]);
+  const filteredBranches = useMemo(() => {
+    const query = branchSearch.trim().toLowerCase();
+
+    if (!query) {
+      return branchSummary.branches;
+    }
+
+    return branchSummary.branches.filter((branch) => branch.toLowerCase().includes(query));
+  }, [branchSearch, branchSummary.branches]);
+  const activeDraft = useMemo(
+    () => getComposerDraft(composerDrafts, activeThreadId),
+    [activeThreadId, composerDrafts],
+  );
+  const input = activeDraft.input;
+  const attachments = activeDraft.attachments;
+  const includeIdeContext = activeDraft.includeIdeContext;
+  const planMode = activeDraft.planMode;
+  const pendingApproval = activeSession?.pendingApproval ?? null;
+
+  useEffect(() => {
+    setThreadWorkspaceView("conversation");
+    setConversationFocusTarget(null);
+    setDiffFocusTarget(null);
+    setReviewFocusTarget(null);
+    setRuntimeFocusTarget(null);
+  }, [activeThreadId]);
+
+  useEffect(() => {
+    if (threadWorkspaceView === "diff" && threadChangeSets.length === 0) {
+      setThreadWorkspaceView("conversation");
+    }
+  }, [threadChangeSets.length, threadWorkspaceView]);
+
+  useEffect(() => {
+    const targetThreadId = pendingThreadScrollRef.current;
+
+    if (!activeThreadId || !targetThreadId || targetThreadId !== activeThreadId) {
+      return;
+    }
+
+    const delays = [0, 80, 220];
+    const timers = delays.map((delay, index) =>
+      window.setTimeout(() => {
+        const container = messageAreaRef.current;
+
+        if (!container || pendingThreadScrollRef.current !== targetThreadId) {
+          return;
+        }
+
+        container.scrollTop = container.scrollHeight;
+
+        if (index === delays.length - 1) {
+          pendingThreadScrollRef.current = null;
+        }
+      }, delay),
+    );
+
+    return () => {
+      for (const timer of timers) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, [activeThreadId, orderedItems.length, pendingApproval?.id]);
+  useEffect(() => {
+    if (threadTerminals.length === 0) {
+      setSelectedTerminalId(null);
+      return;
+    }
+
+    if (!selectedTerminalId || !threadTerminals.some((terminal) => terminal.id === selectedTerminalId)) {
+      setSelectedTerminalId(threadTerminals[0]?.id ?? null);
+    }
+  }, [selectedTerminalId, threadTerminals]);
+  const contextSummary = useMemo(
+    () =>
+      estimateContextUsage({
+        modelId: config?.provider.model,
+        items: orderedItems,
+        turns: activeSession?.turns ?? [],
+        input,
+        attachments,
+      }),
+    [activeSession?.turns, attachments, config?.provider.model, input, orderedItems],
+  );
+  const setActiveDraft = (updater: (draft: ComposerDraftState) => ComposerDraftState) => {
+    setComposerDrafts((current) => {
+      const key = activeThreadId ?? "__draft__";
+      const draft = getComposerDraft(current, activeThreadId);
+      return {
+        ...current,
+        [key]: updater(draft),
+      };
+    });
+  };
+
+  const focusConversationTarget = (target: Omit<ConversationFocusTarget, "token">) => {
+    setThreadWorkspaceView("conversation");
+    setConversationFocusTarget({
+      ...target,
+      token: Date.now(),
+    });
+  };
+
+  const focusReviewTarget = (target: Omit<ReviewFocusTarget, "token">) => {
+    setThreadWorkspaceView("review");
+    setReviewFocusTarget({
+      ...target,
+      token: Date.now(),
+    });
+  };
+
+  const focusDiffTarget = (target: Omit<DiffFocusTarget, "token">) => {
+    setThreadWorkspaceView("diff");
+    setDiffFocusTarget({
+      ...target,
+      token: Date.now(),
+    });
+  };
+
+  const focusRuntimeTarget = (target: Omit<RuntimeFocusTarget, "token">) => {
+    setThreadWorkspaceView("runtime");
+    setRuntimeFocusTarget({
+      ...target,
+      token: Date.now(),
+    });
+  };
+
+  const openPlanTurn = (plan: TurnPlanRecord) => {
+    focusConversationTarget({
+      turnId: plan.turnId,
+      itemId: plan.sourceItemId,
+    });
+  };
+
+  const openReviewTarget = (params: { reviewId: string; findingId?: string; filePath?: string }) => {
+    if (params.filePath) {
+      const selection = findChangeSetSelectionForFile(threadChangeSets, params.filePath);
+      focusDiffTarget({
+        changeSetId: selection?.changeSetId,
+        filePath: params.filePath,
+      });
+      return;
+    }
+
+    focusReviewTarget({
+      reviewId: params.reviewId,
+      findingId: params.findingId,
+    });
+  };
+
+  useEffect(() => {
+    if (!currentSkillDetail) {
+      setSkillDocument("");
+      setSkillDocumentLoading(false);
+      setSkillDocumentError(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    setSkillDocumentLoading(true);
+    setSkillDocumentError(null);
+
+    const loadSkillDocument = async () => {
+      try {
+        const readSkillDocument = window.myAgent?.readSkillDocument;
+
+        if (typeof readSkillDocument !== "function") {
+          throw new Error("Skill document reader is unavailable. Restart my-agent and try again.");
+        }
+
+        const { content } = await readSkillDocument(currentSkillDetail.path);
+
+        if (cancelled) {
+          return;
+        }
+
+        setSkillDocument(content);
+      } catch (error: unknown) {
+        if (cancelled) {
+          return;
+        }
+
+        setSkillDocument("");
+        setSkillDocumentError(error instanceof Error ? error.message : "Unable to load SKILL.md.");
+      } finally {
+        if (!cancelled) {
+          setSkillDocumentLoading(false);
+        }
+      }
+    };
+
+    void loadSkillDocument();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentSkillDetail]);
+
+  const refreshRuntimeSurfaces = async (projectId = activeProjectId) => {
+    const [pluginsResult, internalToolsResult, mcpMountsResult, mcpSessionsResult] = await Promise.all([
+      window.myAgent.listPlugins({ projectId }),
+      window.myAgent.listInternalTools({ projectId }),
+      window.myAgent.listMcpMounts(),
+      window.myAgent.listMcpSessions(),
+    ]);
+
+    setRuntimePlugins(pluginsResult.plugins);
+    setRuntimeInternalTools(internalToolsResult.internalTools);
+    setRuntimeMcpMounts(mcpMountsResult.mounts);
+    setRuntimeMcpSessions(mcpSessionsResult.sessions);
+  };
+
+  useEffect(() => {
+    void Promise.all([
+      refreshToolCatalog(activeProjectId ? { projectId: activeProjectId } : undefined),
+      refreshRuntimeSurfaces(activeProjectId),
+    ]).catch(() => undefined);
+  }, [activeProjectId, refreshToolCatalog]);
+
+  useEffect(() => {
+    setBranchMenuOpen(false);
+    setBranchSearch("");
+  }, [activeProjectId, activeThreadId]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadBranchSummary = async () => {
+      if (!activeProject?.rootPath) {
+        setBranchSummary({
+          isGitRepo: false,
+          currentBranch: null,
+          branches: [],
+          loading: false,
+        });
+        return;
+      }
+
+      setBranchSummary((current) => ({ ...current, loading: true, error: undefined }));
+
+      try {
+        const scope = activeThreadId ? { threadId: activeThreadId, cwd: activeProject.rootPath } : { cwd: activeProject.rootPath };
+        const repoCheck = await window.myAgent.execCommand({
+          ...scope,
+          command: "git rev-parse --is-inside-work-tree",
+        });
+
+        if (cancelled) {
+          return;
+        }
+
+        if (repoCheck.code !== 0 || repoCheck.stdout.trim() !== "true") {
+          setBranchSummary({
+            isGitRepo: false,
+            currentBranch: null,
+            branches: [],
+            loading: false,
+          });
+          return;
+        }
+
+        const [currentResult, branchesResult] = await Promise.all([
+          window.myAgent.execCommand({
+            ...scope,
+            command: "git branch --show-current",
+          }),
+          window.myAgent.execCommand({
+            ...scope,
+            command: 'git for-each-ref --format="%(refname:short)" refs/heads',
+          }),
+        ]);
+
+        if (cancelled) {
+          return;
+        }
+
+        const currentBranch = currentResult.code === 0 ? currentResult.stdout.trim() || null : null;
+        const branches = branchesResult.stdout
+          .split(/\r?\n/)
+          .map((entry) => entry.trim())
+          .filter(Boolean);
+
+        setBranchSummary({
+          isGitRepo: true,
+          currentBranch,
+          branches,
+          loading: false,
+          error: undefined,
+        });
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+
+        setBranchSummary({
+          isGitRepo: false,
+          currentBranch: null,
+          branches: [],
+          loading: false,
+          error: error instanceof Error ? error.message : "Unable to inspect git branches.",
+        });
+      }
+    };
+
+    void loadBranchSummary();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeProject?.rootPath, activeThreadId]);
+
+  const handleCreateThread = async (projectId?: string, requirementId?: string) => {
+    await createThread(undefined, projectId ?? activeProjectId, requirementId ?? activeRequirementId);
+    setActiveView("threads");
+  };
+
+  const handleSelectRequirement = async (requirementId?: string) => {
+    await selectRequirement(requirementId);
+    setActiveView("threads");
+  };
+
+  const handleCreateRequirement = async () => {
+    const title = newRequirementTitle.trim();
+    const primaryProjectId = newRequirementProjectId ?? activeProjectId ?? projects[0]?.id;
+
+    if (!title || !primaryProjectId) {
+      return;
+    }
+
+    setSavingRequirement(true);
+    setRequirementSaveMessage(null);
+
+    try {
+      await createRequirement({
+        title,
+        primaryProjectId,
+      });
+      setNewRequirementTitle("");
+      setRequirementSaveMessage("Requirement created.");
+    } catch (error) {
+      setRequirementSaveMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSavingRequirement(false);
+    }
+  };
+
+  const handleSaveRequirementMemory = async () => {
+    if (!activeRequirement) {
+      return;
+    }
+
+    setSavingRequirement(true);
+    setRequirementSaveMessage(null);
+
+    try {
+      await updateRequirement(activeRequirement.id, {
+        memory: {
+          brief: requirementDraft.brief,
+          goals: splitLines(requirementDraft.goals),
+          constraints: splitLines(requirementDraft.constraints),
+          decisions: splitLines(requirementDraft.decisions),
+          openQuestions: splitLines(requirementDraft.openQuestions),
+          definitionOfDone: splitLines(requirementDraft.definitionOfDone),
+        },
+      });
+      setRequirementSaveMessage("Requirement memory saved.");
+    } catch (error) {
+      setRequirementSaveMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSavingRequirement(false);
+    }
+  };
+
+  const handleThreadSandboxModeChange = async (mode: SandboxMode) => {
+    if (!activeThread || activeThread.sandboxMode === mode) {
+      setSandboxMenuOpen(false);
+      return;
+    }
+
+    await updateThread(activeThread.id, { sandboxMode: mode });
+    setSandboxMenuOpen(false);
+  };
+
+  const handleSelectThread = async (threadId: string) => {
+    await selectThread(threadId);
+    setActiveView("threads");
+  };
+
+  const handleCreateProject = async () => {
+    const picked = await window.myAgent.pickWorkspace();
+
+    if (!picked) {
+      return;
+    }
+
+    await createProject({ rootPath: picked });
+    setActiveView("threads");
+  };
+
+  const handleSidebarResizeStart = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (sidebarCollapsed) {
+      return;
+    }
+
+    sidebarResizeStateRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startRatio: sidebarWidthRatio,
+    };
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  };
+
+  const handleShowAppMenu = (
+    menuId: (typeof APP_MENU_ITEMS)[number]["id"],
+    event: ReactMouseEvent<HTMLButtonElement>,
+  ) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+
+    void window.myAgent.showAppMenu({
+      menuId,
+      x: Math.round(rect.left),
+      y: Math.round(rect.bottom + 6),
+    });
+  };
+
+  const handlePickFiles = async () => {
+    const pickedFiles = await window.myAgent.pickFiles();
+
+    if (pickedFiles.length === 0) {
+      return;
+    }
+
+    setActiveDraft((draft) => ({
+      ...draft,
+      attachments: mergeComposerAttachments(draft.attachments, pickedFiles),
+    }));
+    setComposerMenuOpen(false);
+  };
+
+  const handleSwitchBranch = async (branchName: string) => {
+    if (!activeProject?.rootPath) {
+      return;
+    }
+
+    const scope = activeThreadId ? { threadId: activeThreadId, cwd: activeProject.rootPath } : { cwd: activeProject.rootPath };
+    const result = await window.myAgent.execCommand({
+      ...scope,
+      command: `git checkout ${quoteGitPath(branchName)}`,
+    });
+
+    if (result.code !== 0) {
+      setBranchSummary((current) => ({
+        ...current,
+        error: [result.stdout, result.stderr].filter(Boolean).join("\n").trim() || `Unable to checkout ${branchName}.`,
+      }));
+      return;
+    }
+
+    setBranchMenuOpen(false);
+    setBranchSearch("");
+    setBranchSummary((current) => ({ ...current, currentBranch: branchName, error: undefined }));
+  };
+
+  const handleCreateBranch = async () => {
+    if (!activeProject?.rootPath) {
+      return;
+    }
+
+    const branchName = window.prompt("New branch name", "");
+
+    if (!branchName) {
+      return;
+    }
+
+    const trimmed = branchName.trim();
+
+    if (!trimmed) {
+      return;
+    }
+
+    const scope = activeThreadId ? { threadId: activeThreadId, cwd: activeProject.rootPath } : { cwd: activeProject.rootPath };
+    const result = await window.myAgent.execCommand({
+      ...scope,
+      command: `git checkout -b ${quoteGitPath(trimmed)}`,
+    });
+
+    if (result.code !== 0) {
+      setBranchSummary((current) => ({
+        ...current,
+        error: [result.stdout, result.stderr].filter(Boolean).join("\n").trim() || `Unable to create branch ${trimmed}.`,
+      }));
+      return;
+    }
+
+    setBranchMenuOpen(false);
+    setBranchSearch("");
+    setBranchSummary((current) => ({
+      isGitRepo: true,
+      currentBranch: trimmed,
+      branches: current.branches.includes(trimmed) ? current.branches : [trimmed, ...current.branches],
+      loading: false,
+      error: undefined,
+    }));
+  };
+
+  const handleModelSelect = async (modelId: string) => {
+    setModelMenuOpen(false);
+
+    if (!config || config.provider.model === modelId) {
+      return;
+    }
+
+    await updateConfig({
+      provider: {
+        ...config.provider,
+        model: modelId,
+      },
+    });
+  };
+
+  const handleReasoningSelect = async (effort: ModelReasoningEffort) => {
+    setReasoningMenuOpen(false);
+
+    if (!config || config.provider.reasoningEffort === effort) {
+      return;
+    }
+
+    await updateConfig({
+      provider: {
+        ...config.provider,
+        reasoningEffort: effort,
+      },
+    });
+  };
+
+  const submitTurn = async () => {
+    const message = input.trim();
+
+    if (!message && attachments.length === 0) {
+      return;
+    }
+
+    const composedMessage = buildComposerInput({
+      message,
+      planMode,
+    });
+
+    setActiveDraft((draft) => ({
+      ...draft,
+      input: "",
+      attachments: [],
+    }));
+    setComposerMenuOpen(false);
+    await sendTurn(composedMessage, [], attachments, includeIdeContext);
+  };
+
+  const submitSteer = async () => {
+    const message = steerInput.trim();
+
+    if (!steerableTurnId || !message) {
+      return;
+    }
+
+    await steerTurn(steerableTurnId, message);
+    setSteerInput("");
+  };
+
+  const triggerReview = async () => {
+    if (!activeProjectId) {
+      return;
+    }
+
+    const source: ReviewRecord["source"] =
+      reviewSourceKind === "base_branch"
+        ? { kind: "base_branch", baseBranch: reviewBaseBranch.trim() }
+        : reviewSourceKind === "commit"
+          ? { kind: "commit", commit: reviewCommit.trim() }
+          : { kind: reviewSourceKind };
+
+    await startReview({
+      projectId: activeProjectId,
+      threadId: activeThreadId,
+      source,
+    });
+    setReviewMenuOpen(false);
+  };
+
+  const createTerminalSession = async () => {
+    if (!activeThreadId) {
+      return;
+    }
+
+    const result = await window.myAgent.createTerminal({
+      threadId: activeThreadId,
+      cols: 120,
+      rows: 30,
+    });
+    setSelectedTerminalId(result.session.id);
+  };
+
+  const sendTerminalInput = async () => {
+    const command = terminalInput.trim();
+
+    if (!activeTerminal || !command) {
+      return;
+    }
+
+    await window.myAgent.writeTerminal({
+      sessionId: activeTerminal.id,
+      input: `${command}${command.endsWith("\n") ? "" : "\n"}`,
+    });
+    setTerminalInput("");
+  };
+
+  const closeTerminalSession = async () => {
+    if (!activeTerminal) {
+      return;
+    }
+
+    await window.myAgent.closeTerminal({ sessionId: activeTerminal.id });
+  };
+
+  const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (currentThreadBusy) {
+      return;
+    }
+
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      void submitTurn();
+    }
+  };
+
+  const handleComposerPaste = async (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
+    const imageFiles = Array.from(event.clipboardData.items)
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => file !== null);
+
+    if (imageFiles.length === 0) {
+      return;
+    }
+
+    event.preventDefault();
+
+    const pastedAttachments = await Promise.all(
+      imageFiles.map((file, index) => createPastedImageAttachment(file, index)),
+    );
+
+    setActiveDraft((draft) => ({
+      ...draft,
+      attachments: mergeComposerAttachments(draft.attachments, pastedAttachments),
+    }));
+  };
+
+  if (bootError) {
+    return <StartupErrorShell message={bootError} onRetry={() => void bootstrap()} />;
+  }
+
+  if (!bootstrapped) {
+    return <LoadingShell />;
+  }
+
+  return (
+    <div
+      className={`app-shell ${sidebarCollapsed ? "app-shell--sidebar-collapsed" : ""}`}
+      style={
+        {
+          "--shell-sidebar-width": sidebarCollapsed ? "0px" : `${(sidebarWidthRatio * 100).toFixed(2)}%`,
+          "--shell-resize-handle-width": sidebarCollapsed ? "0px" : "10px",
+        } as CSSProperties
+      }
+    >
+      <header className="app-toolbar">
+        <div className="app-toolbar__menus">
+          <button
+            className="app-toolbar__brand"
+            onClick={() => setSidebarCollapsed((current) => !current)}
+            aria-label={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
+            title={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
+          >
+            <Rabbit className="app-toolbar__logo" aria-hidden="true" size={15} strokeWidth={1.9} />
+          </button>
+          <button
+            className="app-toolbar__theme-toggle"
+            onClick={() => setThemeMode((current) => (current === "light" ? "dark" : "light"))}
+            aria-label={themeMode === "light" ? "Switch to dark theme" : "Switch to light theme"}
+            title={themeMode === "light" ? "Switch to dark theme" : "Switch to light theme"}
+          >
+            {themeMode === "light" ? <Moon size={14} /> : <Sun size={14} />}
+          </button>
+          {APP_MENU_ITEMS.map((item) => (
+            <button
+              key={item.id}
+              className="app-toolbar__menu-button"
+              onClick={(event) => handleShowAppMenu(item.id, event)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+        <div className="app-toolbar__drag-region" aria-hidden="true" />
+        <div className="app-toolbar__controls">
+          <button
+            className="app-toolbar__control"
+            onClick={() => window.myAgent.windowMinimize()}
+            aria-label="Minimize"
+            title="Minimize"
+          >
+            <Minus size={14} />
+          </button>
+          <button
+            className="app-toolbar__control"
+            onClick={() => window.myAgent.windowToggleFullscreen()}
+            aria-label="Toggle fullscreen"
+            title="Toggle fullscreen"
+          >
+            <Square size={12} />
+          </button>
+          <button
+            className="app-toolbar__control app-toolbar__control--close"
+            onClick={() => window.myAgent.windowClose()}
+            aria-label="Close"
+            title="Close"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      </header>
+      <div className="app-container" ref={appContainerRef}>
+      <aside className="sidebar">
+        <div className="sidebar__section sidebar__section--tabs">
+          <nav className="sidebar__nav">
+            <NavButton
+              icon={<MessageSquarePlus size={18} />}
+              label="新对话"
+              active={activeView === "threads"}
+              onClick={() => void handleCreateThread(activeProjectId, activeRequirementId)}
+            />
+            <NavButton
+              icon={<Search size={18} />}
+              label="搜索"
+              active={false}
+              onClick={() => setActiveView("threads")}
+            />
+            <NavButton
+              icon={<Zap size={18} />}
+              label="技能"
+              active={activeView === "skills"}
+              onClick={() => setActiveView("skills")}
+            />
+            <NavButton
+              icon={<Grid3X3 size={18} />}
+              label="插件"
+              active={activeView === "plugins"}
+              onClick={() => setActiveView("plugins")}
+            />
+            <NavButton
+              icon={<GitBranch size={18} />}
+              label="自动化"
+              active={activeView === "automation"}
+              onClick={() => setActiveView("automation")}
+            />
+          </nav>
+        </div>
+
+        <div className="sidebar__section sidebar__section--projects">
+          <RequirementsPanel
+            requirements={requirements}
+            requirementMemories={requirementMemories}
+            activeRequirementId={activeRequirementId}
+            projects={projects}
+            threads={orderedThreads}
+            activeThreadId={activeThreadId}
+            workingThreadIds={workingThreadIds}
+            search={threadSearch}
+            onSearchChange={setThreadSearch}
+            onSelectRequirement={(requirementId) => void handleSelectRequirement(requirementId)}
+            onSelectThread={handleSelectThread}
+            onCreateThread={(projectId, requirementId) => void handleCreateThread(projectId, requirementId)}
+            onCreateProject={handleCreateProject}
+            onCreateRequirement={() => void handleCreateRequirement()}
+            newRequirementTitle={newRequirementTitle}
+            onNewRequirementTitleChange={setNewRequirementTitle}
+            newRequirementProjectId={newRequirementProjectId}
+            onNewRequirementProjectIdChange={setNewRequirementProjectId}
+            savingRequirement={savingRequirement}
+            unassignedThreadsByProject={unassignedThreadsByProject}
+          />
+        </div>
+
+        <div className="sidebar__section sidebar__section--footer">
+          <NavButton
+            icon={<Settings size={18} />}
+            label="设置"
+            active={activeView === "settings"}
+            onClick={() => setActiveView("settings")}
+          />
+        </div>
+      </aside>
+      <div
+        className="sidebar-resize-handle"
+        onPointerDown={handleSidebarResizeStart}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize sidebar"
+      />
+
+      <main className="main-content">
+        {activeView === "threads" ? (
+          <>
+            <header className="main-header">
+              <div className="main-header__title">
+                  <h1>{showingThreadWorkspace ? activeThread?.title ?? "新对话" : activeRequirement?.title ?? "需求工作区"}</h1>
+                <span className="main-header__project">
+                  {showingThreadWorkspace
+                    ? activeProject?.name ?? "当前项目"
+                    : activeRequirementPrimaryProject?.name ?? activeProject?.name ?? "需求工作区"}
+                </span>
+              </div>
+              <div className="main-header__actions">
+                {showingThreadWorkspace ? (
+                  <>
+                    <div className="workspace-toggle" role="tablist" aria-label="Thread workspace">
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={threadWorkspaceView === "conversation"}
+                        className={`workspace-toggle__button ${threadWorkspaceView === "conversation" ? "workspace-toggle__button--active" : ""}`}
+                        onClick={() => setThreadWorkspaceView("conversation")}
+                      >
+                        <MessageSquarePlus size={14} />
+                        <span>对话</span>
+                      </button>
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={threadWorkspaceView === "plan"}
+                        className={`workspace-toggle__button ${threadWorkspaceView === "plan" ? "workspace-toggle__button--active" : ""}`}
+                        onClick={() => setThreadWorkspaceView("plan")}
+                      >
+                        <Grid3X3 size={14} />
+                        <span>计划</span>
+                        {latestTurnPlan && <span className="workspace-toggle__badge">{latestTurnPlan.steps.length}</span>}
+                      </button>
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={threadWorkspaceView === "review"}
+                        className={`workspace-toggle__button ${threadWorkspaceView === "review" ? "workspace-toggle__button--active" : ""}`}
+                        onClick={() => setThreadWorkspaceView("review")}
+                      >
+                        <Shield size={14} />
+                        <span>评审</span>
+                        {latestReviewArtifact && <span className="workspace-toggle__badge">{latestReviewArtifact.findingCounts.total}</span>}
+                      </button>
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={threadWorkspaceView === "diff"}
+                        className={`workspace-toggle__button ${threadWorkspaceView === "diff" ? "workspace-toggle__button--active" : ""}`}
+                        onClick={() => setThreadWorkspaceView("diff")}
+                        disabled={threadChangeSets.length === 0}
+                      >
+                        <FileText size={14} />
+                        <span>Diff</span>
+                        {threadChangedFileCount > 0 && <span className="workspace-toggle__badge">{threadChangedFileCount}</span>}
+                      </button>
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={threadWorkspaceView === "runtime"}
+                        className={`workspace-toggle__button ${threadWorkspaceView === "runtime" ? "workspace-toggle__button--active" : ""}`}
+                        onClick={() => setThreadWorkspaceView("runtime")}
+                      >
+                        <Cpu size={14} />
+                        <span>Runtime</span>
+                        {(threadAgentIds.size > 0 || threadExecutionContexts.length > 0) && (
+                          <span className="workspace-toggle__badge">{threadAgentIds.size + threadExecutionContexts.length}</span>
+                        )}
+                      </button>
+                    </div>
+                    <div className="review-popover-anchor" ref={reviewMenuRef}>
+                      <button
+                        type="button"
+                        className="main-header__action"
+                        onClick={() => setReviewMenuOpen((current) => !current)}
+                        disabled={!activeProjectId || reviewRunning}
+                      >
+                        <Shield size={14} />
+                        <span>{reviewRunning ? "评审中..." : `评审 · ${reviewSourceLabel}`}</span>
+                        <ChevronDown size={12} />
+                      </button>
+
+                      {reviewMenuOpen && (
+                        <>
+                          <button
+                            type="button"
+                            className="review-popover-scrim"
+                            aria-label="Close review source menu"
+                            onClick={() => setReviewMenuOpen(false)}
+                          />
+                          <div className="review-popover">
+                            <div className="review-popover__header">
+                              <strong>评审来源</strong>
+                              <small>选择本次要评审的 Diff 范围。</small>
+                            </div>
+
+                            <div className="review-popover__options">
+                              {REVIEW_SOURCE_OPTIONS.map((option) => (
+                                <button
+                                  key={option.value}
+                                  type="button"
+                                  className={`review-popover__option ${option.value === reviewSourceKind ? "review-popover__option--active" : ""}`}
+                                  onClick={() => setReviewSourceKind(option.value)}
+                                >
+                                  <span className="review-popover__option-body">
+                                    <strong>{option.label}</strong>
+                                    <small>{option.hint}</small>
+                                  </span>
+                                  {option.value === reviewSourceKind && <Check size={14} />}
+                                </button>
+                              ))}
+                            </div>
+
+                            {reviewSourceKind === "base_branch" && (
+                              <label className="review-popover__field">
+                                <span>基准分支</span>
+                                <input
+                                  type="text"
+                                  value={reviewBaseBranch}
+                                  onChange={(event) => setReviewBaseBranch(event.target.value)}
+                                  placeholder="main"
+                                />
+                              </label>
+                            )}
+
+                            {reviewSourceKind === "commit" && (
+                              <label className="review-popover__field">
+                                <span>提交 SHA</span>
+                                <input
+                                  type="text"
+                                  value={reviewCommit}
+                                  onChange={(event) => setReviewCommit(event.target.value)}
+                                  placeholder="abc1234"
+                                />
+                              </label>
+                            )}
+
+                            <div className="review-popover__footer">
+                              <button type="button" className="review-popover__cancel" onClick={() => setReviewMenuOpen(false)}>
+                                取消
+                              </button>
+                              <button type="button" className="review-popover__submit" onClick={() => void triggerReview()} disabled={!canStartReview}>
+                                开始评审
+                              </button>
+                            </div>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    className="main-header__action"
+                    onClick={() => void handleCreateThread(activeRequirement?.primaryProjectId, activeRequirement?.id)}
+                    disabled={!activeRequirement}
+                  >
+                    <Plus size={14} />
+                    <span>新对话</span>
+                  </button>
+                )}
+              </div>
+            </header>
+
+            <div className="message-area" ref={messageAreaRef}>
+              {showingThreadWorkspace ? (
+                threadWorkspaceView === "diff" ? (
+                  <DiffPatchPanel
+                    changeSets={threadChangeSets}
+                    latestReview={latestReview}
+                    latestReviewArtifact={latestReviewArtifact}
+                    requestedSelection={diffFocusTarget}
+                  />
+                ) : threadWorkspaceView === "plan" ? (
+                  <PlanWorkspacePanel plan={latestTurnPlan} onOpenTurn={openPlanTurn} />
+                ) : threadWorkspaceView === "review" ? (
+                  <ReviewFindingsPanel
+                    reviews={activeReviews}
+                    reviewArtifacts={reviewArtifacts}
+                    requestedFocus={reviewFocusTarget}
+                    onOpenReview={focusReviewTarget}
+                    onOpenFile={openReviewTarget}
+                  />
+                ) : threadWorkspaceView === "runtime" ? (
+                  <ThreadRuntimePanel
+                    snapshot={latestTurnContext}
+                    agentTree={threadAgentTree}
+                    executionContexts={threadExecutionContexts}
+                    worktrees={threadWorktrees}
+                    environments={threadEnvironments}
+                    lineage={threadContextLineage}
+                    requestedSelection={runtimeFocusTarget}
+                    onOpenThread={(threadId) => void handleSelectThread(threadId)}
+                  />
+                ) : (
+                  <>
+                    {latestTurnContext && <RunContextCard snapshot={latestTurnContext} />}
+                    {latestTurnPlan && <PlanSummaryCard plan={latestTurnPlan} onOpenTurn={openPlanTurn} />}
+                    {latestReview && (
+                      <ReviewSummaryCard
+                        review={latestReview}
+                        artifact={latestReviewArtifact}
+                        onOpenReview={(reviewId) => focusReviewTarget({ reviewId })}
+                        onOpenFile={(reviewId, findingId, filePath) => openReviewTarget({ reviewId, findingId, filePath })}
+                      />
+                    )}
+                    {orderedItems.length === 0 ? (
+                      <EmptyState />
+                    ) : (
+                      <ConversationFeed entries={conversationEntries} threadId={activeThreadId} focusTarget={conversationFocusTarget} />
+                    )}
+                    {pendingApproval && (
+                      <ApprovalRequest
+                        approval={pendingApproval}
+                        onApprove={(scope) => void respondApproval(pendingApproval.id, "approve", scope)}
+                        onReject={() => void respondApproval(pendingApproval.id, "reject")}
+                      />
+                    )}
+                  </>
+                )
+              ) : (
+                <RequirementOverview
+                  requirement={activeRequirement}
+                  memory={activeRequirementMemory}
+                  projects={projects}
+                  threads={requirementThreads}
+                  draft={requirementDraft}
+                  saveMessage={requirementSaveMessage}
+                  saving={savingRequirement}
+                  unassignedThreadsByProject={unassignedThreadsByProject}
+                  onDraftChange={setRequirementDraft}
+                  onSave={() => void handleSaveRequirementMemory()}
+                  onCreateThread={() => void handleCreateThread(activeRequirement?.primaryProjectId, activeRequirement?.id)}
+                  onOpenThread={(threadId) => void handleSelectThread(threadId)}
+                  onAssignThread={(threadId) =>
+                    activeRequirement ? void assignThreadToRequirement(activeRequirement.id, threadId) : undefined
+                  }
+                  onUnassignThread={(threadId) => void unassignThreadFromRequirement(threadId)}
+                />
+              )}
+            </div>
+
+            {showingThreadWorkspace && steerableTurnId && (
+              <SteerCard
+                value={steerInput}
+                onChange={setSteerInput}
+                onSubmit={() => void submitSteer()}
+                disabled={!steerInput.trim()}
+              />
+            )}
+
+            {showingThreadWorkspace && activeThreadId && threadTerminals.length > 0 && (
+              <TerminalCard
+                sessions={threadTerminals}
+                session={activeTerminal}
+                selectedSessionId={activeTerminal?.id ?? null}
+                archives={activeTerminalArchives}
+                output={activeTerminalOutput}
+                input={terminalInput}
+                onInputChange={setTerminalInput}
+                onSelectSession={setSelectedTerminalId}
+                onOpen={() => void createTerminalSession()}
+                onSend={() => void sendTerminalInput()}
+                onClose={() => void closeTerminalSession()}
+                onArchive={(sessionId) => void window.myAgent.archiveTerminal({ sessionId, reason: "manual_archive" })}
+                onClear={(sessionId) => void window.myAgent.clearTerminal({ sessionId })}
+                onApproveOnce={(sessionId) => void window.myAgent.respondTerminalApproval({ sessionId, decision: "approve", scope: "once" })}
+                onApproveSession={(sessionId) => void window.myAgent.respondTerminalApproval({ sessionId, decision: "approve", scope: "session" })}
+                onReject={(sessionId) => void window.myAgent.respondTerminalApproval({ sessionId, decision: "reject" })}
+              />
+            )}
+
+            {showingThreadWorkspace ? (
+            <ComposerBar
+              input={input}
+              onChange={(value) =>
+                setActiveDraft((draft) => ({
+                  ...draft,
+                  input: value,
+                }))
+              }
+              onSubmit={submitTurn}
+              onInterrupt={() => interruptibleTurnId && void interruptTurn(interruptibleTurnId)}
+              onKeyDown={handleComposerKeyDown}
+              onPaste={handleComposerPaste}
+              attachments={attachments}
+              skills={enabledSkills}
+              onAddFiles={() => void handlePickFiles()}
+              onRemoveAttachment={(path) =>
+                setActiveDraft((draft) => ({
+                  ...draft,
+                  attachments: draft.attachments.filter((attachment) => attachment.path !== path),
+                }))
+              }
+              composerMenuOpen={composerMenuOpen}
+              onToggleComposerMenu={() => {
+                setComposerMenuOpen((current) => !current);
+                setModelMenuOpen(false);
+                setReasoningMenuOpen(false);
+              }}
+              composerMenuRef={composerMenuRef}
+              includeIdeContext={includeIdeContext}
+              onToggleIdeContext={() =>
+                setActiveDraft((draft) => ({
+                  ...draft,
+                  includeIdeContext: !draft.includeIdeContext,
+                }))
+              }
+              planMode={planMode}
+              onTogglePlanMode={() =>
+                setActiveDraft((draft) => ({
+                  ...draft,
+                  planMode: !draft.planMode,
+                }))
+              }
+              modelMenuOpen={modelMenuOpen}
+              onToggleModelMenu={() => {
+                setModelMenuOpen((current) => !current);
+                setComposerMenuOpen(false);
+                setReasoningMenuOpen(false);
+              }}
+              modelMenuRef={modelMenuRef}
+              availableModels={availableModels}
+              providerModelsLoading={providerModelsLoading}
+              providerModelsError={providerModelsError}
+              selectedModel={config?.provider.model ?? ""}
+              onSelectModel={(modelId) => void handleModelSelect(modelId)}
+              reasoningMenuOpen={reasoningMenuOpen}
+              onToggleReasoningMenu={() => {
+                setReasoningMenuOpen((current) => !current);
+                setComposerMenuOpen(false);
+                setModelMenuOpen(false);
+              }}
+              reasoningMenuRef={reasoningMenuRef}
+              selectedReasoningEffort={config?.provider.reasoningEffort ?? "high"}
+              onSelectReasoningEffort={(effort) => void handleReasoningSelect(effort)}
+              currentSandboxMode={currentSandboxMode}
+              sandboxMenuOpen={sandboxMenuOpen}
+              onToggleSandboxMenu={() => {
+                setSandboxMenuOpen((current) => !current);
+                setBranchMenuOpen(false);
+              }}
+              sandboxMenuRef={sandboxMenuRef}
+              onSelectSandboxMode={(mode) => void handleThreadSandboxModeChange(mode)}
+              branchMenuOpen={branchMenuOpen}
+              onToggleBranchMenu={() => {
+                setBranchMenuOpen((current) => !current);
+                setSandboxMenuOpen(false);
+              }}
+              branchMenuRef={branchMenuRef}
+              branchSummary={branchSummary}
+              branchSearch={branchSearch}
+              onBranchSearchChange={setBranchSearch}
+              filteredBranches={filteredBranches}
+              onSelectBranch={(branch) => void handleSwitchBranch(branch)}
+              onCreateBranch={() => void handleCreateBranch()}
+              contextSummary={contextSummary}
+              loading={currentThreadBusy}
+              canInterrupt={canInterrupt}
+            />
+            ) : null}
+          </>
+        ) : activeView === "skills" ? (
+          <SkillsPanel
+            skills={skills}
+            enabledSkills={enabledSkills}
+            onToggleSkill={toggleSkill}
+            onSelectSkill={setSkillDetailId}
+          />
+        ) : activeView === "plugins" ? (
+          <RuntimePluginsPanel
+            compatibility={protocolCompatibility}
+            tools={runtimeTools}
+            plugins={runtimePlugins}
+            internalTools={runtimeInternalTools}
+            mcpMounts={runtimeMcpMounts}
+            mcpSessions={runtimeMcpSessions}
+            terminalSessions={terminals}
+            terminalCapabilities={terminalCapabilities}
+            activeProjectId={activeProjectId}
+            onRespondTerminalApproval={(sessionId, decision, scope) =>
+              window.myAgent.respondTerminalApproval({ sessionId, decision, scope })
+            }
+            onUpdatePlugin={async (pluginId, patch) => {
+              await window.myAgent.updatePlugin({ pluginId, patch });
+              await Promise.all([
+                refreshToolCatalog(activeProjectId ? { projectId: activeProjectId } : undefined),
+                refreshRuntimeSurfaces(activeProjectId),
+              ]);
+            }}
+            onInstallPlugin={async (params) => {
+              await installPlugin(params);
+              await Promise.all([
+                refreshToolCatalog(activeProjectId ? { projectId: activeProjectId } : undefined),
+                refreshRuntimeSurfaces(activeProjectId),
+              ]);
+            }}
+            onUpdateInternalTool={async (internalToolId, patch) => {
+              await window.myAgent.updateInternalTool({ internalToolId, patch });
+              await Promise.all([
+                refreshToolCatalog(activeProjectId ? { projectId: activeProjectId } : undefined),
+                refreshRuntimeSurfaces(activeProjectId),
+              ]);
+            }}
+            onRefreshMount={async (mountId) => {
+              await window.myAgent.refreshMcpMount(mountId);
+              await Promise.all([
+                refreshToolCatalog(activeProjectId ? { projectId: activeProjectId } : undefined),
+                refreshRuntimeSurfaces(activeProjectId),
+              ]);
+            }}
+          />
+        ) : activeView === "automation" ? (
+          <RuntimeAutomationPanel
+            projectId={activeProjectId}
+            requirementId={activeRequirementId}
+            threads={threads}
+            automations={automations}
+            automationRuns={automationRuns}
+            automationRunLogs={automationRunLogs}
+            workflows={workflows}
+            runs={workflowRuns}
+            worktrees={worktrees}
+            environments={environments}
+            executionContexts={executionContexts}
+            agentTasks={agentTasks}
+            onCreateAutomation={(params) => createAutomation(params)}
+            onUpdateAutomation={(automationId, patch) => updateAutomation(automationId, patch)}
+            onRunAutomation={(automationId) => runAutomation(automationId)}
+            onRunWorkflow={(workflowId) =>
+              activeProjectId
+                ? window.myAgent.runWorkflow({ workflowId, projectId: activeProjectId })
+                : Promise.resolve(null)
+            }
+            onResumeWorkflow={(params) => window.myAgent.resumeWorkflow(params)}
+          />
+        ) : (
+            <SettingsPanel
+              project={activeProject}
+              templates={templates}
+              protocolCompatibility={protocolCompatibility}
+              providerForm={providerForm}
+              setProviderForm={setProviderForm}
+              providerTestMessage={providerTestMessage}
+              providerModels={availableModels}
+              providerModelsLoading={providerModelsLoading}
+              providerModelsError={providerModelsError}
+              onTestProvider={() => testProvider(buildProviderProfileFromForm(config?.provider, providerForm))}
+              onRefreshProviderModels={() => refreshProviderModels(buildProviderProfileFromForm(config?.provider, providerForm))}
+              worktrees={worktrees}
+              environments={environments}
+            onSaveConfig={() =>
+              void Promise.all([
+                updateConfig({
+                  provider: {
+                    ...(config?.provider ?? {
+                      id: "default-provider",
+                      name: "Default Provider",
+                      apiFlavor: "responses",
+                    }),
+                    baseUrl: providerForm.baseUrl,
+                    apiKey: providerForm.apiKey,
+                    model: providerForm.model,
+                    reasoningEffort: providerForm.reasoningEffort,
+                  },
+                }),
+                activeProject
+                  ? updateProject(activeProject.id, {
+                      rootPath: providerForm.rootPath,
+                      approvalPolicy: providerForm.approvalPolicy,
+                      sandboxMode: providerForm.sandboxMode,
+                    })
+                  : Promise.resolve(),
+              ])
+            }
+            onPickWorkspace={async () => {
+              const picked = await window.myAgent.pickWorkspace();
+              if (picked) {
+                setProviderForm((state) => ({ ...state, rootPath: picked }));
+              }
+            }}
+            onScaffoldTemplate={scaffoldTemplate}
+          />
+        )}
+        </main>
+      </div>
+
+      <Dialog.Root open={Boolean(currentSkillDetail)} onOpenChange={(open) => !open && setSkillDetailId(null)}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="dialog-overlay" />
+          <Dialog.Content className="dialog-content skill-dialog">
+            <div className="skill-dialog__layout">
+              <Dialog.Close className="skill-dialog__close" aria-label="Close skill details">
+                <X size={20} />
+              </Dialog.Close>
+              <div className="skill-dialog__header">
+                <div className="skill-dialog__icon-container">
+                  <div className="skill-dialog__icon">
+                    <Zap size={32} />
+                  </div>
+                </div>
+                <div className="skill-dialog__title-row">
+                  <div className="skill-dialog__titles">
+                    <Dialog.Title className="dialog-title skill-dialog__title">
+                      {currentSkillDetail?.metadata.displayName ?? currentSkillDetail?.name} <span className="skill-dialog__badge">Skill</span>
+                    </Dialog.Title>
+                    <div className="skill-dialog__subtitle">
+                      {currentSkillDetail?.metadata.shortDescription ?? "Enhance your agent's capabilities"}
+                    </div>
+                  </div>
+                  <div className="skill-dialog__actions-top">
+                    {currentSkillDetail && (
+                      <button
+                        type="button"
+                        className={`skill-dialog__toggle ${currentSkillDetail.enabled ? "skill-dialog__toggle--on" : ""}`}
+                        onClick={() => void toggleSkill(currentSkillDetail.id)}
+                      >
+                        {currentSkillDetail.enabled ? "ON" : "OFF"}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="skill-dialog__folder"
+                      aria-label="Open skill folder"
+                      title="Open skill folder"
+                      onClick={() =>
+                        currentSkillDetail
+                          ? window.myAgent.revealSkillPath(currentSkillDetail.path).catch(() => null)
+                          : Promise.resolve(undefined)
+                      }
+                    >
+                      <FolderOpen size={18} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="skill-dialog__body">
+                <div className="skill-dialog__reader" role="document" aria-label="SKILL.md document">
+                  <div className="skill-dialog__reader-bar">
+                    <span>SKILL.md</span>
+                    <code>{currentSkillDetail?.path}</code>
+                  </div>
+                  <div className="skill-dialog__reader-body">
+                    {skillDocumentLoading ? (
+                      <div className="skill-dialog__reader-state">Loading `SKILL.md`...</div>
+                    ) : skillDocumentError ? (
+                      <div className="skill-dialog__reader-state skill-dialog__reader-state--error">
+                        {skillDocumentError}
+                      </div>
+                    ) : (
+                      <pre className="skill-dialog__document">{skillDocument}</pre>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+    </div>
+  );
+}
+
+function getUnassignedProjectGroupId(project: ProjectRecord | null, projectThreads: ThreadRecord[]) {
+  return project?.id ?? `unassigned:${projectThreads[0]?.projectId ?? "unknown"}`;
+}
+
+function RequirementsPanel({
+  requirements,
+  requirementMemories,
+  activeRequirementId,
+  projects,
+  threads,
+  activeThreadId,
+  workingThreadIds,
+  search,
+  onSearchChange,
+  onSelectRequirement,
+  onSelectThread,
+  onCreateThread,
+  onCreateProject,
+  onCreateRequirement,
+  newRequirementTitle,
+  onNewRequirementTitleChange,
+  newRequirementProjectId,
+  onNewRequirementProjectIdChange,
+  savingRequirement,
+  unassignedThreadsByProject,
+}: {
+  requirements: RequirementRecord[];
+  requirementMemories: RequirementMemoryRecord[];
+  activeRequirementId?: string;
+  projects: ProjectRecord[];
+  threads: ThreadRecord[];
+  activeThreadId?: string;
+  workingThreadIds: Set<string>;
+  search: string;
+  onSearchChange: (value: string) => void;
+  onSelectRequirement: (requirementId?: string) => void;
+  onSelectThread: (threadId: string) => void;
+  onCreateThread: (projectId?: string, requirementId?: string) => void;
+  onCreateProject: () => void;
+  onCreateRequirement: () => void;
+  newRequirementTitle: string;
+  onNewRequirementTitleChange: (value: string) => void;
+  newRequirementProjectId: string | null;
+  onNewRequirementProjectIdChange: (value: string) => void;
+  savingRequirement: boolean;
+  unassignedThreadsByProject: Array<{ project: ProjectRecord | null; threads: ThreadRecord[] }>;
+}) {
+  const searchTerm = search.trim().toLowerCase();
+  const unassignedProjectGroupIds = useMemo(
+    () => unassignedThreadsByProject.map(({ project, threads: projectThreads }) => getUnassignedProjectGroupId(project, projectThreads)),
+    [unassignedThreadsByProject],
+  );
+  const initializedUnassignedProjectIds = useRef(new Set(unassignedProjectGroupIds));
+  const [expandedUnassignedProjectIds, setExpandedUnassignedProjectIds] = useState<string[]>(() => unassignedProjectGroupIds);
+  const filteredRequirements = requirements.filter((requirement) => {
+    if (!searchTerm) {
+      return true;
+    }
+
+    const memory = requirementMemories.find((entry) => entry.requirementId === requirement.id);
+    const project = projects.find((entry) => entry.id === requirement.primaryProjectId);
+    const haystack = [
+      requirement.title,
+      requirement.status,
+      project?.name ?? "",
+      memory?.manual.brief ?? "",
+    ]
+      .join(" ")
+      .toLowerCase();
+
+    return haystack.includes(searchTerm);
+  });
+
+  useEffect(() => {
+    setExpandedUnassignedProjectIds((current) => {
+      const visibleIds = new Set(unassignedProjectGroupIds);
+      const next = current.filter((projectId) => visibleIds.has(projectId));
+
+      for (const projectId of unassignedProjectGroupIds) {
+        if (!initializedUnassignedProjectIds.current.has(projectId)) {
+          initializedUnassignedProjectIds.current.add(projectId);
+          next.push(projectId);
+        }
+      }
+
+      return next.length === current.length && next.every((projectId, index) => projectId === current[index])
+        ? current
+        : next;
+    });
+  }, [unassignedProjectGroupIds]);
+
+  const toggleUnassignedProject = (projectGroupId: string) => {
+    setExpandedUnassignedProjectIds((current) =>
+      current.includes(projectGroupId)
+        ? current.filter((entry) => entry !== projectGroupId)
+        : [...current, projectGroupId],
+    );
+  };
+
+  return (
+    <div className="sidebar-secondary__content thread-sidebar requirement-sidebar">
+      <div className="thread-sidebar__header">
+        <div className="thread-sidebar__title-row">
+          <span className="thread-sidebar__title">项目</span>
+          <div className="thread-sidebar__actions">
+            <button
+              className="thread-sidebar__action"
+              onClick={() => void onCreateProject()}
+              aria-label="Create project"
+              title="Create project"
+            >
+              <FolderGit2 size={14} />
+            </button>
+          </div>
+        </div>
+        <div className="thread-sidebar__search-shell thread-sidebar__search-shell--open">
+          <div className="thread-sidebar__search">
+            <Search size={14} />
+            <input
+              type="text"
+              placeholder="搜索对话或需求"
+              value={search}
+              onChange={(event) => onSearchChange(event.target.value)}
+            />
+          </div>
+        </div>
+        <div className="requirement-sidebar__composer">
+          <input
+            type="text"
+            placeholder="新需求标题"
+            value={newRequirementTitle}
+            onChange={(event) => onNewRequirementTitleChange(event.target.value)}
+          />
+          <div className="requirement-sidebar__composer-row">
+            <select
+              value={newRequirementProjectId ?? ""}
+              onChange={(event) => onNewRequirementProjectIdChange(event.target.value)}
+            >
+              <option value="" disabled>
+                选择主项目
+              </option>
+              {projects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.name}
+                </option>
+              ))}
+            </select>
+            <button
+              className="button button--primary"
+              onClick={() => void onCreateRequirement()}
+              disabled={savingRequirement || !newRequirementTitle.trim() || !newRequirementProjectId}
+            >
+              <Plus size={14} />
+              创建
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="thread-sidebar__list">
+        {(filteredRequirements.length > 0 || searchTerm) && (
+          <div className="requirement-sidebar__section">
+            <div className="requirement-sidebar__section-header">
+              <strong>活跃需求</strong>
+              <span>{filteredRequirements.length}</span>
+            </div>
+            {filteredRequirements.length > 0 ? (
+              <div className="requirement-sidebar__requirements">
+                {filteredRequirements.map((requirement) => {
+                  const project = projects.find((entry) => entry.id === requirement.primaryProjectId);
+                  const memory = requirementMemories.find((entry) => entry.requirementId === requirement.id);
+                  const linkedThreadCount = memory?.derived.linkedThreads.length ?? threads.filter((thread) => thread.requirementId === requirement.id).length;
+
+                  return (
+                    <button
+                      key={requirement.id}
+                      type="button"
+                      className={`requirement-sidebar__requirement ${requirement.id === activeRequirementId ? "requirement-sidebar__requirement--active" : ""}`}
+                      onClick={() => void onSelectRequirement(requirement.id)}
+                    >
+                      <div className="requirement-sidebar__requirement-head">
+                        <strong>{requirement.title}</strong>
+                        <span>{formatRequirementStatusLabel(requirement.status)}</span>
+                      </div>
+                      <small>{project?.name ?? requirement.primaryProjectId}</small>
+                      <div className="requirement-sidebar__requirement-meta">
+                        <span>{linkedThreadCount} thread{linkedThreadCount === 1 ? "" : "s"}</span>
+                        <span>{formatRelativeTime(requirement.updatedAt)}</span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="project-tree__empty">没有匹配的需求。</div>
+            )}
+          </div>
+        )}
+
+        <div className="requirement-sidebar__section">
+          <div className="requirement-sidebar__section-header">
+            <strong>未归档对话</strong>
+            <span>{unassignedThreadsByProject.reduce((count, group) => count + group.threads.length, 0)}</span>
+          </div>
+          <div className="project-tree">
+            {unassignedThreadsByProject.map(({ project, threads: projectThreads }) => {
+              const projectGroupId = getUnassignedProjectGroupId(project, projectThreads);
+              const projectName = project?.name ?? "Unknown project";
+              const expanded = expandedUnassignedProjectIds.includes(projectGroupId);
+
+              return (
+                <section key={projectGroupId} className="project-tree__group">
+                  <div className="project-tree__project">
+                    <button
+                      className="project-item project-item--with-toggle"
+                      onClick={() => toggleUnassignedProject(projectGroupId)}
+                      aria-expanded={expanded}
+                      aria-label={expanded ? `收起 ${projectName}` : `展开 ${projectName}`}
+                    >
+                      <ChevronRight
+                        className={`project-item__chevron ${expanded ? "project-item__chevron--open" : ""}`}
+                        size={14}
+                        aria-hidden="true"
+                      />
+                      <div className="project-item__name">{projectName}</div>
+                    </button>
+                    <button
+                      className="project-tree__control"
+                      onClick={() => void onCreateThread(project?.id)}
+                      aria-label={`在 ${project?.name ?? "项目"} 中创建新对话`}
+                      title="新建对话"
+                    >
+                      <MessageSquarePlus size={14} />
+                    </button>
+                  </div>
+                  {expanded && (
+                    <div className="project-tree__threads">
+                      {projectThreads.map((thread) => (
+                        <button
+                          key={thread.id}
+                          className={`thread-item thread-item--nested ${thread.id === activeThreadId ? "thread-item--active" : ""}`}
+                          onClick={() => void onSelectThread(thread.id)}
+                        >
+                          <div className="thread-item__content thread-item__content--compact">
+                            <div className="thread-item__title">
+                              {workingThreadIds.has(thread.id) && <span className="thread-item__spinner" aria-hidden="true" />}
+                              <span>{thread.title}</span>
+                            </div>
+                            <div className="thread-item__age">{formatRelativeTime(thread.updatedAt)}</div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </section>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ThreadsPanel({
+  projects,
+  activeProjectId,
+  threads,
+  activeThreadId,
+  workingThreadIds,
+  search,
+  onSearchChange,
+  onSelectThread,
+  onCreateThread,
+  onCreateProject,
+  onRevealProject,
+}: {
+  projects: ProjectRecord[];
+  activeProjectId?: string;
+  threads: import("@my-agent/protocol").ThreadRecord[];
+  activeThreadId?: string;
+  workingThreadIds: Set<string>;
+  search: string;
+  onSearchChange: (value: string) => void;
+  onSelectThread: (threadId: string) => Promise<void>;
+  onCreateThread: (projectId?: string) => Promise<void>;
+  onCreateProject: () => Promise<void>;
+  onRevealProject: (projectPath: string) => Promise<void>;
+}) {
+  const [expandedProjectIds, setExpandedProjectIds] = useState<string[]>(() =>
+    activeProjectId ? [activeProjectId] : projects[0] ? [projects[0].id] : [],
+  );
+  const [searchExpanded, setSearchExpanded] = useState(Boolean(search.trim()));
+  const [openProjectMenuId, setOpenProjectMenuId] = useState<string | null>(null);
+  const projectMenuRef = useRef<HTMLDivElement | null>(null);
+  const searchContainerRef = useRef<HTMLDivElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!activeProjectId) {
+      return;
+    }
+
+    setExpandedProjectIds((current) => (current.includes(activeProjectId) ? current : [...current, activeProjectId]));
+  }, [activeProjectId]);
+
+  useEffect(() => {
+    if (projects.length === 0) {
+      setExpandedProjectIds([]);
+      return;
+    }
+
+    setExpandedProjectIds((current) => current.filter((projectId) => projects.some((projectEntry) => projectEntry.id === projectId)));
+  }, [projects]);
+
+  useEffect(() => {
+    if (!searchExpanded) {
+      return;
+    }
+
+    window.requestAnimationFrame(() => {
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    });
+  }, [searchExpanded]);
+
+  useEffect(() => {
+    if (!searchExpanded) {
+      return;
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+
+      if (searchContainerRef.current && !searchContainerRef.current.contains(target)) {
+        onSearchChange("");
+        setSearchExpanded(false);
+      }
+    };
+
+    window.addEventListener("pointerdown", handlePointerDown);
+    return () => window.removeEventListener("pointerdown", handlePointerDown);
+  }, [searchExpanded, onSearchChange]);
+
+  useEffect(() => {
+    if (!openProjectMenuId) {
+      return;
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+
+      if (projectMenuRef.current && !projectMenuRef.current.contains(target)) {
+        setOpenProjectMenuId(null);
+      }
+    };
+
+    window.addEventListener("pointerdown", handlePointerDown);
+    return () => window.removeEventListener("pointerdown", handlePointerDown);
+  }, [openProjectMenuId]);
+
+  const searchTerm = search.trim().toLowerCase();
+  const projectGroups = projects.map((entry) => {
+    const projectThreads = threads.filter((thread) => thread.projectId === entry.id);
+    const visibleThreads = searchTerm
+      ? projectThreads.filter((thread) => thread.title.toLowerCase().includes(searchTerm))
+      : projectThreads;
+
+    return {
+      project: entry,
+      totalCount: projectThreads.length,
+      visibleThreads,
+    };
+  });
+
+  const toggleProject = (projectId: string) => {
+    setExpandedProjectIds((current) =>
+      current.includes(projectId)
+        ? current.filter((entry) => entry !== projectId)
+        : [...current, projectId],
+    );
+  };
+
+  const closeSearch = () => {
+    onSearchChange("");
+    setSearchExpanded(false);
+  };
+
+  return (
+    <div className="sidebar-secondary__content thread-sidebar" ref={searchContainerRef}>
+      <div className="thread-sidebar__header">
+        <div className="thread-sidebar__title-row">
+          <span className="thread-sidebar__title">Projects</span>
+          <div className="thread-sidebar__actions">
+            <button
+              className={`thread-sidebar__action ${searchExpanded ? "thread-sidebar__action--active" : ""}`}
+              onClick={() => {
+                if (searchExpanded) {
+                  closeSearch();
+                  return;
+                }
+
+                setSearchExpanded(true);
+              }}
+              aria-label="Search threads"
+              title="Search threads"
+            >
+              <Search size={14} />
+            </button>
+            <button
+              className="thread-sidebar__action"
+              onClick={() => void onCreateProject()}
+              aria-label="Create project"
+              title="Create project"
+            >
+              <Plus size={14} />
+            </button>
+          </div>
+        </div>
+        <div className={`thread-sidebar__search-shell ${searchExpanded ? "thread-sidebar__search-shell--open" : ""}`}>
+          <div className="thread-sidebar__search">
+            <Search size={14} />
+            <input
+              ref={searchInputRef}
+              type="text"
+              placeholder="Search threads"
+              value={search}
+              onChange={(e) => onSearchChange(e.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  closeSearch();
+                }
+              }}
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="thread-sidebar__list">
+        {projects.length > 0 ? (
+          <div className="project-tree">
+            {projectGroups.map(({ project: entry, visibleThreads }) => {
+              const expanded = expandedProjectIds.includes(entry.id);
+              const isActiveProject = entry.id === activeProjectId;
+              const emptyLabel = searchTerm
+                ? "No matching threads"
+                : "No threads yet";
+
+              return (
+                <section
+                  key={entry.id}
+                  className={`project-tree__group ${isActiveProject ? "project-tree__group--active" : ""}`}
+                >
+                  <div className="project-tree__project">
+                    <button
+                      className={`project-item project-item--with-toggle ${isActiveProject ? "project-item--active" : ""}`}
+                      onClick={() => toggleProject(entry.id)}
+                      aria-expanded={expanded}
+                      aria-label={expanded ? `Collapse ${entry.name}` : `Expand ${entry.name}`}
+                    >
+                      <ChevronRight
+                        className={`project-item__chevron ${expanded ? "project-item__chevron--open" : ""}`}
+                        size={14}
+                        aria-hidden="true"
+                      />
+                      <div className="project-item__name">{entry.name}</div>
+                    </button>
+
+                    {expanded && (
+                      <div className="project-tree__controls">
+                        <div
+                          className="project-tree__menu-anchor"
+                          ref={openProjectMenuId === entry.id ? projectMenuRef : null}
+                        >
+                          <button
+                            className={`project-tree__control ${openProjectMenuId === entry.id ? "project-tree__control--active" : ""}`}
+                            onClick={() =>
+                              setOpenProjectMenuId((current) => (current === entry.id ? null : entry.id))
+                            }
+                            aria-label={`Open ${entry.name} options`}
+                            title="Project options"
+                          >
+                            <MoreHorizontal size={14} />
+                          </button>
+
+                          {openProjectMenuId === entry.id && (
+                            <div className="project-tree__menu">
+                              <button
+                                className="project-tree__menu-item"
+                                onClick={() => {
+                                  setOpenProjectMenuId(null);
+                                  void onRevealProject(entry.rootPath);
+                                }}
+                              >
+                                <span className="project-tree__menu-icon">
+                                  <FolderOpen size={14} />
+                                </span>
+                                <span>Open in Explorer</span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
+
+                        <button
+                          className="project-tree__control"
+                          onClick={() => void onCreateThread(entry.id)}
+                          aria-label={`在 ${entry.name} 中创建新对话`}
+                          title="新建对话"
+                        >
+                          <MessageSquarePlus size={14} />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {expanded && (
+                    <div className="project-tree__threads">
+                      {visibleThreads.length > 0 ? (
+                        visibleThreads.map((thread) => (
+                          <button
+                            key={thread.id}
+                            className={`thread-item thread-item--nested ${thread.id === activeThreadId ? "thread-item--active" : ""}`}
+                            onClick={() => void onSelectThread(thread.id)}
+                          >
+                            <div className="thread-item__content thread-item__content--compact">
+                              <div className="thread-item__title">
+                                {workingThreadIds.has(thread.id) && <span className="thread-item__spinner" aria-hidden="true" />}
+                                <span>{thread.title}</span>
+                              </div>
+                              <div className="thread-item__age">{formatRelativeTime(thread.updatedAt)}</div>
+                            </div>
+                          </button>
+                        ))
+                      ) : (
+                        <div className="project-tree__empty">{emptyLabel}</div>
+                      )}
+                    </div>
+                  )}
+                </section>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="sidebar-secondary__empty">
+            <MessageSquarePlus size={24} />
+            <p>No projects yet</p>
+            <span>Create a project to get started</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function RequirementOverview({
+  requirement,
+  memory,
+  projects,
+  threads,
+  draft,
+  saveMessage,
+  saving,
+  unassignedThreadsByProject,
+  onDraftChange,
+  onSave,
+  onCreateThread,
+  onOpenThread,
+  onAssignThread,
+  onUnassignThread,
+}: {
+  requirement: RequirementRecord | null;
+  memory: RequirementMemoryRecord | null;
+  projects: ProjectRecord[];
+  threads: ThreadRecord[];
+  draft: RequirementMemoryDraft;
+  saveMessage: string | null;
+  saving: boolean;
+  unassignedThreadsByProject: Array<{ project: ProjectRecord | null; threads: ThreadRecord[] }>;
+  onDraftChange: (updater: RequirementMemoryDraft | ((current: RequirementMemoryDraft) => RequirementMemoryDraft)) => void;
+  onSave: () => void;
+  onCreateThread: () => void;
+  onOpenThread: (threadId: string) => void;
+  onAssignThread: (threadId: string) => void;
+  onUnassignThread: (threadId: string) => void;
+}) {
+  if (!requirement) {
+    return (
+      <PlaceholderPanel
+        title="需求工作区"
+        description="创建或选择一个需求，用来管理共享记忆、关联对话和跨项目上下文。"
+      />
+    );
+  }
+
+  const primaryProject = projects.find((project) => project.id === requirement.primaryProjectId) ?? null;
+  const relatedProjects = requirement.relatedProjectIds
+    .map((projectId) => projects.find((project) => project.id === projectId) ?? null)
+    .filter((project): project is ProjectRecord => Boolean(project));
+  const threadSummaries = memory?.derived.threadSummaries ?? [];
+  const threadSummaryById = new Map(threadSummaries.map((thread) => [thread.threadId, thread]));
+  const contextPreview = buildRequirementContextPreview(requirement, memory, primaryProject, relatedProjects);
+
+  return (
+    <div className="skills-page requirement-overview">
+      <div className="skills-page__header">
+        <div>
+          <h2 className="skills-page__title">{requirement.title}</h2>
+          <div className="requirement-overview__subtitle">
+            <span>{formatRequirementStatusLabel(requirement.status)}</span>
+            <span>{primaryProject?.name ?? requirement.primaryProjectId}</span>
+          </div>
+        </div>
+        <div className="requirement-overview__actions">
+          <button className="button button--primary" onClick={onCreateThread}>
+            <MessageSquarePlus size={14} />
+            新对话
+          </button>
+        </div>
+      </div>
+
+      <div className="workflow-dashboard requirement-overview__stats">
+        <div className="workflow-dashboard__card">
+          <strong>{threads.length}</strong>
+          <span>Linked threads</span>
+        </div>
+        <div className="workflow-dashboard__card">
+          <strong>{memory?.derived.recentReviews.length ?? 0}</strong>
+          <span>Recent reviews</span>
+        </div>
+        <div className="workflow-dashboard__card">
+          <strong>{memory?.derived.recentChanges.length ?? 0}</strong>
+          <span>Changed paths</span>
+        </div>
+      </div>
+
+      <div className="skill-card requirement-overview__preview">
+        <div className="skill-card__header">
+          <div>
+            <h3>Context Preview</h3>
+            <span>Next turn requirement context</span>
+          </div>
+        </div>
+        <pre>{contextPreview}</pre>
+      </div>
+
+      <div className="skills-grid requirement-overview__grid">
+        <div className="skill-card requirement-overview__card">
+          <div className="skill-card__header">
+            <div>
+              <h3>Requirement Memory</h3>
+              <span>Editable shared context</span>
+            </div>
+          </div>
+          <RequirementMemoryField
+            label="Brief"
+            value={draft.brief}
+            onChange={(value) => onDraftChange((current) => ({ ...current, brief: value }))}
+            rows={4}
+          />
+          <RequirementMemoryField
+            label="Goals"
+            value={draft.goals}
+            onChange={(value) => onDraftChange((current) => ({ ...current, goals: value }))}
+          />
+          <RequirementMemoryField
+            label="Constraints"
+            value={draft.constraints}
+            onChange={(value) => onDraftChange((current) => ({ ...current, constraints: value }))}
+          />
+          <RequirementMemoryField
+            label="Decisions"
+            value={draft.decisions}
+            onChange={(value) => onDraftChange((current) => ({ ...current, decisions: value }))}
+          />
+          <RequirementMemoryField
+            label="Open Questions"
+            value={draft.openQuestions}
+            onChange={(value) => onDraftChange((current) => ({ ...current, openQuestions: value }))}
+          />
+          <RequirementMemoryField
+            label="Definition of Done"
+            value={draft.definitionOfDone}
+            onChange={(value) => onDraftChange((current) => ({ ...current, definitionOfDone: value }))}
+          />
+          <div className="settings-panel__actions requirement-overview__editor-actions">
+            <button className="button button--primary" onClick={onSave} disabled={saving}>
+              {saving ? "Saving..." : "Save Memory"}
+            </button>
+            {saveMessage ? <div className="settings-panel__message">{saveMessage}</div> : null}
+          </div>
+        </div>
+
+        <div className="skill-card requirement-overview__card">
+          <div className="skill-card__header">
+            <div>
+              <h3>Derived Memory</h3>
+              <span>Read-only system summary</span>
+            </div>
+          </div>
+          <p className="requirement-overview__activity">
+            {memory?.derived.activitySummary || "Derived memory will refresh as linked threads, reviews, and workflows finish."}
+          </p>
+          <RequirementTokenList
+            title="Linked Projects"
+            items={[
+              primaryProject ? `${primaryProject.name} (primary)` : requirement.primaryProjectId,
+              ...relatedProjects.map((project) => `${project.name} (related)`),
+            ]}
+          />
+          <RequirementTokenList
+            title="Recent Reviews"
+            items={(memory?.derived.recentReviews ?? []).map((review) => `${review.status}: ${review.summary ?? review.reviewId}`)}
+          />
+          <RequirementTokenList
+            title="Latest Turns"
+            items={(memory?.derived.recentTurns ?? []).map((turn) => `${turn.threadTitle}: ${turn.status}${turn.finalMessage ? ` - ${turn.finalMessage}` : ""}`)}
+          />
+          <RequirementTokenList
+            title="Review Artifacts"
+            items={(memory?.derived.recentArtifacts ?? [])
+              .filter((artifact) => artifact.source === "review")
+              .map((artifact) => artifact.summary)}
+          />
+          <RequirementTokenList
+            title="Workflow Artifacts"
+            items={(memory?.derived.recentArtifacts ?? [])
+              .filter((artifact) => artifact.source === "workflow")
+              .map((artifact) => artifact.summary)}
+          />
+          <RequirementTokenList
+            title="Agent Artifacts"
+            items={(memory?.derived.recentArtifacts ?? [])
+              .filter((artifact) => artifact.source === "agent")
+              .map((artifact) => artifact.summary)}
+          />
+          <RequirementTokenList
+            title="Recent Changes"
+            items={memory?.derived.recentChanges ?? []}
+          />
+        </div>
+
+        <div className="skill-card requirement-overview__card">
+          <div className="skill-card__header">
+            <div>
+              <h3>Linked Threads</h3>
+              <span>{threads.length} total</span>
+            </div>
+          </div>
+          {threads.length > 0 ? (
+            <div className="requirement-overview__thread-list">
+              {threads.map((thread) => {
+                const summary = threadSummaryById.get(thread.id);
+                return (
+                  <div key={thread.id} className="requirement-overview__thread-row">
+                    <div>
+                      <strong>{thread.title}</strong>
+                      <small>
+                        {summary?.latestTurnStatus ?? "idle"} · {formatRelativeTime(summary?.updatedAt ?? thread.updatedAt)}
+                        {summary?.hidden ? " · delegated" : ""}
+                      </small>
+                    </div>
+                    <div className="requirement-overview__thread-actions">
+                      <button className="button button--small" onClick={() => onOpenThread(thread.id)}>
+                        Open
+                      </button>
+                      <button className="button button--ghost button--small" onClick={() => onUnassignThread(thread.id)}>
+                        Unassign
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="settings-panel__message">No threads are linked yet.</div>
+          )}
+        </div>
+
+        <div className="skill-card requirement-overview__card">
+          <div className="skill-card__header">
+            <div>
+              <h3>Assign Existing Threads</h3>
+              <span>Bind unassigned work into this requirement</span>
+            </div>
+          </div>
+          <div className="requirement-overview__thread-list">
+            {unassignedThreadsByProject.flatMap(({ project, threads: projectThreads }) =>
+              projectThreads.map((thread) => (
+                <div key={thread.id} className="requirement-overview__thread-row">
+                  <div>
+                    <strong>{thread.title}</strong>
+                    <small>{project?.name ?? thread.projectId}</small>
+                  </div>
+                  <div className="requirement-overview__thread-actions">
+                    <button className="button button--small" onClick={() => onAssignThread(thread.id)}>
+                      Assign
+                    </button>
+                  </div>
+                </div>
+              )),
+            )}
+            {unassignedThreadsByProject.every((entry) => entry.threads.length === 0) ? (
+              <div className="settings-panel__message">All visible threads are already assigned to a requirement.</div>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RequirementMemoryField({
+  label,
+  value,
+  onChange,
+  rows = 5,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  rows?: number;
+}) {
+  return (
+    <label className="requirement-overview__field">
+      <span>{label}</span>
+      <textarea value={value} rows={rows} onChange={(event) => onChange(event.target.value)} placeholder="One item per line when applicable" />
+    </label>
+  );
+}
+
+function RequirementTokenList({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div className="requirement-overview__tokens">
+      <strong>{title}</strong>
+      {items.length > 0 ? (
+        <div className="requirement-overview__token-list">
+          {items.map((item) => (
+            <span key={`${title}:${item}`} className="requirement-overview__token">
+              {item}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <div className="settings-panel__message">None yet.</div>
+      )}
+    </div>
+  );
+}
+
+function buildRequirementContextPreview(
+  requirement: RequirementRecord,
+  memory: RequirementMemoryRecord | null,
+  primaryProject: ProjectRecord | null,
+  relatedProjects: ProjectRecord[],
+): string {
+  const manual = memory?.manual;
+  const derived = memory?.derived;
+  const sections = [
+    "# Requirement Context",
+    `Requirement: ${requirement.title}`,
+    `Status: ${requirement.status}`,
+    `Primary project: ${primaryProject?.name ?? requirement.primaryProjectId}`,
+    `Related projects: ${relatedProjects.length > 0 ? relatedProjects.map((project) => project.name).join(", ") : "None"}`,
+    "## Goals / Constraints / Decisions",
+    manual?.brief ? `Brief: ${manual.brief}` : null,
+    renderPreviewList("Goals", manual?.goals ?? []),
+    renderPreviewList("Constraints", manual?.constraints ?? []),
+    renderPreviewList("Decisions", manual?.decisions ?? []),
+    renderPreviewList("Open questions", manual?.openQuestions ?? []),
+    renderPreviewList("Definition of done", manual?.definitionOfDone ?? []),
+    "## Current Activity Digest",
+    derived?.activitySummary || "No requirement activity has been recorded yet.",
+    renderPreviewList(
+      "Latest turns",
+      (derived?.recentTurns ?? []).map((turn) => `${turn.threadTitle}: ${turn.status}${turn.finalMessage ? ` - ${turn.finalMessage}` : ""}`),
+    ),
+    "## Recent Artifacts",
+    renderPreviewList(
+      "Reviews",
+      (derived?.recentArtifacts ?? []).filter((artifact) => artifact.source === "review").map((artifact) => artifact.summary),
+    ),
+    renderPreviewList(
+      "Workflows",
+      (derived?.recentArtifacts ?? []).filter((artifact) => artifact.source === "workflow").map((artifact) => artifact.summary),
+    ),
+    renderPreviewList(
+      "Agents",
+      (derived?.recentArtifacts ?? []).filter((artifact) => artifact.source === "agent").map((artifact) => artifact.summary),
+    ),
+    "## Recent Changed Paths",
+    renderPreviewList("Paths", derived?.recentChanges ?? []),
+    "## Linked Thread Status",
+    renderPreviewList(
+      "Threads",
+      (derived?.threadSummaries ?? derived?.linkedThreads ?? []).map(
+        (thread) =>
+          `${thread.title}: ${thread.latestTurnStatus ?? "idle"}${thread.hidden ? " (delegated)" : ""}${
+            "latestFinalMessage" in thread && thread.latestFinalMessage ? ` - ${thread.latestFinalMessage}` : ""
+          }`,
+      ),
+    ),
+  ];
+
+  return sections.filter((section): section is string => Boolean(section)).join("\n");
+}
+
+function renderPreviewList(label: string, items: string[]): string {
+  return `${label}: ${items.length > 0 ? items.slice(0, 8).join(" | ") : "None"}`;
+}
+
+function SkillsPanel({
+  skills,
+  enabledSkills,
+  onToggleSkill,
+  onSelectSkill,
+}: {
+  skills: SkillDescriptor[];
+  enabledSkills: SkillDescriptor[];
+  onToggleSkill: (skillId: string) => Promise<void>;
+  onSelectSkill: (skillId: string) => void;
+}) {
+  return (
+    <div className="skills-page">
+      <div className="skills-page__header">
+        <h2 className="skills-page__title">Skills</h2>
+        <span className="skills-page__count">{enabledSkills.length} enabled</span>
+      </div>
+
+      <div className="skills-grid">
+        {skills.map((skill) => (
+          <div 
+            key={skill.id} 
+            className={`skill-card ${skill.enabled ? "" : "skill-card--disabled"}`}
+            onClick={() => onSelectSkill(skill.id)}
+          >
+            <div className="skill-card__header">
+              <div className="skill-card__title">
+                <h3>{skill.metadata.displayName ?? skill.name}</h3>
+              </div>
+              <button
+                className={`skill-card__toggle ${skill.enabled ? "skill-card__toggle--on" : ""}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void onToggleSkill(skill.id);
+                }}
+              >
+                {skill.enabled ? "ON" : "OFF"}
+              </button>
+            </div>
+            <div className="skill-card__desc">{skill.metadata.shortDescription ?? skill.description}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RuntimePluginsPanel({
+  compatibility,
+  tools,
+  plugins,
+  internalTools,
+  mcpMounts,
+  mcpSessions,
+  terminalSessions,
+  terminalCapabilities,
+  activeProjectId,
+  onRespondTerminalApproval,
+  onUpdatePlugin,
+  onInstallPlugin,
+  onUpdateInternalTool,
+  onRefreshMount,
+}: {
+  compatibility?: import("@my-agent/protocol").ProtocolCompatibilityRecord;
+  tools: import("@my-agent/protocol").ToolCatalogRecord[];
+  plugins: PluginRecord[];
+  internalTools: InternalToolRecord[];
+  mcpMounts: McpMountRecord[];
+  mcpSessions: McpSessionRecord[];
+  terminalSessions: TerminalSessionRecord[];
+  terminalCapabilities: TerminalBackendCapability[];
+  activeProjectId?: string;
+  onRespondTerminalApproval: (sessionId: string, decision: "approve" | "reject", scope?: "once" | "session") => Promise<unknown>;
+  onUpdatePlugin: (pluginId: string, patch: Partial<Pick<PluginRecord, "enabled" | "trusted">>) => Promise<unknown>;
+  onInstallPlugin: (params: PluginInstallParams) => Promise<unknown>;
+  onUpdateInternalTool: (internalToolId: string, patch: Partial<Pick<InternalToolRecord, "enabled">>) => Promise<unknown>;
+  onRefreshMount: (mountId: string) => Promise<unknown>;
+}) {
+  const [pendingActionKey, setPendingActionKey] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [pluginInstallMode, setPluginInstallMode] = useState<PluginInstallParams["source"]>("git");
+  const [pluginInstallValue, setPluginInstallValue] = useState("");
+  const [pluginInstallRef, setPluginInstallRef] = useState("");
+  const visibleTerminalSessions = activeProjectId
+    ? terminalSessions.filter((session) => session.workspaceId === activeProjectId)
+    : terminalSessions;
+  const toolsBySource = useMemo(
+    () =>
+      tools.reduce<Record<string, number>>((counts, tool) => {
+        counts[tool.source.type] = (counts[tool.source.type] ?? 0) + 1;
+        return counts;
+      }, {}),
+    [tools],
+  );
+
+  async function handlePluginUpdate(pluginId: string, patch: Partial<Pick<PluginRecord, "enabled" | "trusted">>, actionKey: string) {
+    setPendingActionKey(actionKey);
+    setActionError(null);
+
+    try {
+      await onUpdatePlugin(pluginId, patch);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Unable to update plugin.");
+    } finally {
+      setPendingActionKey(null);
+    }
+  }
+
+  async function handlePluginInstall() {
+    const value = pluginInstallValue.trim();
+
+    if (!value) {
+      setActionError(pluginInstallMode === "git" ? "Git URL is required." : "npm package is required.");
+      return;
+    }
+
+    const params: PluginInstallParams =
+      pluginInstallMode === "git"
+        ? { source: "git", url: value, ref: pluginInstallRef.trim() || undefined }
+        : { source: "npm", packageName: value, version: pluginInstallRef.trim() || undefined };
+
+    setPendingActionKey("plugin:install");
+    setActionError(null);
+
+    try {
+      await onInstallPlugin(params);
+      setPluginInstallValue("");
+      setPluginInstallRef("");
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "无法安装插件。");
+    } finally {
+      setPendingActionKey(null);
+    }
+  }
+
+  async function handleInternalToolUpdate(internalToolId: string, patch: Partial<Pick<InternalToolRecord, "enabled">>, actionKey: string) {
+    setPendingActionKey(actionKey);
+    setActionError(null);
+
+    try {
+      await onUpdateInternalTool(internalToolId, patch);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Unable to update internal tool.");
+    } finally {
+      setPendingActionKey(null);
+    }
+  }
+
+  async function handleRefreshMountAction(mountId: string) {
+    setPendingActionKey(`mcp:${mountId}`);
+    setActionError(null);
+
+    try {
+      await onRefreshMount(mountId);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Unable to refresh MCP mount.");
+    } finally {
+      setPendingActionKey(null);
+    }
+  }
+
+  return (
+    <div className="skills-page runtime-page">
+      <div className="skills-page__header runtime-page__header">
+        <div className="runtime-page__heading">
+          <h2 className="skills-page__title">插件与 Runtime</h2>
+          <p>管理插件安装、工具目录、终端后端、内部工具与 MCP mounts。</p>
+        </div>
+        <div className="runtime-page__summary" aria-label="Runtime 概览">
+          <span><strong>{tools.length}</strong> 工具</span>
+          <span><strong>{plugins.length}</strong> 插件</span>
+          <span><strong>{internalTools.length}</strong> 内部工具</span>
+          <span><strong>{mcpMounts.length}</strong> MCP mounts</span>
+          <span><strong>{visibleTerminalSessions.length}</strong> 终端会话</span>
+        </div>
+      </div>
+      {actionError ? <div className="thread-shell__empty">{actionError}</div> : null}
+      <div className="skill-card runtime-install-card runtime-page__install">
+        <div className="skill-card__header">
+          <div>
+            <h3>安装插件</h3>
+            <span>Git URL 或 npm package</span>
+          </div>
+          <span className="skill-card__status">新建</span>
+        </div>
+        <div className="runtime-install-card__controls">
+          <select value={pluginInstallMode} onChange={(event) => setPluginInstallMode(event.target.value as PluginInstallParams["source"])}>
+            <option value="git">Git URL</option>
+            <option value="npm">npm package</option>
+          </select>
+          <input
+            value={pluginInstallValue}
+            onChange={(event) => setPluginInstallValue(event.target.value)}
+            placeholder={pluginInstallMode === "git" ? "Git URL" : "npm package"}
+          />
+          <input
+            value={pluginInstallRef}
+            onChange={(event) => setPluginInstallRef(event.target.value)}
+            placeholder={pluginInstallMode === "git" ? "branch、tag 或 commit" : "version"}
+          />
+          <button className="button" disabled={pendingActionKey === "plugin:install"} onClick={() => void handlePluginInstall()}>
+            <span>安装插件</span>
+          </button>
+        </div>
+      </div>
+      <div className="skills-grid runtime-page__grid">
+        {compatibility ? (
+          <div className="skill-card">
+            <div className="skill-card__header">
+              <div>
+                <h3>协议兼容</h3>
+                <span>{compatibility.protocolVersion}</span>
+              </div>
+              <span className="skill-card__status skill-card__status--enabled">稳定</span>
+            </div>
+            <p>{compatibility.documentationPath ?? "未配置协议文档路径。"}</p>
+            <pre>
+              additiveChangesOnly={String(compatibility.additiveChangesOnly)}
+              {`\n`}requiredToolSources={compatibility.requiredToolSources.join(", ")}
+              {`\n`}structuredEvents={compatibility.structuredEventTypes.join(", ")}
+            </pre>
+          </div>
+        ) : null}
+        {tools.length > 0 ? (
+          <div className="skill-card">
+            <div className="skill-card__header">
+              <div>
+                <h3>工具目录</h3>
+                <span>{Object.entries(toolsBySource).map(([source, count]) => `${source}:${count}`).join(" · ")}</span>
+              </div>
+              <span className="skill-card__status skill-card__status--enabled">统一</span>
+            </div>
+            <p>所有 Runtime 工具按来源、风险和审批能力统一归档。</p>
+            <div className="runtime-tool-catalog">
+              {tools.map((tool) => (
+                <div key={`${tool.source.type}:${tool.name}`} className="runtime-tool-row">
+                  <strong>{tool.name}</strong>
+                  <small>{tool.description}</small>
+                  <pre>
+                    source={tool.source.type}
+                    {tool.source.label ? `:${tool.source.label}` : ""}
+                    {`\n`}risk={tool.capability.riskLevel}
+                    {`\n`}writes={String(tool.capability.writes)} network={String(tool.capability.network)} interactive={String(tool.capability.interactive)}
+                    {`\n`}approvalModes={tool.capability.approvalModes.join(", ")}
+                  </pre>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        {terminalCapabilities.map((capability) => (
+          <div key={`terminal-cap:${capability.kind}`} className="skill-card">
+            <div className="skill-card__header">
+              <div>
+                <h3>{capability.kind.toUpperCase()} 终端后端</h3>
+                <span>{capability.available ? "可用" : "规划中"}</span>
+              </div>
+              <span className={`skill-card__status ${capability.available ? "skill-card__status--enabled" : ""}`}>
+                {capability.available ? "就绪" : "不可用"}
+              </span>
+            </div>
+            <p>{capability.reason ?? "暂无详情。"}</p>
+            <pre>
+              backendInteractive={String(capability.interactive)}
+              {`\n`}supportsInteractiveCommands={String(capability.supportsInteractiveCommands)}
+              {`\n`}supportsResize={String(capability.supportsResize)}
+              {`\n`}approvalModes={capability.approvalModes.join(", ")}
+              {`\n`}defaultApprovalMode={capability.defaultApprovalMode}
+            </pre>
+          </div>
+        ))}
+        {visibleTerminalSessions.map((session) => (
+          <div key={session.id} className="skill-card">
+            <div className="skill-card__header">
+              <div>
+                <h3>Terminal {session.id.slice(-6)}</h3>
+                <span>{session.backend.toUpperCase()} · {session.shell}</span>
+              </div>
+              <span className={`skill-card__status ${session.status === "open" ? "skill-card__status--enabled" : ""}`}>
+                {session.status}
+              </span>
+            </div>
+            <p>{session.cwd}</p>
+            <pre>
+              pid={session.pid ?? "-"} exit={session.exitCode ?? "-"} size={session.cols ?? "?"}x{session.rows ?? "?"}
+              {session.failureReason ? `\nreason=${session.failureReason}` : ""}
+            </pre>
+            {session.lastCommand && (
+              <div className="runtime-terminal-meta">
+                <div className="runtime-terminal-meta__row">
+                  <span className={`runtime-terminal-pill runtime-terminal-pill--${session.lastCommandRisk ?? "write"}`}>
+                    {session.lastCommandRisk ?? "write"}
+                  </span>
+                  <span className={`runtime-terminal-pill runtime-terminal-pill--approval-${session.lastCommandApprovalState ?? "not_required"}`}>
+                    {session.lastCommandApprovalState ?? "not_required"}
+                  </span>
+                </div>
+                <code className="runtime-terminal-meta__command">{session.lastCommand}</code>
+                {session.lastCommandReason && <small>{session.lastCommandReason}</small>}
+              </div>
+            )}
+            {session.pendingApprovalCommand && session.pendingApprovalMode && (
+              <div className="runtime-terminal-approval">
+                <strong>{session.pendingApprovalMode === "preflight" ? "Preflight approval required" : "Deferred approval required"}</strong>
+                <code className="runtime-terminal-meta__command">{session.pendingApprovalCommand}</code>
+                {session.pendingApprovalReason && <small>{session.pendingApprovalReason}</small>}
+                <div className="runtime-terminal-approval__actions">
+                  <button className="button" onClick={() => void onRespondTerminalApproval(session.id, "approve", "once")}>Approve once</button>
+                  <button className="button" onClick={() => void onRespondTerminalApproval(session.id, "approve", "session")}>Approve session</button>
+                  <button className="button button--ghost" onClick={() => void onRespondTerminalApproval(session.id, "reject")}>Reject</button>
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+        {plugins.map((plugin) => (
+          <div key={plugin.id} className="skill-card">
+            <div className="skill-card__header">
+              <div>
+                <h3>{plugin.name}</h3>
+                <span>{plugin.version} · {plugin.source}</span>
+              </div>
+              <span className={`skill-card__status ${plugin.enabled && plugin.trusted && plugin.validationErrors.length === 0 ? "skill-card__status--enabled" : ""}`}>
+                {plugin.validationErrors.length > 0 ? "无效" : plugin.trusted ? (plugin.enabled ? "已启用" : "已停用") : "未信任"}
+              </span>
+            </div>
+            <p>{plugin.path}</p>
+            <pre>
+              format={plugin.format ?? "my-agent"}
+              {`\n`}source={formatPluginInstallSource(plugin.installSource)}
+              {plugin.marketplaceName ? `\nmarketplace=${plugin.marketplaceName}` : ""}
+              {`\n`}components={formatPluginComponents(plugin.components)}
+              {plugin.hookNames?.length ? `\nhooks=${plugin.hookNames.join(", ")}` : ""}
+              {`\n`}display={plugin.display?.displayName ?? plugin.name}
+              {`\n`}
+              manifest={plugin.manifestPath}
+              {`\n`}tool={plugin.toolName ?? "unconfigured"}
+              {`\n`}capabilities={plugin.capabilities.join(", ") || "none"}
+              {plugin.command ? `\ncommand=${plugin.command}` : ""}
+              {plugin.sandboxMode ? `\nsandbox=${plugin.sandboxMode}` : ""}
+            </pre>
+            {plugin.validationErrors.length > 0 ? <small>{plugin.validationErrors.join(" | ")}</small> : null}
+            <div className="runtime-terminal-approval__actions">
+              <button
+                className="button"
+                disabled={pendingActionKey === `plugin:trust:${plugin.id}`}
+                onClick={() => void handlePluginUpdate(plugin.id, { trusted: !plugin.trusted }, `plugin:trust:${plugin.id}`)}
+              >
+                {plugin.trusted ? "取消信任" : "信任"}
+              </button>
+              <button
+                className="button"
+                disabled={!plugin.trusted || plugin.validationErrors.length > 0 || pendingActionKey === `plugin:enable:${plugin.id}`}
+                onClick={() => void handlePluginUpdate(plugin.id, { enabled: !plugin.enabled }, `plugin:enable:${plugin.id}`)}
+              >
+                {plugin.enabled ? "停用" : "启用"}
+              </button>
+            </div>
+          </div>
+        ))}
+        {internalTools.map((internalTool) => (
+          <div key={internalTool.id} className="skill-card">
+            <div className="skill-card__header">
+              <div>
+                <h3>{internalTool.name}</h3>
+                <span>{internalTool.source}</span>
+              </div>
+              <span className={`skill-card__status ${internalTool.enabled && internalTool.validationErrors.length === 0 ? "skill-card__status--enabled" : ""}`}>
+                {internalTool.validationErrors.length > 0 ? "无效" : internalTool.enabled ? "已启用" : "已停用"}
+              </span>
+            </div>
+            <p>{internalTool.description}</p>
+            <pre>
+              endpoint={internalTool.endpoint ?? "unconfigured"}
+              {`\n`}method={internalTool.method ?? "POST"} timeout={internalTool.timeoutMs ?? 30_000}ms
+              {`\n`}approval={internalTool.approvalRequired ? "required" : "not_required"} writes={String(internalTool.writes)} network={String(internalTool.network)}
+            </pre>
+            {internalTool.approvalReason ? <small>{internalTool.approvalReason}</small> : null}
+            {internalTool.validationErrors.length > 0 ? <small>{internalTool.validationErrors.join(" | ")}</small> : null}
+            <div className="runtime-terminal-approval__actions">
+              <button
+                className="button"
+                disabled={internalTool.validationErrors.length > 0 || pendingActionKey === `internal-tool:${internalTool.id}`}
+                onClick={() =>
+                  void handleInternalToolUpdate(
+                    internalTool.id,
+                    { enabled: !internalTool.enabled },
+                    `internal-tool:${internalTool.id}`,
+                  )
+                }
+              >
+                {internalTool.enabled ? "停用" : "启用"}
+              </button>
+            </div>
+          </div>
+        ))}
+        {mcpMounts.map((mount) => (
+          <div key={mount.id} className="skill-card">
+            <div className="skill-card__header">
+              <div>
+                <h3>{mount.name}</h3>
+                <span>{mount.transport.toUpperCase()}</span>
+              </div>
+              <span className={`skill-card__status ${mount.enabled ? "skill-card__status--enabled" : ""}`}>{mount.enabled ? "已启用" : "已停用"}</span>
+            </div>
+            <p>{mount.url ?? mount.command ?? "未配置目标"}</p>
+            <pre>
+              Session: {mcpSessions.find((session) => session.mountId === mount.id)?.status ?? "not connected"}
+            </pre>
+            <button className="button" disabled={pendingActionKey === `mcp:${mount.id}`} onClick={() => void handleRefreshMountAction(mount.id)}>
+              刷新 Mount
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RuntimeAutomationPanel({
+  projectId,
+  requirementId,
+  threads,
+  automations,
+  automationRuns,
+  automationRunLogs,
+  workflows,
+  runs,
+  worktrees,
+  environments,
+  executionContexts,
+  agentTasks,
+  onCreateAutomation,
+  onUpdateAutomation,
+  onRunAutomation,
+  onRunWorkflow,
+  onResumeWorkflow,
+}: {
+  projectId?: string;
+  requirementId?: string;
+  threads: ThreadRecord[];
+  automations: AutomationRecord[];
+  automationRuns: AutomationRunRecord[];
+  automationRunLogs: AutomationRunLogRecord[];
+  workflows: WorkflowRecord[];
+  runs: WorkflowRunRecord[];
+  worktrees: WorktreeRecord[];
+  environments: EnvironmentRecord[];
+  executionContexts: ExecutionContextRecord[];
+  agentTasks: AgentTaskRecord[];
+  onCreateAutomation: (params: {
+    name: string;
+    kind: AutomationRecord["kind"];
+    projectId: string;
+    requirementId?: string;
+    workflowId?: string;
+    prompt?: string;
+    threadTitle?: string;
+    scheduleType?: AutomationRecord["scheduleType"];
+    intervalMinutes?: number;
+  }) => Promise<void>;
+  onUpdateAutomation: (automationId: string, patch: {
+    name?: string;
+    kind?: AutomationRecord["kind"];
+    projectId?: string;
+    requirementId?: string;
+    workflowId?: string;
+    prompt?: string;
+    threadTitle?: string;
+    scheduleType?: AutomationRecord["scheduleType"];
+    intervalMinutes?: number;
+    status?: AutomationRecord["status"];
+  }) => Promise<void>;
+  onRunAutomation: (automationId: string) => Promise<void>;
+  onRunWorkflow: (workflowId: string) => Promise<unknown>;
+  onResumeWorkflow: (params: { runId: string; approvePausedSteps?: boolean; retryFailedStepIds?: string[] }) => Promise<unknown>;
+}) {
+  const [pendingActionKey, setPendingActionKey] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [automationDraft, setAutomationDraft] = useState<AutomationDraftState>({
+    name: "",
+    kind: "workflow",
+    workflowId: "",
+    prompt: "",
+    threadTitle: "",
+    scheduleType: "manual",
+    intervalMinutes: "60",
+  });
+  const projectAgentTasks = useMemo(
+    () =>
+      projectId
+        ? agentTasks.filter((task) => threads.find((thread) => thread.id === task.parentThreadId)?.projectId === projectId)
+        : agentTasks,
+    [agentTasks, projectId, threads],
+  );
+  const runningRuns = useMemo(() => runs.filter((run) => run.status === "running" || run.status === "paused"), [runs]);
+  const activeAgents = useMemo(
+    () => projectAgentTasks.filter((task) => task.status === "running" || task.status === "awaiting_approval"),
+    [projectAgentTasks],
+  );
+  const visibleAutomations = useMemo(
+    () => (projectId ? automations.filter((automation) => automation.projectId === projectId) : automations),
+    [automations, projectId],
+  );
+  const visibleAutomationRuns = useMemo(
+    () => (projectId ? automationRuns.filter((run) => run.projectId === projectId) : automationRuns),
+    [automationRuns, projectId],
+  );
+  const visibleAutomationRunLogs = useMemo(
+    () => (projectId ? automationRunLogs.filter((log) => log.projectId === projectId) : automationRunLogs),
+    [automationRunLogs, projectId],
+  );
+
+  async function handleResumeWorkflow(params: { runId: string; approvePausedSteps?: boolean; retryFailedStepIds?: string[] }) {
+    const actionKey = [
+      params.runId,
+      params.approvePausedSteps ? "paused" : "resume",
+      params.retryFailedStepIds?.join(",") ?? "",
+    ].join(":");
+
+    setPendingActionKey(actionKey);
+    setActionError(null);
+
+    try {
+      await onResumeWorkflow(params);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPendingActionKey(null);
+    }
+  }
+
+  async function handleCreateAutomation() {
+    if (!projectId || !automationDraft.name.trim()) {
+      return;
+    }
+
+    setPendingActionKey("automation:create");
+    setActionError(null);
+
+    try {
+      await onCreateAutomation({
+        name: automationDraft.name.trim(),
+        kind: automationDraft.kind,
+        projectId,
+        requirementId,
+        workflowId: automationDraft.kind === "workflow" ? automationDraft.workflowId || undefined : undefined,
+        prompt: automationDraft.kind === "prompt" ? automationDraft.prompt.trim() || undefined : undefined,
+        threadTitle: automationDraft.threadTitle.trim() || undefined,
+        scheduleType: automationDraft.scheduleType,
+        intervalMinutes:
+          automationDraft.scheduleType === "interval"
+            ? Math.max(1, Number.parseInt(automationDraft.intervalMinutes, 10) || 60)
+            : undefined,
+      });
+      setAutomationDraft((current) => ({
+        ...current,
+        name: "",
+        workflowId: "",
+        prompt: "",
+        threadTitle: "",
+      }));
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPendingActionKey(null);
+    }
+  }
+
+  async function handleRunAutomation(automationId: string) {
+    setPendingActionKey(`automation:run:${automationId}`);
+    setActionError(null);
+
+    try {
+      await onRunAutomation(automationId);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPendingActionKey(null);
+    }
+  }
+
+  return (
+    <div className="skills-page">
+      <div className="skills-page__header">
+        <h2 className="skills-page__title">Workflows</h2>
+        <span className="skills-page__count">{workflows.length} available</span>
+      </div>
+      <div className="workflow-dashboard">
+        <div className="workflow-dashboard__card">
+          <strong>{runningRuns.length}</strong>
+          <span>Active runs</span>
+        </div>
+        <div className="workflow-dashboard__card">
+          <strong>{visibleAutomations.length}</strong>
+          <span>Automations</span>
+        </div>
+        <div className="workflow-dashboard__card">
+          <strong>{activeAgents.length}</strong>
+          <span>Live agents</span>
+        </div>
+        <div className="workflow-dashboard__card">
+          <strong>{executionContexts.length}</strong>
+          <span>Execution contexts</span>
+        </div>
+      </div>
+      {actionError ? <div className="settings-panel__message workflow-panel__message">{actionError}</div> : null}
+      <div className="skills-grid">
+        <div className="skill-card">
+          <div className="skill-card__header">
+            <div>
+              <h3>New Automation</h3>
+              <span>{projectId ? "Manual or interval execution" : "Select a project first"}</span>
+            </div>
+          </div>
+          <label className="review-popover__field">
+            <span>Name</span>
+            <input
+              type="text"
+              value={automationDraft.name}
+              onChange={(event) => setAutomationDraft((current) => ({ ...current, name: event.target.value }))}
+              placeholder="Nightly review"
+            />
+          </label>
+          <label className="review-popover__field">
+            <span>Kind</span>
+            <select
+              value={automationDraft.kind}
+              onChange={(event) =>
+                setAutomationDraft((current) => ({
+                  ...current,
+                  kind: event.target.value as AutomationRecord["kind"],
+                }))
+              }
+            >
+              <option value="workflow">Workflow</option>
+              <option value="prompt">Prompt</option>
+            </select>
+          </label>
+          {automationDraft.kind === "workflow" ? (
+            <label className="review-popover__field">
+              <span>Workflow</span>
+              <select
+                value={automationDraft.workflowId}
+                onChange={(event) => setAutomationDraft((current) => ({ ...current, workflowId: event.target.value }))}
+              >
+                <option value="">Select workflow</option>
+                {workflows.map((workflow) => (
+                  <option key={workflow.id} value={workflow.id}>
+                    {workflow.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <label className="review-popover__field">
+              <span>Prompt</span>
+              <textarea
+                value={automationDraft.prompt}
+                onChange={(event) => setAutomationDraft((current) => ({ ...current, prompt: event.target.value }))}
+                placeholder="Summarize current repo issues and open a review."
+              />
+            </label>
+          )}
+          <label className="review-popover__field">
+            <span>Thread title</span>
+            <input
+              type="text"
+              value={automationDraft.threadTitle}
+              onChange={(event) => setAutomationDraft((current) => ({ ...current, threadTitle: event.target.value }))}
+              placeholder="Automation run"
+            />
+          </label>
+          <label className="review-popover__field">
+            <span>Schedule</span>
+            <select
+              value={automationDraft.scheduleType}
+              onChange={(event) =>
+                setAutomationDraft((current) => ({
+                  ...current,
+                  scheduleType: event.target.value as AutomationRecord["scheduleType"],
+                }))
+              }
+            >
+              <option value="manual">Manual</option>
+              <option value="interval">Interval</option>
+            </select>
+          </label>
+          {automationDraft.scheduleType === "interval" ? (
+            <label className="review-popover__field">
+              <span>Interval minutes</span>
+              <input
+                type="number"
+                min={1}
+                value={automationDraft.intervalMinutes}
+                onChange={(event) => setAutomationDraft((current) => ({ ...current, intervalMinutes: event.target.value }))}
+              />
+            </label>
+          ) : null}
+          <button
+            className="button button--primary"
+            disabled={
+              !projectId ||
+              !automationDraft.name.trim() ||
+              (automationDraft.kind === "workflow" ? !automationDraft.workflowId : !automationDraft.prompt.trim()) ||
+              pendingActionKey === "automation:create"
+            }
+            onClick={() => void handleCreateAutomation()}
+          >
+            创建自动化
+          </button>
+        </div>
+
+        {visibleAutomations.map((automation) => {
+          const recentRuns = visibleAutomationRuns.filter((run) => run.automationId === automation.id).slice(0, 3);
+          const recentLogs = visibleAutomationRunLogs.filter((log) => log.automationId === automation.id).slice(0, 12);
+          return (
+            <div key={automation.id} className="skill-card">
+              <div className="skill-card__header">
+                <div>
+                  <h3>{automation.name}</h3>
+                  <span>{automation.kind} · {automation.scheduleType === "interval" ? `every ${automation.intervalMinutes ?? 60} min` : "manual"}</span>
+                </div>
+                <span className={`skill-card__status ${automation.status === "active" ? "skill-card__status--enabled" : ""}`}>
+                  {automation.status}
+                </span>
+              </div>
+              <p>{automation.kind === "workflow" ? `Workflow: ${automation.workflowId ?? "unconfigured"}` : automation.prompt ?? "No prompt configured."}</p>
+              <pre>
+                Last run: {automation.lastRunAt ? `${formatRelativeTime(automation.lastRunAt)} · ${automation.lastRunStatus ?? "idle"}` : "never"}
+                {"\n"}
+                Next run: {automation.nextRunAt ? formatRelativeTime(automation.nextRunAt) : "manual only"}
+              </pre>
+              <div className="workflow-run-card__actions">
+                <button
+                  className="button"
+                  disabled={pendingActionKey === `automation:run:${automation.id}`}
+                  onClick={() => void handleRunAutomation(automation.id)}
+                >
+                  运行自动化
+                </button>
+                <button
+                  className="button button--ghost"
+                  onClick={() =>
+                    void onUpdateAutomation(automation.id, {
+                      status: automation.status === "active" ? "paused" : "active",
+                    })
+                  }
+                >
+                  {automation.status === "active" ? "Pause" : "Activate"}
+                </button>
+              </div>
+              <div className="settings-panel__message">Recent runs: {recentRuns.length}</div>
+              {recentRuns.map((run) => (
+                <details key={run.id} className="workflow-step-row">
+                  <summary className="workflow-step-row__title">
+                    <strong>{run.status}</strong>
+                    <span>{formatRelativeTime(run.updatedAt)}</span>
+                  </summary>
+                  <div className="workflow-step-row__meta">
+                    <small>{run.trigger} via {run.runner}{run.initiatedBy ? ` · ${run.initiatedBy}` : ""}</small>
+                    {run.workflowRunId && <code>{run.workflowRunId}</code>}
+                    {run.threadId && <code>{run.threadId}</code>}
+                    {run.turnId && <code>{run.turnId}</code>}
+                    {run.summary ? <small>{run.summary}</small> : null}
+                    {run.error ? <small>{run.error}</small> : null}
+                  </div>
+                  {run.artifacts.length > 0 ? (
+                    <div className="workflow-step-row__meta">
+                      {run.artifacts.map((artifact) => (
+                        <small key={`${run.id}:${artifact.kind}:${artifact.id ?? artifact.label}`}>
+                          {artifact.kind}: {artifact.label}{artifact.summary ? ` · ${artifact.summary}` : ""}
+                        </small>
+                      ))}
+                    </div>
+                  ) : null}
+                  {run.output ? (
+                    <details className="workflow-step-row__details">
+                      <summary>Headless output</summary>
+                      <pre>{run.output}</pre>
+                    </details>
+                  ) : null}
+                  <details className="workflow-step-row__details">
+                    <summary>Audit log</summary>
+                    {visibleAutomationRunLogs.filter((log) => log.runId === run.id).length > 0 ? (
+                      visibleAutomationRunLogs
+                        .filter((log) => log.runId === run.id)
+                        .map((log) => (
+                          <div key={log.id} className="workflow-step-row__failure">
+                            <strong>{log.level} · {formatRelativeTime(log.createdAt)}</strong>
+                            <small>{log.message}</small>
+                            {log.detail ? <pre>{log.detail}</pre> : null}
+                          </div>
+                        ))
+                    ) : (
+                      <small>No persisted logs for this run.</small>
+                    )}
+                  </details>
+                </details>
+              ))}
+              {recentRuns.length === 0 && recentLogs.length > 0 ? (
+                <details className="workflow-step-row">
+                  <summary className="workflow-step-row__title">
+                    <strong>Recent audit log</strong>
+                    <span>{recentLogs.length} entries</span>
+                  </summary>
+                  <div className="workflow-step-row__meta">
+                    {recentLogs.map((log) => (
+                      <small key={log.id}>
+                        {log.level} · {formatRelativeTime(log.createdAt)} · {log.message}
+                      </small>
+                    ))}
+                  </div>
+                </details>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+      <div className="skills-grid">
+        {workflows.map((workflow) => (
+          <div key={workflow.id} className="skill-card">
+            <div className="skill-card__header">
+              <div>
+                <h3>{workflow.name}</h3>
+                <span>{workflow.source}</span>
+              </div>
+            </div>
+            <p>{workflow.description}</p>
+            <pre>{workflow.steps.map((step) => `${step.id}: ${step.type}`).join("\n")}</pre>
+            <button className="button" disabled={!projectId} onClick={() => void onRunWorkflow(workflow.id)}>
+              Run Workflow
+            </button>
+            <div className="settings-panel__message">
+              Recent runs: {runs.filter((run) => run.workflowId === workflow.id).length}
+            </div>
+            {runs
+              .filter((run) => run.workflowId === workflow.id)
+              .slice(0, 2)
+              .map((run) => {
+                const visibleSteps = run.steps.filter((step) => step.status !== "pending").slice(0, 4);
+                const failedSteps = run.steps.filter((step) => step.status === "failed");
+                const pausedActionKey = `${run.id}:paused:`;
+                const relatedExecutionContextIds = new Set(
+                  run.steps.map((step) => step.executionContextId).filter((value): value is string => Boolean(value)),
+                );
+                const relatedEnvironmentIds = new Set(
+                  run.steps.map((step) => step.environmentId).filter((value): value is string => Boolean(value)),
+                );
+                const relatedWorktreeIds = new Set(
+                  run.steps.map((step) => step.worktreeId).filter((value): value is string => Boolean(value)),
+                );
+                const relatedAgentIds = new Set(
+                  run.steps.map((step) => step.agentId).filter((value): value is string => Boolean(value)),
+                );
+                const relatedExecutionContexts = executionContexts.filter((entry) => relatedExecutionContextIds.has(entry.id)).slice(0, 4);
+                const relatedEnvironments = environments.filter((entry) => relatedEnvironmentIds.has(entry.id)).slice(0, 4);
+                const relatedWorktrees = worktrees.filter((entry) => relatedWorktreeIds.has(entry.id)).slice(0, 4);
+                const relatedAgents = projectAgentTasks.filter((entry) => relatedAgentIds.has(entry.id)).slice(0, 4);
+                const relatedAgentTree = buildAgentTree(projectAgentTasks, relatedAgentIds);
+                const contextLineage = buildExecutionContextLineage({
+                  workflow,
+                  run,
+                  executionContexts,
+                  environments,
+                  worktrees,
+                  agentTree: relatedAgentTree,
+                });
+
+                return (
+                  <div key={run.id} className="workflow-run-card">
+                    <div className="workflow-run-card__header">
+                      <span>
+                        {run.status} · {run.id}
+                      </span>
+                      <div className="workflow-run-card__actions">
+                        {run.status === "paused" ? (
+                          <button
+                            className="button button--small"
+                            disabled={pendingActionKey === pausedActionKey}
+                            onClick={() => void handleResumeWorkflow({ runId: run.id, approvePausedSteps: true })}
+                          >
+                            Resume approvals
+                          </button>
+                        ) : null}
+                        {run.status === "failed" && failedSteps.length > 0 ? (
+                          <span className="workflow-run-card__hint">Retry a failed step below.</span>
+                        ) : null}
+                      </div>
+                    </div>
+                    <div className="workflow-run-card__steps">
+                      {visibleSteps.map((step) => {
+                        const retryActionKey = `${run.id}:resume:${step.stepId}`;
+
+                        return (
+                          <div key={`${run.id}:${step.stepId}`} className="workflow-step-row">
+                            <div className="workflow-step-row__title">
+                              <strong>{step.stepId}</strong>
+                              <span>{step.status}</span>
+                            </div>
+                            <div className="workflow-step-row__meta">
+                              {step.artifactSummary && <small>{step.artifactSummary}</small>}
+                              {step.executionContextId && <code>{step.executionContextId}</code>}
+                              {step.environmentId && <code>{step.environmentId}</code>}
+                              <small>第 {step.attempts} 次尝试</small>
+                            </div>
+                            {(step.status === "failed" || (step.retainedFailures?.length ?? 0) > 0) && (
+                              <details className="workflow-step-row__details">
+                                <summary>失败产物</summary>
+                                {step.status === "failed" ? (
+                                  <div className="workflow-step-row__failure">
+                                    <strong>当前失败</strong>
+                                    {step.output ? <pre>{step.output}</pre> : <small>未捕获失败输出。</small>}
+                                  </div>
+                                ) : null}
+                                {step.retainedFailures?.map((failure, index) => (
+                                  <div key={`${run.id}:${step.stepId}:failure:${index}`} className="workflow-step-row__failure">
+                                    <strong>
+                                      第 {failure.attempt} 次尝试 · 保留于 {formatRelativeTime(failure.retainedAt)}
+                                    </strong>
+                                    {failure.artifactSummary ? <small>{failure.artifactSummary}</small> : null}
+                                    {failure.output ? <pre>{failure.output}</pre> : <small>未捕获失败输出。</small>}
+                                  </div>
+                                ))}
+                              </details>
+                            )}
+                            {step.status === "failed" ? (
+                              <div className="workflow-step-row__actions">
+                                <button
+                                  className="button button--small"
+                                  disabled={pendingActionKey === retryActionKey}
+                                  onClick={() =>
+                                    void handleResumeWorkflow({
+                                      runId: run.id,
+                                      retryFailedStepIds: [step.stepId],
+                                    })
+                                  }
+                                >
+                                  重试步骤
+                                </button>
+                              </div>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="workflow-runtime-grid">
+                      <RuntimeAgentTree roots={relatedAgentTree} />
+                      <RuntimeMetaSection
+                        title="执行上下文"
+                        emptyLabel="暂无执行上下文。"
+                        items={relatedExecutionContexts.map((executionContext) => ({
+                          id: executionContext.id,
+                          title: `${executionContext.kind} · ${executionContext.cwd}`,
+                          detail: executionContext.id,
+                        }))}
+                      />
+                      <RuntimeMetaSection
+                        title="Worktrees"
+                        emptyLabel="No workflow worktrees."
+                        items={relatedWorktrees.map((worktree) => ({
+                          id: worktree.id,
+                          title: `${worktree.branch} · ${worktree.status}`,
+                          detail: worktree.path,
+                        }))}
+                      />
+                      <RuntimeMetaSection
+                        title="Environments"
+                        emptyLabel="No runtime environments."
+                        items={relatedEnvironments.map((environment) => ({
+                          id: environment.id,
+                          title: `${environment.shell} · ${environment.cwd}`,
+                          detail: environment.id,
+                        }))}
+                      />
+                    </div>
+                    <RuntimeContextLineage nodes={contextLineage} />
+                  </div>
+                );
+              })}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RuntimeContextLineage({ nodes, selectedNodeId }: { nodes: ContextLineageNode[]; selectedNodeId?: string }) {
+  return (
+    <div className="workflow-runtime-section workflow-runtime-section--lineage">
+      <strong>执行上下文链路</strong>
+      {nodes.length === 0 ? (
+        <span className="workflow-runtime-section__empty">暂无关联执行上下文。</span>
+      ) : (
+        <div className="context-lineage">
+          {nodes.map((node) => (
+            <RuntimeContextLineageNode key={node.id} node={node} depth={0} selectedNodeId={selectedNodeId} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RuntimeContextLineageNode({
+  node,
+  depth,
+  selectedNodeId,
+}: {
+  node: ContextLineageNode;
+  depth: number;
+  selectedNodeId?: string;
+}) {
+  return (
+    <div className="context-lineage__node">
+      <div
+        className={`context-lineage__row ${selectedNodeId === node.id ? "context-lineage__row--active" : ""}`}
+        style={{ paddingLeft: `${depth * 16}px` }}
+      >
+        <div className="context-lineage__title">
+          <span>{node.title}</span>
+          {node.subtitle ? <small>{node.subtitle}</small> : null}
+        </div>
+        {node.details.length > 0 ? (
+          <div className="context-lineage__details">
+            {node.details.map((detail) => (
+              <code key={`${node.id}:${detail}`}>{detail}</code>
+            ))}
+          </div>
+        ) : null}
+      </div>
+      {node.children.length > 0 ? (
+        <div className="context-lineage__children">
+          {node.children.map((child) => (
+            <RuntimeContextLineageNode key={child.id} node={child} depth={depth + 1} selectedNodeId={selectedNodeId} />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function RuntimeAgentTree({
+  roots,
+  selectedAgentId,
+  onSelectAgent,
+}: {
+  roots: AgentTreeNode[];
+  selectedAgentId?: string;
+  onSelectAgent?: (agentId: string) => void;
+}) {
+  return (
+    <div className="workflow-runtime-section workflow-runtime-section--tree">
+      <strong>Sub-agents</strong>
+      {roots.length === 0 ? (
+        <span className="workflow-runtime-section__empty">No delegated agents.</span>
+      ) : (
+        <div className="agent-tree">
+          {roots.map((root) => (
+            <RuntimeAgentTreeNode
+              key={root.task.id}
+              node={root}
+              depth={0}
+              selectedAgentId={selectedAgentId}
+              onSelectAgent={onSelectAgent}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RuntimeAgentTreeNode({
+  node,
+  depth,
+  selectedAgentId,
+  onSelectAgent,
+}: {
+  node: AgentTreeNode;
+  depth: number;
+  selectedAgentId?: string;
+  onSelectAgent?: (agentId: string) => void;
+}) {
+  return (
+    <div className="agent-tree__node">
+      <button
+        type="button"
+        className={`agent-tree__row ${selectedAgentId === node.task.id ? "agent-tree__row--active" : ""}`}
+        style={{ paddingLeft: `${depth * 16}px` }}
+        onClick={() => onSelectAgent?.(node.task.id)}
+      >
+        <div className="agent-tree__title">
+          <span>{node.task.title}</span>
+          <small>{node.task.status}</small>
+        </div>
+        <div className="agent-tree__meta">
+          {node.task.executionContextId && <code>{node.task.executionContextId}</code>}
+          {node.task.childThreadId && <code>{node.task.childThreadId}</code>}
+        </div>
+      </button>
+      {node.task.summary?.finalMessage ? <small className="agent-tree__summary">{node.task.summary.finalMessage}</small> : null}
+      {node.children.length > 0 ? (
+        <div className="agent-tree__children">
+          {node.children.map((child) => (
+            <RuntimeAgentTreeNode
+              key={child.task.id}
+              node={child}
+              depth={depth + 1}
+              selectedAgentId={selectedAgentId}
+              onSelectAgent={onSelectAgent}
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function RuntimeMetaSection({
+  title,
+  emptyLabel,
+  items,
+  selectedItemId,
+  onSelectItem,
+}: {
+  title: string;
+  emptyLabel: string;
+  items: Array<{ id: string; title: string; detail: string }>;
+  selectedItemId?: string;
+  onSelectItem?: (id: string) => void;
+}) {
+  return (
+    <div className="workflow-runtime-section">
+      <strong>{title}</strong>
+      {items.length === 0 ? (
+        <span className="workflow-runtime-section__empty">{emptyLabel}</span>
+      ) : (
+        items.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            className={`workflow-runtime-section__item ${selectedItemId === item.id ? "workflow-runtime-section__item--active" : ""}`}
+            onClick={() => onSelectItem?.(item.id)}
+          >
+            <span>{item.title}</span>
+            <code>{item.detail}</code>
+          </button>
+        ))
+      )}
+    </div>
+  );
+}
+
+function RuntimeSelectionDetail({
+  agent,
+  executionContext,
+  worktree,
+  environment,
+  onOpenThread,
+}: {
+  agent: AgentTaskRecord | null;
+  executionContext: ExecutionContextRecord | null;
+  worktree: WorktreeRecord | null;
+  environment: EnvironmentRecord | null;
+  onOpenThread?: (threadId: string) => void;
+}) {
+  if (!agent && !executionContext && !worktree && !environment) {
+    return null;
+  }
+
+  return (
+    <section className="review-card">
+      <div className="review-card__header">
+        <div>
+          <div className="review-card__title">Runtime 详情</div>
+          <div className="review-card__status review-card__status--completed">当前焦点</div>
+        </div>
+      </div>
+      <div className="review-card__findings">
+        {agent ? (
+          <article className="review-finding">
+            <div className="review-finding__header">
+              <span className="review-finding__severity review-finding__severity--medium">agent</span>
+              <strong>{agent.title}</strong>
+            </div>
+            <div className="review-finding__location">{agent.status}</div>
+            <p className="review-finding__detail">
+              childThread={agent.childThreadId ?? "none"} · executionContext={agent.executionContextId ?? "none"}
+            </p>
+            {agent.summary?.finalMessage ? <p className="review-finding__detail">{agent.summary.finalMessage}</p> : null}
+            {agent.childThreadId && onOpenThread ? (
+              <div className="review-finding__actions">
+                <button
+                  type="button"
+                  className="button button--ghost button--small"
+                  onClick={() => onOpenThread(agent.childThreadId!)}
+                >
+                  打开子线程
+                </button>
+              </div>
+            ) : null}
+          </article>
+        ) : null}
+        {executionContext ? (
+          <article className="review-finding">
+            <div className="review-finding__header">
+              <span className="review-finding__severity review-finding__severity--low">context</span>
+              <strong>{executionContext.kind} · {executionContext.cwd}</strong>
+            </div>
+            <div className="review-finding__location">{executionContext.id}</div>
+            <p className="review-finding__detail">
+              shell={executionContext.shell} · tools={executionContext.detectedTools.join(", ") || "none"}
+            </p>
+          </article>
+        ) : null}
+        {worktree ? (
+          <article className="review-finding">
+            <div className="review-finding__header">
+              <span className="review-finding__severity review-finding__severity--low">worktree</span>
+              <strong>{worktree.branch}</strong>
+            </div>
+            <div className="review-finding__location">{worktree.path}</div>
+            <p className="review-finding__detail">status={worktree.status}</p>
+          </article>
+        ) : null}
+        {environment ? (
+          <article className="review-finding">
+            <div className="review-finding__header">
+              <span className="review-finding__severity review-finding__severity--low">environment</span>
+              <strong>{environment.shell} · {environment.cwd}</strong>
+            </div>
+            <div className="review-finding__location">{environment.id}</div>
+            <p className="review-finding__detail">
+              detectedTools={environment.detectedTools.join(", ") || "none"}
+            </p>
+          </article>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+interface AgentTreeNode {
+  task: AgentTaskRecord;
+  children: AgentTreeNode[];
+}
+
+interface ContextLineageNode {
+  id: string;
+  title: string;
+  subtitle?: string;
+  details: string[];
+  children: ContextLineageNode[];
+}
+
+function buildAgentTree(agentTasks: AgentTaskRecord[], seedAgentIds: Set<string>): AgentTreeNode[] {
+  const tasksById = new Map(agentTasks.map((task) => [task.id, task]));
+  const reachableAgentIds = new Set<string>();
+  const queue = [...seedAgentIds].filter((agentId) => tasksById.has(agentId));
+
+  while (queue.length > 0) {
+    const currentId = queue.shift()!;
+
+    if (reachableAgentIds.has(currentId)) {
+      continue;
+    }
+
+    reachableAgentIds.add(currentId);
+    const currentTask = tasksById.get(currentId);
+
+    if (!currentTask?.childThreadId) {
+      continue;
+    }
+
+    for (const candidate of agentTasks) {
+      if (candidate.parentThreadId === currentTask.childThreadId) {
+        queue.push(candidate.id);
+      }
+    }
+  }
+
+  const includedTasks = agentTasks.filter((task) => reachableAgentIds.has(task.id));
+  const parentById = new Map<string, string>();
+
+  for (const task of includedTasks) {
+    const parent = includedTasks.find((candidate) => candidate.childThreadId && candidate.childThreadId === task.parentThreadId);
+
+    if (parent) {
+      parentById.set(task.id, parent.id);
+    }
+  }
+
+  const childrenByParentId = new Map<string, AgentTaskRecord[]>();
+  for (const task of includedTasks) {
+    const parentId = parentById.get(task.id);
+
+    if (!parentId) {
+      continue;
+    }
+
+    childrenByParentId.set(parentId, [...(childrenByParentId.get(parentId) ?? []), task]);
+  }
+
+  const roots = includedTasks.filter((task) => !parentById.has(task.id));
+  return roots.map((task) => buildAgentTreeNode(task, childrenByParentId));
+}
+
+function collectAgentTreeIds(nodes: AgentTreeNode[]): string[] {
+  const ids: string[] = [];
+  const queue = [...nodes];
+
+  while (queue.length > 0) {
+    const node = queue.shift()!;
+    ids.push(node.task.id);
+    queue.push(...node.children);
+  }
+
+  return ids;
+}
+
+function findAgentTreeNodeById(nodes: AgentTreeNode[], agentId: string): AgentTreeNode | null {
+  const queue = [...nodes];
+
+  while (queue.length > 0) {
+    const node = queue.shift()!;
+
+    if (node.task.id === agentId) {
+      return node;
+    }
+
+    queue.push(...node.children);
+  }
+
+  return null;
+}
+
+function buildAgentTreeNode(
+  task: AgentTaskRecord,
+  childrenByParentId: Map<string, AgentTaskRecord[]>,
+): AgentTreeNode {
+  const children = (childrenByParentId.get(task.id) ?? [])
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+    .map((child) => buildAgentTreeNode(child, childrenByParentId));
+
+  return {
+    task,
+    children,
+  };
+}
+
+function buildThreadExecutionContextLineage(params: {
+  thread: ThreadRecord | null;
+  executionContexts: ExecutionContextRecord[];
+  environments: EnvironmentRecord[];
+  worktrees: WorktreeRecord[];
+  agentTree: AgentTreeNode[];
+}): ContextLineageNode[] {
+  const executionContextById = new Map(params.executionContexts.map((entry) => [entry.id, entry]));
+  const environmentById = new Map(params.environments.map((entry) => [entry.id, entry]));
+  const worktreeById = new Map(params.worktrees.map((entry) => [entry.id, entry]));
+  const rootContexts = params.executionContexts.filter((executionContext) => !executionContext.agentId);
+  const lineageRoots = rootContexts
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+    .map((executionContext) => {
+      const environment = executionContext.environmentId ? environmentById.get(executionContext.environmentId) : undefined;
+      const worktree = executionContext.worktreeId ? worktreeById.get(executionContext.worktreeId) : undefined;
+
+      return {
+        id: `thread-context:${executionContext.id}`,
+        title: executionContext.kind === "thread" ? params.thread?.title ?? "Thread workspace" : `${executionContext.kind} context`,
+        subtitle: `${executionContext.kind} · ${executionContext.cwd}`,
+        details: buildContextDetailTokens(executionContext, environment, worktree),
+        children:
+          executionContext.kind === "thread"
+            ? params.agentTree.map((node) => buildAgentContextLineageNode(node, executionContextById, environmentById, worktreeById))
+            : [],
+      } satisfies ContextLineageNode;
+    });
+
+  if (lineageRoots.length > 0) {
+    return lineageRoots;
+  }
+
+  if (params.agentTree.length === 0) {
+    return [];
+  }
+
+  return [
+    {
+      id: `thread:${params.thread?.id ?? "current"}`,
+      title: params.thread?.title ?? "Thread workspace",
+      subtitle: "Delegated runtime",
+      details: [],
+      children: params.agentTree.map((node) => buildAgentContextLineageNode(node, executionContextById, environmentById, worktreeById)),
+    },
+  ];
+}
+
+function buildRuntimeSelectionNodeId(selection: RuntimeFocusTarget | null): string | undefined {
+  if (!selection) {
+    return undefined;
+  }
+
+  if (selection.kind === "agent") {
+    return `agent:${selection.id}`;
+  }
+
+  if (selection.kind === "executionContext") {
+    return `thread-context:${selection.id}`;
+  }
+
+  return undefined;
+}
+
+function buildExecutionContextLineage(params: {
+  workflow: WorkflowRecord;
+  run: WorkflowRunRecord;
+  executionContexts: ExecutionContextRecord[];
+  environments: EnvironmentRecord[];
+  worktrees: WorktreeRecord[];
+  agentTree: AgentTreeNode[];
+}): ContextLineageNode[] {
+  const workflowStepById = new Map(params.workflow.steps.map((step) => [step.id, step]));
+  const executionContextById = new Map(params.executionContexts.map((entry) => [entry.id, entry]));
+  const environmentById = new Map(params.environments.map((entry) => [entry.id, entry]));
+  const worktreeById = new Map(params.worktrees.map((entry) => [entry.id, entry]));
+  const rootAgentById = new Map(params.agentTree.map((entry) => [entry.task.id, entry]));
+
+  return params.run.steps
+    .filter((step) => step.status !== "pending")
+    .map((step) => {
+      const workflowStep = workflowStepById.get(step.stepId);
+      const executionContext = step.executionContextId ? executionContextById.get(step.executionContextId) : undefined;
+      const environment = executionContext?.environmentId ? environmentById.get(executionContext.environmentId) : undefined;
+      const worktree =
+        step.worktreeId ? worktreeById.get(step.worktreeId) : executionContext?.worktreeId ? worktreeById.get(executionContext.worktreeId) : undefined;
+      const rootAgent = step.agentId ? rootAgentById.get(step.agentId) : undefined;
+
+      return {
+        id: `step:${step.stepId}`,
+        title: `${step.stepId} · ${workflowStep?.type ?? "step"}`,
+        subtitle: executionContext ? `${executionContext.kind} · ${executionContext.cwd}` : step.status,
+        details: buildContextDetailTokens(executionContext, environment, worktree),
+        children: rootAgent
+          ? rootAgent.children.map((child) => buildAgentContextLineageNode(child, executionContextById, environmentById, worktreeById))
+          : [],
+      } satisfies ContextLineageNode;
+    });
+}
+
+function buildAgentContextLineageNode(
+  node: AgentTreeNode,
+  executionContextById: Map<string, ExecutionContextRecord>,
+  environmentById: Map<string, EnvironmentRecord>,
+  worktreeById: Map<string, WorktreeRecord>,
+): ContextLineageNode {
+  const executionContext = node.task.executionContextId ? executionContextById.get(node.task.executionContextId) : undefined;
+  const environment = executionContext?.environmentId ? environmentById.get(executionContext.environmentId) : undefined;
+  const worktree =
+    node.task.worktreeId ? worktreeById.get(node.task.worktreeId) : executionContext?.worktreeId ? worktreeById.get(executionContext.worktreeId) : undefined;
+
+  return {
+    id: `agent:${node.task.id}`,
+    title: node.task.title,
+    subtitle: executionContext ? `${executionContext.kind} · ${executionContext.cwd}` : node.task.status,
+    details: buildContextDetailTokens(executionContext, environment, worktree),
+    children: node.children.map((child) => buildAgentContextLineageNode(child, executionContextById, environmentById, worktreeById)),
+  };
+}
+
+function buildContextDetailTokens(
+  executionContext?: ExecutionContextRecord,
+  environment?: EnvironmentRecord,
+  worktree?: WorktreeRecord,
+): string[] {
+  return [
+    executionContext?.id ? `ctx:${executionContext.id}` : null,
+    environment?.id ? `env:${environment.id}` : null,
+    worktree?.branch ? `wt:${worktree.branch}` : null,
+    environment?.shell ? `shell:${environment.shell}` : null,
+  ].filter((value): value is string => Boolean(value));
+}
+
+function SettingsPanel({
+  project,
+  templates,
+  protocolCompatibility,
+  providerForm,
+  setProviderForm,
+  providerTestMessage,
+  providerModels,
+  providerModelsLoading,
+  providerModelsError,
+  worktrees,
+  environments,
+  onTestProvider,
+  onRefreshProviderModels,
+  onSaveConfig,
+  onPickWorkspace,
+  onScaffoldTemplate,
+}: {
+  project?: ProjectRecord;
+  templates: DistributionTemplateRecord[];
+  protocolCompatibility?: import("@my-agent/protocol").ProtocolCompatibilityRecord;
+  providerForm: ProviderFormState;
+  setProviderForm: React.Dispatch<React.SetStateAction<ProviderFormState>>;
+  providerTestMessage?: string;
+  providerModels: ProviderModelRecord[];
+  providerModelsLoading: boolean;
+  providerModelsError?: string;
+  worktrees: WorktreeRecord[];
+  environments: EnvironmentRecord[];
+  onTestProvider: () => Promise<void>;
+  onRefreshProviderModels: () => Promise<void>;
+  onSaveConfig: () => void;
+  onPickWorkspace: () => Promise<void>;
+  onScaffoldTemplate: (params: { templateId: string; projectId?: string; target: DistributionTarget; name?: string; directoryName?: string }) => Promise<{ rootPath: string; createdPaths: string[] }>;
+}) {
+  type SettingsCategory = "api" | "project" | "policy" | "runtime" | "distribution";
+  const [activeCategory, setActiveCategory] = useState<SettingsCategory>("api");
+
+  const categoryTitles: Record<SettingsCategory, string> = {
+    api: "API 配置",
+    project: "项目设置",
+    policy: "审批策略",
+    runtime: "系统诊断",
+    distribution: "模板与分发",
+  };
+
+  const categoryDescriptions: Record<SettingsCategory, string> = {
+    api: "配置模型服务连接和默认模型偏好。",
+    project: "管理当前项目的工作区路径。",
+    policy: "设置自动化动作和终端命令的审批边界。",
+    runtime: "查看运行环境、worktree 和诊断信息。",
+    distribution: "生成扩展模板并查看协议兼容信息。",
+  };
+
+  return (
+    <div className="settings-layout">
+      {/* 左侧分类导航 */}
+      <aside className="settings-sidebar">
+        <div className="settings-sidebar__header">
+          <h2>Settings</h2>
+        </div>
+        <nav className="settings-nav">
+          <SettingsNavItem
+            icon={<Key size={18} />}
+            label="API 配置"
+            category="api"
+            activeCategory={activeCategory}
+            onClick={setActiveCategory}
+          />
+          <SettingsNavItem
+            icon={<FolderGit2 size={18} />}
+            label="项目设置"
+            category="project"
+            activeCategory={activeCategory}
+            onClick={setActiveCategory}
+          />
+          <SettingsNavItem
+            icon={<Shield size={18} />}
+            label="审批策略"
+            category="policy"
+            activeCategory={activeCategory}
+            onClick={setActiveCategory}
+          />
+          <SettingsNavItem
+            icon={<Server size={18} />}
+            label="系统诊断"
+            category="runtime"
+            activeCategory={activeCategory}
+            onClick={setActiveCategory}
+          />
+          <SettingsNavItem
+            icon={<Box size={18} />}
+            label="模板与分发"
+            category="distribution"
+            activeCategory={activeCategory}
+            onClick={setActiveCategory}
+          />
+        </nav>
+      </aside>
+
+      {/* 右侧内容区 */}
+      <div className="settings-content">
+        <div className="settings-content__header">
+          <h3>{categoryTitles[activeCategory]}</h3>
+          <p>{categoryDescriptions[activeCategory]}</p>
+        </div>
+        <div className="settings-content__body" key={activeCategory}>
+          {activeCategory === "api" && (
+            <ApiConfigCard
+              providerForm={providerForm}
+              setProviderForm={setProviderForm}
+              providerModels={providerModels}
+              providerModelsLoading={providerModelsLoading}
+              providerModelsError={providerModelsError}
+              onRefreshModels={onRefreshProviderModels}
+              onTestProvider={onTestProvider}
+              providerTestMessage={providerTestMessage}
+            />
+          )}
+          {activeCategory === "project" && (
+            <ProjectConfigCard
+              project={project}
+              providerForm={providerForm}
+              setProviderForm={setProviderForm}
+              onPickWorkspace={onPickWorkspace}
+            />
+          )}
+          {activeCategory === "policy" && (
+            <PolicyConfigCard
+              project={project}
+              providerForm={providerForm}
+              setProviderForm={setProviderForm}
+            />
+          )}
+          {activeCategory === "runtime" && (
+            <RuntimeDiagnosticsCard
+              worktrees={worktrees}
+              environments={environments}
+            />
+          )}
+          {activeCategory === "distribution" && (
+            <DistributionTemplatesCard
+              project={project}
+              templates={templates}
+              protocolCompatibility={protocolCompatibility}
+              onScaffoldTemplate={onScaffoldTemplate}
+            />
+          )}
+
+          {/* 保存按钮 - 始终显示 */}
+          <div className="settings-actions">
+            <button className="button button--primary" onClick={onSaveConfig}>
+              保存设置
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DistributionTemplatesCard({
+  project,
+  templates,
+  protocolCompatibility,
+  onScaffoldTemplate,
+}: {
+  project?: ProjectRecord;
+  templates: DistributionTemplateRecord[];
+  protocolCompatibility?: import("@my-agent/protocol").ProtocolCompatibilityRecord;
+  onScaffoldTemplate: (params: {
+    templateId: string;
+    projectId?: string;
+    target: DistributionTarget;
+    name?: string;
+    directoryName?: string;
+  }) => Promise<{ rootPath: string; createdPaths: string[] }>;
+}) {
+  const [targetByTemplate, setTargetByTemplate] = useState<Record<string, DistributionTarget>>({});
+  const [message, setMessage] = useState<string | null>(null);
+  const [busyTemplateId, setBusyTemplateId] = useState<string | null>(null);
+
+  return (
+    <div className="settings-card">
+      <div className="settings-card__header">
+        <Box size={20} />
+        <h4>Template Kits</h4>
+      </div>
+      <div className="settings-card__body">
+        <div className="settings-panel__message">
+          Protocol {protocolCompatibility?.protocolVersion ?? "0.1.0"} · additive changes {protocolCompatibility?.additiveChangesOnly ? "enabled" : "unknown"}
+        </div>
+        <div className="runtime-plugins-list">
+          {templates.map((template) => {
+            const selectedTarget = targetByTemplate[template.id] ?? template.recommendedTarget;
+            const repoDisabled = selectedTarget === "repo" && !project;
+            const disabled = busyTemplateId === template.id || repoDisabled;
+
+            return (
+              <div key={template.id} className="plugin-card">
+                <div className="plugin-card__header">
+                  <div>
+                    <h4>{template.name}</h4>
+                    <span>{template.kind} · v{template.version}</span>
+                  </div>
+                  <span className="tool-pill">{template.destinationHint}</span>
+                </div>
+                <p className="tool-card__description">{template.description}</p>
+                <div className="tool-meta-grid">
+                  <span>Files</span>
+                  <span>{template.files.join(", ")}</span>
+                  <span>Docs</span>
+                  <span>{template.documentationPath ?? "docs/distribution-and-templates.md"}</span>
+                </div>
+                <div className="settings-field">
+                  <label>
+                    <span>Target</span>
+                    <select
+                      value={selectedTarget}
+                      onChange={(event) =>
+                        setTargetByTemplate((current) => ({
+                          ...current,
+                          [template.id]: event.target.value as DistributionTarget,
+                        }))
+                      }
+                    >
+                      {template.supportedTargets.map((target) => (
+                        <option key={target} value={target}>
+                          {target}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <div className="settings-actions">
+                  <button
+                    className="button button--primary"
+                    disabled={disabled}
+                    onClick={() => {
+                      setBusyTemplateId(template.id);
+                      setMessage(null);
+                      void onScaffoldTemplate({
+                        templateId: template.id,
+                        projectId: project?.id,
+                        target: selectedTarget,
+                        name: template.name,
+                      })
+                        .then((result) => {
+                          setMessage(`Scaffolded ${template.name} into ${result.rootPath}`);
+                        })
+                        .catch((error) => {
+                          setMessage(error instanceof Error ? error.message : String(error));
+                        })
+                        .finally(() => {
+                          setBusyTemplateId(null);
+                        });
+                    }}
+                  >
+                    {busyTemplateId === template.id ? "生成中..." : "生成模板"}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {message ? <div className="settings-panel__message">{message}</div> : null}
+      </div>
+    </div>
+  );
+}
+
+function ApiConfigCard({
+  providerForm,
+  setProviderForm,
+  providerModels,
+  providerModelsLoading,
+  providerModelsError,
+  onRefreshModels,
+  onTestProvider,
+  providerTestMessage,
+}: {
+  providerForm: ProviderFormState;
+  setProviderForm: React.Dispatch<React.SetStateAction<ProviderFormState>>;
+  providerModels: ProviderModelRecord[];
+  providerModelsLoading: boolean;
+  providerModelsError?: string;
+  onRefreshModels: () => Promise<void>;
+  onTestProvider: () => Promise<void>;
+  providerTestMessage?: string;
+}) {
+  return (
+    <div className="settings-card">
+      <div className="settings-card__header">
+        <Key size={20} />
+          <h4>服务配置</h4>
+      </div>
+      <div className="settings-card__body">
+        <div className="settings-field">
+          <label>
+            <span>Base URL</span>
+            <input
+              value={providerForm.baseUrl}
+              onChange={(e) => setProviderForm((s) => ({ ...s, baseUrl: e.target.value }))}
+              placeholder="https://api.example.com"
+            />
+          </label>
+        </div>
+        <div className="settings-field">
+          <label>
+            <span>Model</span>
+            {providerModels.length > 0 ? (
+              <select
+                value={providerForm.model}
+                onChange={(e) => setProviderForm((s) => ({ ...s, model: e.target.value }))}
+              >
+                {!providerForm.model && <option value="">Select a model</option>}
+                {providerModels.map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {model.id}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                value={providerForm.model}
+                onChange={(e) => setProviderForm((s) => ({ ...s, model: e.target.value }))}
+                placeholder="gpt-5.4"
+              />
+            )}
+          </label>
+        </div>
+        <div className="settings-field">
+          <label>
+            <span>推理强度</span>
+            <select
+              value={providerForm.reasoningEffort}
+              onChange={(e) =>
+                setProviderForm((s) => ({ ...s, reasoningEffort: e.target.value as ModelReasoningEffort }))
+              }
+            >
+              {REASONING_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div className="settings-field">
+          <label>
+            <span>API Key</span>
+            <input
+              value={providerForm.apiKey}
+              onChange={(e) => setProviderForm((s) => ({ ...s, apiKey: e.target.value }))}
+              type="password"
+              placeholder="sk-..."
+            />
+          </label>
+        </div>
+        <div className="settings-actions">
+          <button className="button" onClick={() => void onRefreshModels()}>
+            {providerModelsLoading ? "模型加载中..." : "刷新模型"}
+          </button>
+          <button className="button" onClick={() => void onTestProvider()}>
+            测试连接
+          </button>
+        </div>
+        {providerModelsError && <div className="settings-panel__message">{providerModelsError}</div>}
+        {providerTestMessage && (
+          <div className="settings-panel__message">{providerTestMessage}</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function buildProviderProfileFromForm(
+  provider: ProviderProfile | undefined,
+  providerForm: ProviderFormState,
+): ProviderProfile | undefined {
+  if (!provider) {
+    return undefined;
+  }
+
+  return {
+    ...provider,
+    baseUrl: providerForm.baseUrl,
+    apiKey: providerForm.apiKey,
+    model: providerForm.model,
+    reasoningEffort: providerForm.reasoningEffort,
+  };
+}
+
+function ProjectConfigCard({
+  project,
+  providerForm,
+  setProviderForm,
+  onPickWorkspace,
+}: {
+  project?: ProjectRecord;
+  providerForm: ProviderFormState;
+  setProviderForm: React.Dispatch<React.SetStateAction<ProviderFormState>>;
+  onPickWorkspace: () => Promise<void>;
+}) {
+  return (
+    <div className="settings-card">
+      <div className="settings-card__header">
+        <FolderGit2 size={20} />
+        <h4>{project ? `项目：${project.name}` : "项目工作区"}</h4>
+      </div>
+      <div className="settings-card__body">
+        <div className="settings-field">
+          <label>
+            <span>根路径</span>
+            <div className="settings-field__row">
+              <input
+                value={providerForm.rootPath}
+                onChange={(e) => setProviderForm((s) => ({ ...s, rootPath: e.target.value }))}
+                placeholder="/path/to/workspace"
+              />
+              <button className="button--small" onClick={() => void onPickWorkspace()}>
+                <FolderOpen size={14} />
+              </button>
+            </div>
+          </label>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PolicyConfigCard({
+  project,
+  providerForm,
+  setProviderForm,
+}: {
+  project?: ProjectRecord;
+  providerForm: ProviderFormState;
+  setProviderForm: React.Dispatch<React.SetStateAction<ProviderFormState>>;
+}) {
+  return (
+    <div className="settings-card">
+      <div className="settings-card__header">
+        <Shield size={20} />
+        <h4>审批策略</h4>
+      </div>
+      <div className="settings-card__body">
+        <div className="settings-field">
+          <label>
+            <span>策略模式</span>
+            <select
+              value={providerForm.approvalPolicy}
+              onChange={(e) => setProviderForm((s) => ({ ...s, approvalPolicy: e.target.value as typeof s.approvalPolicy }))}
+            >
+              <option value="on-request">on-request</option>
+              <option value="on-failure">on-failure</option>
+              <option value="never">never</option>
+            </select>
+          </label>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RuntimeDiagnosticsCard({
+  worktrees,
+  environments,
+}: {
+  worktrees: WorktreeRecord[];
+  environments: EnvironmentRecord[];
+}) {
+  return (
+    <div className="settings-card">
+      <div className="settings-card__header">
+        <Server size={20} />
+        <h4>运行环境</h4>
+      </div>
+      <div className="settings-card__body">
+        <div className="runtime-stats">
+          <div className="runtime-stat">
+            <div className="runtime-stat__indicator" />
+            <div className="runtime-stat__value">{worktrees.length}</div>
+            <div className="runtime-stat__label">Worktrees</div>
+          </div>
+          <div className="runtime-stat">
+            <div className="runtime-stat__indicator" />
+            <div className="runtime-stat__value">{environments.length}</div>
+            <div className="runtime-stat__label">Environments</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EmptyState() {
+  return (
+    <div className="empty-state">
+      <div className="empty-state__icon">
+        <MessageSquarePlus size={48} />
+      </div>
+      <h2>要在 my-agent 中构建什么？</h2>
+      <p>向 my-agent 描述你的想法，或粘贴图片和文件开始协作。</p>
+    </div>
+  );
+}
+
+function ConversationFeed({
+  entries,
+  threadId,
+  focusTarget,
+}: {
+  entries: ConversationEntry[];
+  threadId?: string;
+  focusTarget?: ConversationFocusTarget | null;
+}) {
+  const [expandedThoughts, setExpandedThoughts] = useState<Record<string, boolean>>({});
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const [attachmentPreview, setAttachmentPreview] = useState<UserAttachmentSummary | null>(null);
+  const [highlightedEntryId, setHighlightedEntryId] = useState<string | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const hasIncompleteThought = entries.some((entry) => entry.kind === "thought" && !entry.completed);
+
+    if (!hasIncompleteThought) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, [entries]);
+
+  useEffect(() => {
+    setExpandedThoughts((current) => {
+      let changed = false;
+      const next = { ...current };
+
+      for (const entry of entries) {
+        if (entry.kind !== "thought" || entry.id in next) {
+          continue;
+        }
+
+        next[entry.id] = !entry.completed;
+        changed = true;
+      }
+
+      return changed ? next : current;
+    });
+  }, [entries]);
+
+  useLayoutEffect(() => {
+    if (!focusTarget || !rootRef.current) {
+      return;
+    }
+
+    const selector = focusTarget.itemId
+      ? `[data-entry-item-id="${escapeAttributeValue(focusTarget.itemId)}"]`
+      : focusTarget.turnId
+        ? `[data-entry-turn-id="${escapeAttributeValue(focusTarget.turnId)}"]`
+        : null;
+
+    if (!selector) {
+      return;
+    }
+
+    const target = rootRef.current.querySelector<HTMLElement>(selector);
+
+    if (!target) {
+      return;
+    }
+
+    target.scrollIntoView({
+      behavior: "smooth",
+      block: "center",
+    });
+
+    const entryId = target.dataset.entryId ?? null;
+    setHighlightedEntryId(entryId);
+
+    if (!entryId) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setHighlightedEntryId((current) => (current === entryId ? null : current));
+    }, 1800);
+
+    return () => window.clearTimeout(timer);
+  }, [focusTarget]);
+
+  return (
+    <>
+      <div className="conversation-feed" ref={rootRef}>
+        {entries.map((entry) => {
+        const anchor = getConversationEntryAnchor(entry);
+        const isHighlighted = highlightedEntryId === anchor.entryId;
+
+        if (entry.kind === "user") {
+          const userText = getUserDisplayText(entry.item);
+          const attachments = getUserAttachmentSummaries(entry.item);
+
+          return (
+            <div
+              key={entry.id}
+              className={`conversation-entry conversation-entry--user ${isHighlighted ? "conversation-entry--highlighted" : ""}`}
+              data-entry-id={anchor.entryId}
+              data-entry-turn-id={anchor.turnId}
+              data-entry-item-id={anchor.itemId}
+            >
+              <div className={`user-bubble ${!userText && attachments.length > 0 ? "user-bubble--attachments-only" : ""}`}>
+                {userText ? <pre className="user-bubble__text">{userText}</pre> : null}
+                {attachments.length > 0 ? (
+                  <div className="user-bubble__attachments">
+                    {attachments.map((attachment) => {
+                      const canPreviewImage = attachment.kind === "image" && Boolean(attachment.previewSrc);
+
+                      if (canPreviewImage) {
+                        return (
+                          <button
+                            key={`${entry.id}-${attachment.path ?? attachment.name}`}
+                            type="button"
+                            className="user-attachment-card user-attachment-card--interactive"
+                            onClick={() => setAttachmentPreview(attachment)}
+                            aria-label={`Preview ${attachment.name}`}
+                            title={attachment.path ?? attachment.name}
+                          >
+                            <img
+                              className="user-attachment-card__thumb"
+                              src={attachment.previewSrc}
+                              alt={attachment.name}
+                              loading="lazy"
+                            />
+                            <span className="user-attachment-card__body">
+                              <span className="user-attachment-card__name">{attachment.name}</span>
+                              <span className="user-attachment-card__meta">
+                                {formatAttachmentKindLabel(attachment.kind)}
+                                {attachment.mediaType ? ` · ${attachment.mediaType}` : ""}
+                                {attachment.truncated ? " · Truncated" : ""}
+                              </span>
+                            </span>
+                          </button>
+                        );
+                      }
+
+                      return (
+                        <div
+                          key={`${entry.id}-${attachment.path ?? attachment.name}`}
+                          className="user-attachment-card"
+                          title={attachment.path ?? attachment.name}
+                        >
+                          <span className="user-attachment-card__icon" aria-hidden="true">
+                            {attachment.kind === "image" ? <ImagePlus size={14} /> : attachment.kind === "text" ? <FileText size={14} /> : <Box size={14} />}
+                          </span>
+                          <span className="user-attachment-card__body">
+                            <span className="user-attachment-card__name">{attachment.name}</span>
+                            <span className="user-attachment-card__meta">
+                              {formatAttachmentKindLabel(attachment.kind)}
+                              {attachment.mediaType ? ` · ${attachment.mediaType}` : ""}
+                              {attachment.truncated ? " · Truncated" : ""}
+                            </span>
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          );
+        }
+
+        if (entry.kind === "thought") {
+          const expanded = expandedThoughts[entry.id] ?? !entry.completed;
+          const elapsedMs = entry.completed ? entry.durationMs : Math.max(0, nowMs - entry.startedAtMs);
+
+          return (
+            <section
+              key={entry.id}
+              className={`thought-group ${expanded ? "thought-group--expanded" : ""} ${isHighlighted ? "conversation-entry--highlighted" : ""}`}
+              data-entry-id={anchor.entryId}
+              data-entry-turn-id={anchor.turnId}
+              data-entry-item-id={anchor.itemId}
+            >
+              <button
+                className="thought-group__toggle"
+                onClick={() =>
+                  setExpandedThoughts((current) => ({
+                    ...current,
+                    [entry.id]: !expanded,
+                  }))
+                }
+                aria-expanded={expanded}
+              >
+                <span className="thought-group__rule" />
+                <span className="thought-group__summary">{`Processed ${formatElapsedTime(elapsedMs)}`}</span>
+                <ChevronRight className={`thought-group__chevron ${expanded ? "thought-group__chevron--open" : ""}`} size={16} />
+                <span className="thought-group__rule" />
+              </button>
+
+              {expanded && (
+                <div className="thought-group__content">
+                  {entry.items.map((item) => (
+                    <div
+                      key={item.id}
+                      className={`thought-group__item ${item.kind === "reasoning" ? "" : "thought-group__item--meta"}`}
+                    >
+                      <pre className="thought-group__text">{formatThoughtItemText(item)}</pre>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          );
+        }
+
+        if (entry.kind === "changes") {
+          return (
+            <div
+              key={entry.id}
+              className={isHighlighted ? "conversation-entry--highlighted" : undefined}
+              data-entry-id={anchor.entryId}
+              data-entry-turn-id={anchor.turnId}
+              data-entry-item-id={anchor.itemId}
+            >
+              <ChangedFilesCard items={entry.items} threadId={threadId} />
+            </div>
+          );
+        }
+
+        if (entry.kind === "answer") {
+          return (
+            <section
+              key={entry.id}
+              className={`answer-group ${isHighlighted ? "conversation-entry--highlighted" : ""}`}
+              data-entry-id={anchor.entryId}
+              data-entry-turn-id={anchor.turnId}
+              data-entry-item-id={anchor.itemId}
+            >
+              <div className="answer-group__header">
+                <span className="answer-group__rule" />
+                <span className="answer-group__summary">Final answer</span>
+                <span className="answer-group__rule" />
+              </div>
+              <div className="answer-group__content">
+                <pre className="answer-group__text">{getItemDisplayText(entry.item)}</pre>
+              </div>
+            </section>
+          );
+        }
+
+        return (
+          <section
+            key={entry.id}
+            className={`system-note ${isHighlighted ? "conversation-entry--highlighted" : ""}`}
+            data-entry-id={anchor.entryId}
+            data-entry-turn-id={anchor.turnId}
+            data-entry-item-id={anchor.itemId}
+          >
+            <pre className="system-note__text">{getItemDisplayText(entry.item)}</pre>
+          </section>
+        );
+        })}
+      </div>
+      <Dialog.Root open={Boolean(attachmentPreview)} onOpenChange={(open) => !open && setAttachmentPreview(null)}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="dialog-overlay" />
+          <Dialog.Content className="dialog-content image-preview-dialog">
+            <div className="image-preview-dialog__header">
+              <div className="image-preview-dialog__meta">
+                <Dialog.Title className="dialog-title image-preview-dialog__title">
+                  {attachmentPreview?.name ?? "Image preview"}
+                </Dialog.Title>
+                {attachmentPreview?.mediaType ? (
+                  <Dialog.Description className="dialog-description image-preview-dialog__description">
+                    {attachmentPreview.mediaType}
+                  </Dialog.Description>
+                ) : null}
+              </div>
+              <Dialog.Close className="image-preview-dialog__close" aria-label="Close image preview">
+                <X size={18} />
+              </Dialog.Close>
+            </div>
+            <div className="image-preview-dialog__viewport">
+              {attachmentPreview?.previewSrc ? (
+                <img
+                  className="image-preview-dialog__image"
+                  src={attachmentPreview.previewSrc}
+                  alt={attachmentPreview.name}
+                />
+              ) : null}
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+    </>
+  );
+}
+
+function ChangedFilesCard({ items, threadId }: { items: ItemRecord[]; threadId?: string }) {
+  const files = useMemo(
+    () =>
+      items
+        .map((item) => ({
+          itemId: item.id,
+          path: getChangedFilePath(item),
+        }))
+        .filter((entry): entry is { itemId: string; path: string } => Boolean(entry.path))
+        .filter((entry, index, all) => all.findIndex((candidate) => candidate.path === entry.path) === index),
+    [items],
+  );
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [reviews, setReviews] = useState<Record<string, ChangedFileReview>>(() =>
+    Object.fromEntries(files.map((file) => [file.path, { path: file.path, status: "idle" as const }])),
+  );
+
+  useEffect(() => {
+    setReviews((current) => {
+      const next: Record<string, ChangedFileReview> = {};
+
+      for (const file of files) {
+        next[file.path] = current[file.path] ?? { path: file.path, status: "idle" };
+      }
+
+      return next;
+    });
+  }, [files]);
+
+  useEffect(() => {
+    if (!threadId || files.length === 0) {
+      return;
+    }
+
+    void loadChangedFileSummaries(threadId, files.map((file) => file.path))
+      .then((summary) => {
+        setReviews((current) => {
+          const next = { ...current };
+
+          for (const file of files) {
+            next[file.path] = {
+              ...next[file.path],
+              path: file.path,
+              additions: summary[file.path]?.additions,
+              deletions: summary[file.path]?.deletions,
+              status: next[file.path]?.diff ? "ready" : "idle",
+            };
+          }
+
+          return next;
+        });
+      })
+      .catch(() => undefined);
+  }, [files, threadId]);
+
+  const toggleFile = (path: string) => {
+    const nextExpanded = !(expanded[path] ?? false);
+
+    setExpanded((current) => ({
+      ...current,
+      [path]: nextExpanded,
+    }));
+
+    if (!nextExpanded || !threadId) {
+      return;
+    }
+
+    const existing = reviews[path];
+
+    if (existing?.status === "loading" || existing?.status === "ready") {
+      return;
+    }
+
+    setReviews((current) => ({
+      ...current,
+      [path]: {
+        ...current[path],
+        path,
+        status: "loading",
+      },
+    }));
+
+    void loadChangedFileDiff(threadId, path)
+      .then((diff) => {
+        setReviews((current) => ({
+          ...current,
+          [path]: {
+            ...current[path],
+            path,
+            diff,
+            status: "ready",
+          },
+        }));
+      })
+      .catch((error) => {
+        setReviews((current) => ({
+          ...current,
+          [path]: {
+            ...current[path],
+            path,
+            status: "error",
+            error: error instanceof Error ? error.message : String(error),
+          },
+        }));
+      });
+  };
+
+  if (files.length === 0) {
+    return null;
+  }
+
+  return (
+    <section className="changed-files-card">
+      <div className="changed-files-card__header">
+        <span className="changed-files-card__title">{files.length} changed file{files.length === 1 ? "" : "s"}</span>
+      </div>
+
+      <div className="changed-files-card__list">
+        {files.map((file) => {
+          const review = reviews[file.path];
+          const isExpanded = expanded[file.path] ?? false;
+
+          return (
+            <div key={file.path} className={`changed-file ${isExpanded ? "changed-file--expanded" : ""}`}>
+              <button className="changed-file__summary" onClick={() => toggleFile(file.path)} type="button">
+                <span className="changed-file__path">{file.path}</span>
+                <span className="changed-file__stats">
+                  {typeof review?.additions === "number" && (
+                    <span className="changed-file__stat changed-file__stat--add">+{review.additions}</span>
+                  )}
+                  {typeof review?.deletions === "number" && (
+                    <span className="changed-file__stat changed-file__stat--del">-{review.deletions}</span>
+                  )}
+                </span>
+                <ChevronDown className={`changed-file__chevron ${isExpanded ? "changed-file__chevron--open" : ""}`} size={16} />
+              </button>
+
+              {isExpanded && (
+                <div className="changed-file__diff">
+                  {review?.status === "loading" && <div className="changed-file__empty">Loading diff...</div>}
+                  {review?.status === "error" && (
+                    <div className="changed-file__empty">
+                      {review.error ?? "Unable to read this file diff."}
+                    </div>
+                  )}
+                  {review?.status === "ready" && review.diff ? (
+                    <div className="changed-file__diff-lines">
+                      {renderDiffLines(review.diff)}
+                    </div>
+                  ) : null}
+                  {review?.status === "ready" && !review.diff && (
+                    <div className="changed-file__empty">No git diff is available for this file yet.</div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function DiffPatchPanel({
+  changeSets,
+  latestReview,
+  latestReviewArtifact,
+  requestedSelection,
+}: {
+  changeSets: ThreadChangeSet[];
+  latestReview: ReviewRecord | null;
+  latestReviewArtifact: ReviewArtifactRecord | null;
+  requestedSelection?: DiffFocusTarget | null;
+}) {
+  const [selectedChangeSetId, setSelectedChangeSetId] = useState<string | null>(changeSets[0]?.id ?? null);
+  const [selectedFilePath, setSelectedFilePath] = useState<string | null>(changeSets[0]?.files[0]?.path ?? null);
+  const [viewerMode, setViewerMode] = useState<"diff" | "patch">("diff");
+  const [copiedPatchPath, setCopiedPatchPath] = useState<string | null>(null);
+  const allFiles = useMemo(
+    () =>
+      changeSets
+        .flatMap((changeSet) => changeSet.files)
+        .filter((file, index, list) => list.findIndex((candidate) => candidate.path === file.path) === index),
+    [changeSets],
+  );
+  const selectedChangeSet = useMemo(
+    () => changeSets.find((changeSet) => changeSet.id === selectedChangeSetId) ?? changeSets[0] ?? null,
+    [changeSets, selectedChangeSetId],
+  );
+  const selectedFile = useMemo(
+    () => selectedChangeSet?.files.find((file) => file.path === selectedFilePath) ?? selectedChangeSet?.files[0] ?? null,
+    [selectedChangeSet, selectedFilePath],
+  );
+
+  useEffect(() => {
+    if (changeSets.length === 0) {
+      setSelectedChangeSetId(null);
+      setSelectedFilePath(null);
+      return;
+    }
+
+    if (!selectedChangeSetId || !changeSets.some((changeSet) => changeSet.id === selectedChangeSetId)) {
+      setSelectedChangeSetId(changeSets[0]!.id);
+    }
+  }, [changeSets, selectedChangeSetId]);
+
+  useEffect(() => {
+    if (!selectedChangeSet) {
+      setSelectedFilePath(null);
+      return;
+    }
+
+    if (!selectedFilePath || !selectedChangeSet.files.some((file) => file.path === selectedFilePath)) {
+      setSelectedFilePath(selectedChangeSet.files[0]?.path ?? null);
+    }
+  }, [selectedChangeSet, selectedFilePath]);
+
+  useEffect(() => {
+    if (!requestedSelection) {
+      return;
+    }
+
+    if (requestedSelection.changeSetId && changeSets.some((changeSet) => changeSet.id === requestedSelection.changeSetId)) {
+      setSelectedChangeSetId(requestedSelection.changeSetId);
+    } else if (requestedSelection.filePath) {
+      const selectedByFile = changeSets.find((changeSet) => changeSet.files.some((file) => file.path === requestedSelection.filePath));
+      if (selectedByFile) {
+        setSelectedChangeSetId(selectedByFile.id);
+      }
+    }
+
+    if (requestedSelection.filePath) {
+      setSelectedFilePath(requestedSelection.filePath);
+    }
+  }, [changeSets, requestedSelection]);
+
+  useEffect(() => {
+    if (!copiedPatchPath) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => setCopiedPatchPath(null), 1800);
+    return () => window.clearTimeout(timer);
+  }, [copiedPatchPath]);
+
+  if (changeSets.length === 0) {
+    return (
+      <section className="diff-panel diff-panel--empty">
+        <div className="diff-panel__empty">
+          <strong>No thread patches yet</strong>
+          <span>File changes from `write_patch` actions will appear here once this thread edits the workspace.</span>
+        </div>
+      </section>
+    );
+  }
+
+  const handleCopyPatch = async () => {
+    if (!selectedFile?.patch) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(selectedFile.patch);
+      setCopiedPatchPath(selectedFile.path);
+    } catch {
+      setCopiedPatchPath(null);
+    }
+  };
+
+  return (
+    <section className="diff-panel">
+      <div className="diff-panel__header">
+        <div>
+          <span className="diff-panel__eyebrow">工作区面板</span>
+          <h2>Diff / Patch</h2>
+        </div>
+        <div className="diff-panel__meta">
+          <span>{changeSets.length} 个批次</span>
+          <span>{allFiles.length} 个文件</span>
+        </div>
+      </div>
+
+      {latestReview ? (
+        <div className="diff-panel__review-link">
+          <strong>Latest review</strong>
+          <span>
+            {latestReviewArtifact
+              ? `${latestReviewArtifact.sourceLabel} · ${latestReviewArtifact.findingCounts.total} finding${latestReviewArtifact.findingCounts.total === 1 ? "" : "s"}`
+              : latestReview.summary ?? latestReview.error ?? "Review available for this thread."}
+          </span>
+        </div>
+      ) : null}
+
+      <div className="diff-panel__layout">
+        <aside className="diff-panel__sidebar">
+          <div className="diff-panel__section">
+            <div className="diff-panel__section-header">
+              <strong>Change Batches</strong>
+              <span>{formatRelativeTime(changeSets[0]!.updatedAt)} latest</span>
+            </div>
+            <div className="diff-panel__change-sets">
+              {changeSets.map((changeSet) => (
+                <button
+                  key={changeSet.id}
+                  type="button"
+                  className={`diff-panel__change-set ${changeSet.id === selectedChangeSet?.id ? "diff-panel__change-set--active" : ""}`}
+                  onClick={() => setSelectedChangeSetId(changeSet.id)}
+                >
+                  <strong>{changeSet.label}</strong>
+                  <span>{changeSet.files.length} file{changeSet.files.length === 1 ? "" : "s"}</span>
+                  <small>{formatRelativeTime(changeSet.updatedAt)}</small>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="diff-panel__section">
+            <div className="diff-panel__section-header">
+              <strong>Files</strong>
+              <span>{selectedChangeSet?.files.length ?? 0} selected</span>
+            </div>
+            <div className="diff-panel__file-list">
+              {(selectedChangeSet?.files ?? []).map((file) => {
+                return (
+                  <button
+                    key={`${selectedChangeSet?.id}:${file.path}`}
+                    type="button"
+                    className={`diff-panel__file ${file.path === selectedFile?.path ? "diff-panel__file--active" : ""}`}
+                    onClick={() => setSelectedFilePath(file.path)}
+                  >
+                    <span className="diff-panel__file-path">{file.path}</span>
+                    <span className="diff-panel__file-stats">
+                      {typeof file.additions === "number" && <span className="changed-file__stat changed-file__stat--add">+{file.additions}</span>}
+                      {typeof file.deletions === "number" && <span className="changed-file__stat changed-file__stat--del">-{file.deletions}</span>}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </aside>
+
+        <div className="diff-panel__viewer">
+          {selectedFile ? (
+            <>
+              <div className="diff-panel__viewer-header">
+                <div>
+                  <strong>{selectedFile.path}</strong>
+                  <small>{selectedFile.title}</small>
+                </div>
+                <div className="diff-panel__viewer-actions">
+                  <div className="diff-panel__mode-switch" role="tablist" aria-label="Diff viewer mode">
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={viewerMode === "diff"}
+                      className={viewerMode === "diff" ? "diff-panel__mode-switch-button diff-panel__mode-switch-button--active" : "diff-panel__mode-switch-button"}
+                      onClick={() => setViewerMode("diff")}
+                    >
+                      Diff
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={viewerMode === "patch"}
+                      className={viewerMode === "patch" ? "diff-panel__mode-switch-button diff-panel__mode-switch-button--active" : "diff-panel__mode-switch-button"}
+                      onClick={() => setViewerMode("patch")}
+                    >
+                      Patch
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    className="diff-panel__copy"
+                    onClick={() => void handleCopyPatch()}
+                    disabled={!selectedFile.patch}
+                  >
+                    {copiedPatchPath === selectedFile.path ? <Check size={14} /> : <Copy size={14} />}
+                    <span>{copiedPatchPath === selectedFile.path ? "Copied" : "Copy patch"}</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="diff-panel__viewer-meta">
+                <span>{formatRelativeTime(selectedFile.updatedAt)} updated</span>
+                <span>{selectedFile.status}</span>
+              </div>
+
+              <div className="diff-panel__viewer-body">
+                {selectedFile.patch ? (
+                  viewerMode === "diff" ? (
+                    <div className="changed-file__diff-lines">{renderDiffLines(selectedFile.patch)}</div>
+                  ) : (
+                    <pre className="diff-panel__patch">{selectedFile.patch}</pre>
+                  )
+                ) : (
+                  <div className="changed-file__empty">No git diff is available for this file yet.</div>
+                )}
+              </div>
+            </>
+          ) : (
+            <div className="diff-panel__empty">
+              <strong>No file selected</strong>
+              <span>Choose a file from the current change batch to inspect its patch.</span>
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ApprovalRequest({
+  approval,
+  onApprove,
+  onReject,
+}: {
+  approval: PendingApproval;
+  onApprove: (scope: "once" | "session") => void;
+  onReject: () => void;
+}) {
+  const toolSummary = approval.tool ? formatToolReferenceSummary(approval.tool) : null;
+
+  return (
+    <div className="approval-request">
+      <div className="approval-request__header">
+        <AlertTriangle size={18} />
+        <h3>Approval Required</h3>
+      </div>
+      <div className="approval-request__content">
+        <p><strong>{approval.toolName}</strong></p>
+        <p>{approval.reason}</p>
+        {toolSummary && <p>{toolSummary}</p>}
+        {approval.mode && <p>Approval mode: {approval.mode}</p>}
+        <pre>{JSON.stringify(approval.args, null, 2)}</pre>
+      </div>
+      <div className="approval-request__actions">
+        <button className="button button--danger" onClick={onReject}>
+          <XCircle size={14} />
+          Reject
+        </button>
+        <button className="button" onClick={() => onApprove("once")}>
+          <CheckCircle size={14} />
+          Approve Once
+        </button>
+        <button className="button button--primary" onClick={() => onApprove("session")}>
+          Allow Session
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PlanSummaryCard({
+  plan,
+  onOpenTurn,
+}: {
+  plan: TurnPlanRecord;
+  onOpenTurn?: (plan: TurnPlanRecord) => void;
+}) {
+  return (
+    <section className="review-card">
+      <div className="review-card__header">
+        <div>
+          <div className="review-card__title">执行计划</div>
+          <div className="review-card__status review-card__status--running">结构化</div>
+        </div>
+        <div className="review-card__actions">
+          <div className="review-card__meta">{plan.steps.length} 个步骤</div>
+          {onOpenTurn ? (
+            <button type="button" className="button button--ghost button--small" onClick={() => onOpenTurn(plan)}>
+              打开回合
+            </button>
+          ) : null}
+        </div>
+      </div>
+      <p className="review-card__summary">{plan.summary ?? "已从最近的计划回合提取。"}</p>
+      <div className="review-card__findings">
+        {plan.steps.map((step) => (
+          <button
+            key={step.id}
+            type="button"
+            className={`review-finding review-finding--interactive ${onOpenTurn ? "review-finding--button" : ""}`}
+            onClick={onOpenTurn ? () => onOpenTurn(plan) : undefined}
+          >
+            <div className="review-finding__header">
+              <span className={`review-finding__severity review-finding__severity--${step.status === "completed" ? "low" : step.status === "blocked" ? "critical" : "medium"}`}>
+                {step.status.replace("_", " ")}
+              </span>
+              <strong>{step.title}</strong>
+            </div>
+            {step.detail && <p className="review-finding__detail">{step.detail}</p>}
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function PlanWorkspacePanel({
+  plan,
+  onOpenTurn,
+}: {
+  plan: TurnPlanRecord | null;
+  onOpenTurn?: (plan: TurnPlanRecord) => void;
+}) {
+  if (!plan) {
+    return <div className="changed-file__empty">No structured plan has been captured for this thread yet.</div>;
+  }
+
+  return <PlanSummaryCard plan={plan} onOpenTurn={onOpenTurn} />;
+}
+
+function ReviewSummaryCard({
+  review,
+  artifact,
+  highlightedFindingId,
+  onOpenReview,
+  onOpenFile,
+}: {
+  review: ReviewRecord;
+  artifact: ReviewArtifactRecord | null;
+  highlightedFindingId?: string;
+  onOpenReview?: (reviewId: string) => void;
+  onOpenFile?: (reviewId: string, findingId: string, filePath?: string) => void;
+}) {
+  const orderedFindings = useMemo(
+    () =>
+      [...review.findings].sort((left, right) => {
+        const severity = compareReviewSeverity(left.severity, right.severity);
+
+        if (severity !== 0) {
+          return severity;
+        }
+
+        return `${left.file ?? ""}:${left.line ?? 0}`.localeCompare(`${right.file ?? ""}:${right.line ?? 0}`);
+      }),
+    [review.findings],
+  );
+
+  return (
+    <section className="review-card" data-review-id={review.id}>
+      <div className="review-card__header">
+        <div>
+          <div className="review-card__title">Code review</div>
+          <div className={`review-card__status review-card__status--${review.status}`}>
+            {review.status === "running" ? "运行中" : review.status === "failed" ? "失败" : "已完成"}
+          </div>
+        </div>
+        <div className="review-card__actions">
+          <div className="review-card__meta">{artifact?.sourceLabel ?? formatReviewSourceLabel(review.source)}</div>
+          {onOpenReview ? (
+            <button type="button" className="button button--ghost button--small" onClick={() => onOpenReview(review.id)}>
+              打开评审
+            </button>
+          ) : null}
+        </div>
+      </div>
+      <p className="review-card__summary">{review.error ?? review.summary ?? "评审进行中。"}</p>
+      {artifact?.diffStats && (
+        <div className="run-context-card__meta">
+          <span>{artifact.diffStats.fileCount} file{artifact.diffStats.fileCount === 1 ? "" : "s"}</span>
+          <span>+{artifact.diffStats.additions}</span>
+          <span>-{artifact.diffStats.deletions}</span>
+          <span>{artifact.findingCounts.total} finding{artifact.findingCounts.total === 1 ? "" : "s"}</span>
+        </div>
+      )}
+      {orderedFindings.length > 0 && (
+        <div className="review-card__findings">
+          {orderedFindings.map((finding) => (
+            <button
+              key={finding.id}
+              type="button"
+              className={`review-finding review-finding--button ${finding.id === highlightedFindingId ? "review-finding--active" : ""}`}
+              onClick={() => onOpenFile?.(review.id, finding.id, finding.file)}
+            >
+              <div className="review-finding__header">
+                <span className={`review-finding__severity review-finding__severity--${finding.severity}`}>{finding.severity}</span>
+                <strong>{finding.summary}</strong>
+              </div>
+              {(finding.file || finding.line) && (
+                <div className="review-finding__location">
+                  {finding.file ?? "Unknown file"}
+                  {finding.line ? `:${finding.line}` : ""}
+                </div>
+              )}
+              {finding.detail && <p className="review-finding__detail">{finding.detail}</p>}
+            </button>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ReviewFindingsPanel({
+  reviews,
+  reviewArtifacts,
+  requestedFocus,
+  onOpenReview,
+  onOpenFile,
+}: {
+  reviews: ReviewRecord[];
+  reviewArtifacts: Record<string, ReviewArtifactRecord>;
+  requestedFocus?: ReviewFocusTarget | null;
+  onOpenReview?: (target: Omit<ReviewFocusTarget, "token">) => void;
+  onOpenFile?: (params: { reviewId: string; findingId?: string; filePath?: string }) => void;
+}) {
+  const [highlightedReviewId, setHighlightedReviewId] = useState<string | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const aggregatedCounts = useMemo(
+    () =>
+      reviews.reduce(
+        (counts, review) => {
+          const artifact = reviewArtifacts[review.id] ?? buildReviewArtifactFallback(review);
+          counts.total += artifact.findingCounts.total;
+          counts.critical += artifact.findingCounts.critical;
+          counts.high += artifact.findingCounts.high;
+          counts.medium += artifact.findingCounts.medium;
+          counts.low += artifact.findingCounts.low;
+          return counts;
+        },
+        {
+          total: 0,
+          critical: 0,
+          high: 0,
+          medium: 0,
+          low: 0,
+        },
+      ),
+    [reviewArtifacts, reviews],
+  );
+
+  useLayoutEffect(() => {
+    if (!requestedFocus || !rootRef.current) {
+      return;
+    }
+
+    const selector = requestedFocus.reviewId
+      ? `[data-review-id="${escapeAttributeValue(requestedFocus.reviewId)}"]`
+      : null;
+
+    if (!selector) {
+      return;
+    }
+
+    const target = rootRef.current.querySelector<HTMLElement>(selector);
+
+    if (!target) {
+      return;
+    }
+
+    target.scrollIntoView({
+      behavior: "smooth",
+      block: "center",
+    });
+    setHighlightedReviewId(requestedFocus.reviewId ?? null);
+
+    const timer = window.setTimeout(() => {
+      setHighlightedReviewId((current) => (current === requestedFocus.reviewId ? null : current));
+    }, 1800);
+
+    return () => window.clearTimeout(timer);
+  }, [requestedFocus]);
+
+  if (reviews.length === 0) {
+    return <div className="changed-file__empty">这个线程还没有结构化评审发现。</div>;
+  }
+
+  return (
+    <div ref={rootRef}>
+      <div className="workflow-dashboard">
+        <div className="workflow-dashboard__card">
+          <strong>{aggregatedCounts.total}</strong>
+          <span>Total findings</span>
+        </div>
+        <div className="workflow-dashboard__card">
+          <strong>{aggregatedCounts.critical + aggregatedCounts.high}</strong>
+          <span>High impact</span>
+        </div>
+        <div className="workflow-dashboard__card">
+          <strong>{aggregatedCounts.medium}</strong>
+          <span>Medium</span>
+        </div>
+        <div className="workflow-dashboard__card">
+          <strong>{aggregatedCounts.low}</strong>
+          <span>Low</span>
+        </div>
+      </div>
+      {reviews.map((review) => (
+        <div key={review.id} className={highlightedReviewId === review.id ? "conversation-entry--highlighted" : undefined}>
+          <ReviewSummaryCard
+            review={review}
+            artifact={reviewArtifacts[review.id] ?? buildReviewArtifactFallback(review)}
+            highlightedFindingId={requestedFocus?.reviewId === review.id ? requestedFocus.findingId : undefined}
+            onOpenReview={onOpenReview ? (reviewId) => onOpenReview({ reviewId }) : undefined}
+            onOpenFile={onOpenFile ? (reviewId, findingId, filePath) => onOpenFile({ reviewId, findingId, filePath }) : undefined}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function RunContextCard({ snapshot }: { snapshot: TurnContextSnapshotRecord }) {
+  const includedSections = snapshot.sections.filter((section) => section.included);
+
+  return (
+    <details className="run-context-card">
+      <summary className="run-context-card__summary">
+        <div>
+          <strong>Run Context</strong>
+          <span>{snapshot.summaryText}</span>
+        </div>
+        <div className="run-context-card__meta">
+          <span>{snapshot.historyMode === "compressed" ? "Compressed history" : "Full history"}</span>
+          <span>{includedSections.length} sections</span>
+        </div>
+      </summary>
+      <div className="run-context-card__body">
+        {snapshot.sections.map((section) => (
+          <div key={section.key} className={`run-context-card__section ${section.included ? "" : "run-context-card__section--muted"}`}>
+            <div className="run-context-card__section-head">
+              <strong>{section.label}</strong>
+              <span>
+                {section.included ? "Included" : "Skipped"}
+                {typeof section.count === "number" ? ` · ${section.count}` : ""}
+                {typeof section.estimatedTokens === "number" ? ` · ~${formatCompactTokens(section.estimatedTokens)} tok` : ""}
+              </span>
+            </div>
+            <p>{section.summary}</p>
+            {section.detail ? <pre>{section.detail}</pre> : null}
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function ThreadRuntimePanel({
+  snapshot,
+  agentTree,
+  executionContexts,
+  worktrees,
+  environments,
+  lineage,
+  requestedSelection,
+  onOpenThread,
+}: {
+  snapshot: TurnContextSnapshotRecord | null;
+  agentTree: AgentTreeNode[];
+  executionContexts: ExecutionContextRecord[];
+  worktrees: WorktreeRecord[];
+  environments: EnvironmentRecord[];
+  lineage: ContextLineageNode[];
+  requestedSelection?: RuntimeFocusTarget | null;
+  onOpenThread?: (threadId: string) => void;
+}) {
+  const [selection, setSelection] = useState<RuntimeFocusTarget | null>(null);
+
+  useEffect(() => {
+    if (requestedSelection) {
+      setSelection(requestedSelection);
+      return;
+    }
+
+    setSelection((current) => {
+      if (current) {
+        if (current.kind === "agent" && findAgentTreeNodeById(agentTree, current.id)) {
+          return current;
+        }
+        if (current.kind === "executionContext" && executionContexts.some((executionContext) => executionContext.id === current.id)) {
+          return current;
+        }
+        if (current.kind === "worktree" && worktrees.some((worktree) => worktree.id === current.id)) {
+          return current;
+        }
+        if (current.kind === "environment" && environments.some((environment) => environment.id === current.id)) {
+          return current;
+        }
+      }
+
+      if (agentTree[0]) {
+        return {
+          token: Date.now(),
+          kind: "agent",
+          id: agentTree[0].task.id,
+        };
+      }
+
+      if (executionContexts[0]) {
+        return {
+          token: Date.now(),
+          kind: "executionContext",
+          id: executionContexts[0].id,
+        };
+      }
+
+      if (worktrees[0]) {
+        return {
+          token: Date.now(),
+          kind: "worktree",
+          id: worktrees[0].id,
+        };
+      }
+
+      if (environments[0]) {
+        return {
+          token: Date.now(),
+          kind: "environment",
+          id: environments[0].id,
+        };
+      }
+
+      return null;
+    });
+  }, [agentTree, environments, executionContexts, requestedSelection, worktrees]);
+
+  const selectedAgent = useMemo(
+    () => (selection?.kind === "agent" ? findAgentTreeNodeById(agentTree, selection.id)?.task ?? null : null),
+    [agentTree, selection],
+  );
+  const selectedExecutionContext = useMemo(
+    () =>
+      selection?.kind === "executionContext" ? executionContexts.find((executionContext) => executionContext.id === selection.id) ?? null : null,
+    [executionContexts, selection],
+  );
+  const selectedWorktree = useMemo(
+    () => (selection?.kind === "worktree" ? worktrees.find((worktree) => worktree.id === selection.id) ?? null : null),
+    [selection, worktrees],
+  );
+  const selectedEnvironment = useMemo(
+    () => (selection?.kind === "environment" ? environments.find((environment) => environment.id === selection.id) ?? null : null),
+    [environments, selection],
+  );
+
+  return (
+    <>
+      {snapshot && <RunContextCard snapshot={snapshot} />}
+      <div className="workflow-dashboard">
+        <div className="workflow-dashboard__card">
+          <strong>{agentTree.length}</strong>
+          <span>Agent roots</span>
+        </div>
+        <div className="workflow-dashboard__card">
+          <strong>{executionContexts.length}</strong>
+          <span>Execution contexts</span>
+        </div>
+        <div className="workflow-dashboard__card">
+          <strong>{worktrees.length}</strong>
+          <span>Worktrees</span>
+        </div>
+        <div className="workflow-dashboard__card">
+          <strong>{environments.length}</strong>
+          <span>Environments</span>
+        </div>
+      </div>
+      <div className="workflow-runtime-grid">
+        <RuntimeAgentTree
+          roots={agentTree}
+          selectedAgentId={selection?.kind === "agent" ? selection.id : undefined}
+          onSelectAgent={(agentId) =>
+            setSelection({
+              token: Date.now(),
+              kind: "agent",
+              id: agentId,
+            })
+          }
+        />
+        <RuntimeMetaSection
+          title="Execution Contexts"
+          emptyLabel="No execution contexts for this thread."
+          items={executionContexts.map((executionContext) => ({
+            id: executionContext.id,
+            title: `${executionContext.kind} · ${executionContext.cwd}`,
+            detail: executionContext.id,
+          }))}
+          selectedItemId={selection?.kind === "executionContext" ? selection.id : undefined}
+          onSelectItem={(id) =>
+            setSelection({
+              token: Date.now(),
+              kind: "executionContext",
+              id,
+            })
+          }
+        />
+        <RuntimeMetaSection
+          title="Worktrees"
+          emptyLabel="No thread worktrees."
+          items={worktrees.map((worktree) => ({
+            id: worktree.id,
+            title: `${worktree.branch} · ${worktree.status}`,
+            detail: worktree.path,
+          }))}
+          selectedItemId={selection?.kind === "worktree" ? selection.id : undefined}
+          onSelectItem={(id) =>
+            setSelection({
+              token: Date.now(),
+              kind: "worktree",
+              id,
+            })
+          }
+        />
+        <RuntimeMetaSection
+          title="Environments"
+          emptyLabel="No runtime environments."
+          items={environments.map((environment) => ({
+            id: environment.id,
+            title: `${environment.shell} · ${environment.cwd}`,
+            detail: environment.id,
+          }))}
+          selectedItemId={selection?.kind === "environment" ? selection.id : undefined}
+          onSelectItem={(id) =>
+            setSelection({
+              token: Date.now(),
+              kind: "environment",
+              id,
+            })
+          }
+        />
+      </div>
+      <RuntimeSelectionDetail
+        agent={selectedAgent}
+        executionContext={selectedExecutionContext}
+        worktree={selectedWorktree}
+        environment={selectedEnvironment}
+        onOpenThread={onOpenThread}
+      />
+      <RuntimeContextLineage
+        nodes={lineage}
+        selectedNodeId={buildRuntimeSelectionNodeId(selection)}
+      />
+    </>
+  );
+}
+
+function SteerCard({
+  value,
+  onChange,
+  onSubmit,
+  disabled,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  onSubmit: () => void;
+  disabled: boolean;
+}) {
+  return (
+    <section className="steer-card">
+      <div className="steer-card__header">
+        <strong>Steer current run</strong>
+        <span>Inject a follow-up instruction without restarting the turn.</span>
+      </div>
+      <div className="steer-card__body">
+        <textarea
+          className="steer-card__input"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault();
+              onSubmit();
+            }
+          }}
+          placeholder="Example: prioritize the failing test first, then update the parser"
+          rows={2}
+        />
+        <button type="button" className="steer-card__submit" onClick={onSubmit} disabled={disabled}>
+          Steer
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function TerminalCard({
+  sessions,
+  session,
+  selectedSessionId,
+  archives,
+  output,
+  input,
+  onInputChange,
+  onSelectSession,
+  onOpen,
+  onSend,
+  onClose,
+  onArchive,
+  onClear,
+  onApproveOnce,
+  onApproveSession,
+  onReject,
+}: {
+  sessions: TerminalSessionRecord[];
+  session: TerminalSessionRecord | null;
+  selectedSessionId: string | null;
+  archives: import("@my-agent/protocol").TerminalOutputArchiveRecord[];
+  output: string;
+  input: string;
+  onInputChange: (value: string) => void;
+  onSelectSession: (sessionId: string) => void;
+  onOpen: () => void;
+  onSend: () => void;
+  onClose: () => void;
+  onArchive: (sessionId: string) => void;
+  onClear: (sessionId: string) => void;
+  onApproveOnce: (sessionId: string) => void;
+  onApproveSession: (sessionId: string) => void;
+  onReject: (sessionId: string) => void;
+}) {
+  return (
+    <section className="terminal-card">
+      <div className="terminal-card__header">
+        <div>
+          <strong>Terminal</strong>
+          <span>{session ? `${session.backend.toUpperCase()} · ${session.status}` : "No active terminal session"}</span>
+        </div>
+        <div className="terminal-card__header-actions">
+          {session && (
+            <button type="button" className="button button--ghost" onClick={onClose}>
+              Close
+            </button>
+          )}
+          {session && (
+            <button type="button" className="button button--ghost" onClick={() => onArchive(session.id)}>
+              Archive
+            </button>
+          )}
+          {session && (
+            <button type="button" className="button button--ghost" onClick={() => onClear(session.id)}>
+              Clear
+            </button>
+          )}
+          <button type="button" className="button" onClick={onOpen}>
+            New session
+          </button>
+        </div>
+      </div>
+
+      {sessions.length > 0 && (
+        <div className="terminal-card__sessions">
+          {sessions.map((entry) => (
+            <button
+              key={entry.id}
+              type="button"
+              className={`terminal-card__session-tab ${entry.id === selectedSessionId ? "terminal-card__session-tab--active" : ""}`}
+              onClick={() => onSelectSession(entry.id)}
+            >
+              <span>{entry.id.slice(-6)}</span>
+              <small>{entry.status}</small>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {session && (
+        <>
+          <pre className="terminal-card__output">{output || "终端已打开，等待输出…"}</pre>
+          {archives.length > 0 && (
+            <div className="terminal-card__archives">
+              <strong>归档输出</strong>
+              <div className="terminal-card__archive-list">
+                {archives.slice(0, 5).map((archive) => (
+                  <details key={archive.id} className="terminal-card__archive-item">
+                    <summary>
+                      <span>{archive.reason}</span>
+                      <small>{new Date(archive.createdAt).toLocaleString()}</small>
+                    </summary>
+                    <pre>{archive.output}</pre>
+                  </details>
+                ))}
+              </div>
+            </div>
+          )}
+          {session.pendingApprovalCommand && session.pendingApprovalMode && (
+            <div className="terminal-card__approval">
+              <strong>{session.pendingApprovalMode === "preflight" ? "Approval required before run" : "Approval required to retry"}</strong>
+              <code>{session.pendingApprovalCommand}</code>
+              {session.pendingApprovalReason && <small>{session.pendingApprovalReason}</small>}
+              <div className="terminal-card__actions">
+                <button type="button" className="button" onClick={() => onApproveOnce(session.id)}>
+                  Approve once
+                </button>
+                <button type="button" className="button" onClick={() => onApproveSession(session.id)}>
+                  Approve session
+                </button>
+                <button type="button" className="button button--ghost" onClick={() => onReject(session.id)}>
+                  Reject
+                </button>
+              </div>
+            </div>
+          )}
+          <div className="terminal-card__composer">
+            <input
+              type="text"
+              value={input}
+              onChange={(event) => onInputChange(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  onSend();
+                }
+              }}
+              placeholder="Run a command in the active terminal session"
+            />
+            <button type="button" className="button" onClick={onSend} disabled={!input.trim()}>
+              Send
+            </button>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+function ComposerBar({
+  input,
+  onChange,
+  onSubmit,
+  onInterrupt,
+  onKeyDown,
+  onPaste,
+  attachments,
+  skills,
+  onAddFiles,
+  onRemoveAttachment,
+  composerMenuOpen,
+  onToggleComposerMenu,
+  composerMenuRef,
+  includeIdeContext,
+  onToggleIdeContext,
+  planMode,
+  onTogglePlanMode,
+  modelMenuOpen,
+  onToggleModelMenu,
+  modelMenuRef,
+  availableModels,
+  providerModelsLoading,
+  providerModelsError,
+  selectedModel,
+  onSelectModel,
+  reasoningMenuOpen,
+  onToggleReasoningMenu,
+  reasoningMenuRef,
+  selectedReasoningEffort,
+  onSelectReasoningEffort,
+  currentSandboxMode,
+  sandboxMenuOpen,
+  onToggleSandboxMenu,
+  sandboxMenuRef,
+  onSelectSandboxMode,
+  branchMenuOpen,
+  onToggleBranchMenu,
+  branchMenuRef,
+  branchSummary,
+  branchSearch,
+  onBranchSearchChange,
+  filteredBranches,
+  onSelectBranch,
+  onCreateBranch,
+  contextSummary,
+  loading,
+  canInterrupt,
+}: {
+  input: string;
+  onChange: (value: string) => void;
+  onSubmit: () => Promise<void>;
+  onInterrupt: () => void;
+  onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
+  onPaste: (event: ReactClipboardEvent<HTMLTextAreaElement>) => void;
+  attachments: ComposerAttachment[];
+  skills: SkillDescriptor[];
+  onAddFiles: () => void;
+  onRemoveAttachment: (path: string) => void;
+  composerMenuOpen: boolean;
+  onToggleComposerMenu: () => void;
+  composerMenuRef: React.RefObject<HTMLDivElement | null>;
+  includeIdeContext: boolean;
+  onToggleIdeContext: () => void;
+  planMode: boolean;
+  onTogglePlanMode: () => void;
+  modelMenuOpen: boolean;
+  onToggleModelMenu: () => void;
+  modelMenuRef: React.RefObject<HTMLDivElement | null>;
+  availableModels: ProviderModelRecord[];
+  providerModelsLoading: boolean;
+  providerModelsError?: string;
+  selectedModel: string;
+  onSelectModel: (modelId: string) => void;
+  reasoningMenuOpen: boolean;
+  onToggleReasoningMenu: () => void;
+  reasoningMenuRef: React.RefObject<HTMLDivElement | null>;
+  selectedReasoningEffort: ModelReasoningEffort;
+  onSelectReasoningEffort: (effort: ModelReasoningEffort) => void;
+  currentSandboxMode: SandboxMode;
+  sandboxMenuOpen: boolean;
+  onToggleSandboxMenu: () => void;
+  sandboxMenuRef: React.RefObject<HTMLDivElement | null>;
+  onSelectSandboxMode: (mode: SandboxMode) => void;
+  branchMenuOpen: boolean;
+  onToggleBranchMenu: () => void;
+  branchMenuRef: React.RefObject<HTMLDivElement | null>;
+  branchSummary: BranchSummary;
+  branchSearch: string;
+  onBranchSearchChange: (value: string) => void;
+  filteredBranches: string[];
+  onSelectBranch: (branchName: string) => void;
+  onCreateBranch: () => void;
+  contextSummary: ContextSummary;
+  loading: boolean;
+  canInterrupt: boolean;
+}) {
+  const isSendDisabled = loading || (!input.trim() && attachments.length === 0);
+  const selectedReasoning = REASONING_OPTIONS.find((option) => option.value === selectedReasoningEffort) ?? REASONING_OPTIONS[3]!;
+  const [closingPill, setClosingPill] = useState<"ide" | "plan" | null>(null);
+  const [caretPosition, setCaretPosition] = useState(0);
+  const [highlightedSkillIndex, setHighlightedSkillIndex] = useState(0);
+  const dismissTimersRef = useRef<Partial<Record<"ide" | "plan", number>>>({});
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const composerMinHeight = 56;
+  const composerMaxHeight = 132;
+  const skillMention = useMemo(() => detectSkillMention(input, caretPosition), [input, caretPosition]);
+  const filteredSkillOptions = useMemo(() => {
+    if (!skillMention) {
+      return [];
+    }
+
+    const query = skillMention.query.toLowerCase();
+    return skills.filter((skill) => {
+      const name = skill.name.toLowerCase();
+      const displayName = (skill.metadata.displayName ?? "").toLowerCase();
+      return !query || name.includes(query) || displayName.includes(query);
+    });
+  }, [skillMention, skills]);
+  const skillPickerOpen = Boolean(skillMention) && filteredSkillOptions.length > 0;
+
+  useEffect(() => {
+    return () => {
+      for (const timer of Object.values(dismissTimersRef.current)) {
+        if (timer) {
+          window.clearTimeout(timer);
+        }
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if ((!includeIdeContext && closingPill === "ide") || (!planMode && closingPill === "plan")) {
+      setClosingPill((current) => {
+        if ((current === "ide" && !includeIdeContext) || (current === "plan" && !planMode)) {
+          return null;
+        }
+
+        return current;
+      });
+    }
+  }, [closingPill, includeIdeContext, planMode]);
+
+  useEffect(() => {
+    setHighlightedSkillIndex(0);
+  }, [skillMention?.query]);
+
+  useLayoutEffect(() => {
+    const textarea = textareaRef.current;
+
+    if (!textarea) {
+      return;
+    }
+
+    textarea.style.height = "0px";
+    const nextHeight = Math.min(Math.max(textarea.scrollHeight, composerMinHeight), composerMaxHeight);
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY = textarea.scrollHeight > composerMaxHeight ? "auto" : "hidden";
+  }, [composerMaxHeight, composerMinHeight, input]);
+
+  const handleDismissPill = (kind: "ide" | "plan") => {
+    if (loading || closingPill) {
+      return;
+    }
+
+    setClosingPill(kind);
+    dismissTimersRef.current[kind] = window.setTimeout(() => {
+      if (kind === "ide") {
+        onToggleIdeContext();
+      } else {
+        onTogglePlanMode();
+      }
+
+      setClosingPill((current) => (current === kind ? null : current));
+      delete dismissTimersRef.current[kind];
+    }, 140);
+  };
+
+  const insertSkillMention = (skill: SkillDescriptor) => {
+    if (!skillMention) {
+      return;
+    }
+
+    const nextValue = `${input.slice(0, skillMention.start)}$${skill.name} ${input.slice(skillMention.end)}`;
+    const nextCaret = skillMention.start + skill.name.length + 2;
+
+    onChange(nextValue);
+    setCaretPosition(nextCaret);
+
+    window.requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(nextCaret, nextCaret);
+    });
+  };
+
+  const handleInputChange = (value: string, selectionStart: number | null) => {
+    onChange(value);
+    setCaretPosition(selectionStart ?? value.length);
+  };
+
+  const handleTextareaInteraction = (selectionStart: number | null) => {
+    setCaretPosition(selectionStart ?? input.length);
+  };
+
+  const handleTextareaKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (skillPickerOpen) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setHighlightedSkillIndex((current) => (current + 1) % filteredSkillOptions.length);
+        return;
+      }
+
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setHighlightedSkillIndex((current) => (current - 1 + filteredSkillOptions.length) % filteredSkillOptions.length);
+        return;
+      }
+
+      if (event.key === "Enter" || event.key === "Tab") {
+        event.preventDefault();
+        const selectedSkill = filteredSkillOptions[highlightedSkillIndex];
+
+        if (selectedSkill) {
+          insertSkillMention(selectedSkill);
+        }
+        return;
+      }
+
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setCaretPosition(-1);
+        return;
+      }
+    }
+
+    onKeyDown(event);
+  };
+
+  return (
+    <div className="composer-bar">
+      <div className="composer-shell">
+        {attachments.length > 0 && (
+          <div className="composer-attachments">
+            {attachments.map((attachment) => (
+              <div key={attachment.path} className="composer-attachment">
+                <span className="composer-attachment__icon" aria-hidden="true">
+                  {attachment.kind === "image" ? <ImagePlus size={14} /> : <FileText size={14} />}
+                </span>
+                <span className="composer-attachment__name" title={attachment.path}>
+                  {attachment.name}
+                </span>
+                <button
+                  className="composer-attachment__remove"
+                  onClick={() => onRemoveAttachment(attachment.path)}
+                  aria-label={`Remove ${attachment.name}`}
+                  title={`Remove ${attachment.name}`}
+                  disabled={loading}
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="composer-main">
+          {skillPickerOpen && (
+            <div className="composer-skill-picker" role="listbox" aria-label="Available skills">
+              {filteredSkillOptions.map((skill, index) => (
+                <button
+                  key={skill.id}
+                  type="button"
+                  className={`composer-skill-picker__item ${index === highlightedSkillIndex ? "composer-skill-picker__item--active" : ""}`}
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    insertSkillMention(skill);
+                  }}
+                >
+                  <span className="composer-skill-picker__icon" aria-hidden="true">
+                    <Box size={14} />
+                  </span>
+                  <span className="composer-skill-picker__body">
+                    <strong>{skill.metadata.displayName ?? skill.name}</strong>
+                    <small>{skill.metadata.shortDescription ?? skill.description}</small>
+                  </span>
+                  <span className="composer-skill-picker__scope">{formatSkillScopeLabel(skill.scope)}</span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          <textarea
+            ref={textareaRef}
+            className="composer-input"
+            placeholder="问 my-agent 任何事。输入 @ 使用插件或提交文件"
+            value={input}
+            onChange={(e) => handleInputChange(e.target.value, e.target.selectionStart)}
+            onKeyDown={handleTextareaKeyDown}
+            onClick={(e) => handleTextareaInteraction(e.currentTarget.selectionStart)}
+            onKeyUp={(e) => handleTextareaInteraction(e.currentTarget.selectionStart)}
+            onFocus={(e) => handleTextareaInteraction(e.currentTarget.selectionStart)}
+            onPaste={onPaste}
+            rows={1}
+            disabled={canInterrupt}
+          />
+          <div className="composer-toolbar">
+            <div className="composer-toolbar__left">
+              <div className="composer-popover-anchor" ref={composerMenuRef}>
+                <button
+                  className="composer-tool-button composer-tool-button--icon"
+                  onClick={onToggleComposerMenu}
+                  aria-label="Open composer menu"
+                  title="Open composer menu"
+                  disabled={loading}
+                >
+                  <Plus size={16} />
+                </button>
+
+                {composerMenuOpen && (
+                  <div className="composer-popover composer-popover--menu">
+                    <button className="composer-popover__action" onClick={onAddFiles}>
+                      <span className="composer-popover__icon">
+                        <ImagePlus size={16} />
+                      </span>
+                      <span className="composer-popover__copy">
+                        <strong>Add files</strong>
+                        <small>Attach local files or paste an image directly into the composer.</small>
+                      </span>
+                    </button>
+
+                    <button className="composer-popover__toggle-row" onClick={onToggleIdeContext}>
+                      <span className="composer-popover__icon">
+                        <Cpu size={16} />
+                      </span>
+                      <span className="composer-popover__copy">
+                        <strong>IDE context</strong>
+                        <small>Include IDE context so the agent can understand the current work faster.</small>
+                      </span>
+                      <span className={`composer-switch ${includeIdeContext ? "composer-switch--on" : ""}`}>
+                        <span className="composer-switch__thumb" />
+                      </span>
+                    </button>
+
+                    <button className="composer-popover__toggle-row" onClick={onTogglePlanMode}>
+                      <span className="composer-popover__icon">
+                        <CheckCircle size={16} />
+                      </span>
+                      <span className="composer-popover__copy">
+                        <strong>Plan mode</strong>
+                        <small>Ask the agent to outline steps before it starts executing changes.</small>
+                      </span>
+                      <span className={`composer-switch ${planMode ? "composer-switch--on" : ""}`}>
+                        <span className="composer-switch__thumb" />
+                      </span>
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <div className="composer-popover-anchor" ref={modelMenuRef}>
+                <button
+                  className="composer-tool-button composer-tool-button--select"
+                  onClick={onToggleModelMenu}
+                  disabled={loading}
+                >
+                  <span className="composer-tool-button__label">{selectedModel || "Select model"}</span>
+                  <ChevronDown size={14} />
+                </button>
+
+                {modelMenuOpen && (
+                  <div className="composer-popover composer-popover--select">
+                    <div className="composer-popover__header">
+                      <span>Select a model</span>
+                      {providerModelsLoading && <small>Loading available models...</small>}
+                    </div>
+
+                    {availableModels.length > 0 ? (
+                      <div className="composer-option-list">
+                        {availableModels.map((model) => (
+                          <button
+                            key={model.id}
+                            className={`composer-option ${model.id === selectedModel ? "composer-option--active" : ""}`}
+                            onClick={() => onSelectModel(model.id)}
+                          >
+                            <span>{model.id}</span>
+                            {model.id === selectedModel && <Check size={14} />}
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="composer-popover__empty">
+                        {providerModelsError ? providerModelsError : "No models available yet. Check your provider settings and refresh."}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="composer-popover-anchor" ref={reasoningMenuRef}>
+                <button
+                  className="composer-tool-button composer-tool-button--select"
+                  onClick={onToggleReasoningMenu}
+                  disabled={loading}
+                >
+                  <span className="composer-tool-button__label">{selectedReasoning.label}</span>
+                  <ChevronDown size={14} />
+                </button>
+
+                {reasoningMenuOpen && (
+                  <div className="composer-popover composer-popover--select">
+                    <div className="composer-popover__header">
+                      <span>Reasoning level</span>
+                      <small>Choose how much thinking time the model should use before responding.</small>
+                    </div>
+                    <div className="composer-option-list">
+                      {REASONING_OPTIONS.map((option) => (
+                        <button
+                          key={option.value}
+                          className={`composer-option ${option.value === selectedReasoningEffort ? "composer-option--active" : ""}`}
+                          onClick={() => onSelectReasoningEffort(option.value)}
+                        >
+                          <span className="composer-option__body">
+                            <strong>{option.label}</strong>
+                            <small>{option.hint}</small>
+                          </span>
+                          {option.value === selectedReasoningEffort && <Check size={14} />}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {includeIdeContext && (
+                <button
+                  type="button"
+                  className={`composer-pill composer-pill--dismissible ${closingPill === "ide" ? "composer-pill--closing" : ""}`}
+                  onClick={() => handleDismissPill("ide")}
+                  disabled={loading}
+                  aria-label="Disable IDE context"
+                  title="Disable IDE context"
+                >
+                  <span className="composer-pill__dismiss" aria-hidden="true">
+                    <X size={12} />
+                  </span>
+                  <span>IDE context</span>
+                </button>
+              )}
+              {planMode && (
+                <button
+                  type="button"
+                  className={`composer-pill composer-pill--accent composer-pill--dismissible ${closingPill === "plan" ? "composer-pill--closing" : ""}`}
+                  onClick={() => handleDismissPill("plan")}
+                  disabled={loading}
+                  aria-label="Disable plan mode"
+                  title="Disable plan mode"
+                >
+                  <span className="composer-pill__dismiss" aria-hidden="true">
+                    <X size={12} />
+                  </span>
+                  <span>Plan mode</span>
+                </button>
+              )}
+            </div>
+
+            <button
+              className={`composer-bar__submit ${canInterrupt ? "composer-bar__submit--interrupt" : ""}`}
+              onClick={canInterrupt ? onInterrupt : () => void onSubmit()}
+              disabled={canInterrupt ? false : isSendDisabled}
+              aria-label={canInterrupt ? "Interrupt run" : "Send message"}
+              title={canInterrupt ? "Interrupt run" : "Send message"}
+            >
+              {canInterrupt ? <span className="composer-bar__stop-icon" aria-hidden="true" /> : <ArrowUp size={18} />}
+            </button>
+          </div>
+        </div>
+
+        <div className="composer-footer">
+          <div className="composer-footer__left">
+            <div className="composer-popover-anchor" ref={sandboxMenuRef}>
+              <button
+                type="button"
+                className="composer-status-button composer-status-button--sandbox"
+                onClick={onToggleSandboxMenu}
+                disabled={!currentSandboxMode || loading}
+              >
+                <span className="composer-status-button__dot" aria-hidden="true" />
+                <span>{SANDBOX_MODE_OPTIONS.find((option) => option.value === currentSandboxMode)?.label ?? currentSandboxMode}</span>
+                <ChevronDown size={12} />
+              </button>
+
+              {sandboxMenuOpen && (
+                <div className="composer-popover composer-popover--status">
+                  <div className="composer-popover__header">
+                    <span>Sandbox Mode</span>
+                    <small>Applies to the current thread</small>
+                  </div>
+                  <div className="composer-option-list">
+                    {SANDBOX_MODE_OPTIONS.map((option) => (
+                      <button
+                        key={option.value}
+                        className={`composer-option ${option.value === currentSandboxMode ? "composer-option--active" : ""}`}
+                        onClick={() => onSelectSandboxMode(option.value)}
+                      >
+                        <span className="composer-option__body">
+                          <strong>{option.label}</strong>
+                          <small>{option.hint}</small>
+                        </span>
+                        {option.value === currentSandboxMode && <Check size={14} />}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="composer-popover-anchor" ref={branchMenuRef}>
+              <button
+                type="button"
+                className="composer-status-button composer-status-button--branch"
+                onClick={onToggleBranchMenu}
+                disabled={branchSummary.loading || loading}
+              >
+                <GitBranch size={13} />
+                <span>{branchSummary.currentBranch ?? "New branch"}</span>
+                <ChevronDown size={12} />
+              </button>
+
+              {branchMenuOpen && (
+                <div className="composer-popover composer-popover--branch">
+                  <div className="composer-branch-search">
+                    <Search size={13} />
+                    <input
+                      type="text"
+                      value={branchSearch}
+                      onChange={(event) => onBranchSearchChange(event.target.value)}
+                      placeholder="Search branches"
+                    />
+                  </div>
+
+                  <div className="composer-popover__header">
+                    <span>Branches</span>
+                    <small>{branchSummary.loading ? "Loading..." : `${branchSummary.branches.length} local branches`}</small>
+                  </div>
+
+                  {branchSummary.error ? (
+                    <div className="composer-popover__empty">{branchSummary.error}</div>
+                  ) : filteredBranches.length > 0 ? (
+                    <div className="composer-option-list composer-option-list--branch">
+                      {filteredBranches.map((branch) => (
+                        <button
+                          key={branch}
+                          className={`composer-option ${branch === branchSummary.currentBranch ? "composer-option--active" : ""}`}
+                          onClick={() => onSelectBranch(branch)}
+                        >
+                          <span className="composer-option__body composer-option__body--branch">
+                            <strong>{branch}</strong>
+                            {branch === branchSummary.currentBranch && <small>Current branch</small>}
+                          </span>
+                          {branch === branchSummary.currentBranch && <Check size={14} />}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="composer-popover__empty">
+                      {branchSummary.isGitRepo ? "No matching local branches." : "The current project is not a Git repository yet."}
+                    </div>
+                  )}
+
+                  <button className="composer-branch-create" onClick={onCreateBranch}>
+                    <Plus size={14} />
+                    <span>Create and switch to a new branch...</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="composer-context-card">
+            <button
+              type="button"
+              className="composer-context-card__pie"
+              style={
+                {
+                  "--context-angle": `${Math.max(8, Math.round(contextSummary.usedRatio * 360))}deg`,
+                } as CSSProperties
+              }
+              aria-label="查看 Context window 用量"
+              aria-describedby="composer-context-tooltip"
+            />
+            <div id="composer-context-tooltip" className="composer-context-card__tooltip" role="tooltip">
+              <strong>Context window</strong>
+              <span>
+                {Math.round(contextSummary.usedRatio * 100)}% used ({Math.round((1 - contextSummary.usedRatio) * 100)}% remaining)
+              </span>
+              <span>
+                {formatCompactTokens(contextSummary.usedTokens)} used out of {formatCompactTokens(contextSummary.totalTokens)} total
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function buildConversationEntries(items: ItemRecord[]): ConversationEntry[] {
+  const entries: ConversationEntry[] = [];
+  let pendingThoughtItems: ItemRecord[] = [];
+
+  const flushThoughts = (completed: boolean): ItemRecord[] => {
+    if (pendingThoughtItems.length === 0) {
+      return [];
+    }
+
+    const changeItems = pendingThoughtItems.filter((item) => item.kind === "fileChange");
+    const thoughtItems = pendingThoughtItems.filter((item) => item.kind !== "fileChange");
+
+    if (thoughtItems.length > 0) {
+      const first = thoughtItems[0]!;
+      const last = thoughtItems[thoughtItems.length - 1]!;
+
+      entries.push({
+        id: `thought-${first.id}`,
+        kind: "thought",
+        items: thoughtItems,
+        completed,
+        durationMs: Math.max(0, new Date(last.updatedAt).getTime() - new Date(first.createdAt).getTime()),
+        startedAtMs: new Date(first.createdAt).getTime(),
+      });
+    }
+
+    pendingThoughtItems = [];
+    return changeItems;
+  };
+
+  for (const item of items) {
+    if (item.kind === "userMessage") {
+      const pendingChanges = flushThoughts(true);
+
+      if (pendingChanges.length > 0) {
+        entries.push({
+          id: `changes-${pendingChanges[0]!.id}`,
+          kind: "changes",
+          items: pendingChanges,
+        });
+      }
+
+      entries.push({ id: item.id, kind: "user", item });
+      continue;
+    }
+
+    if (THOUGHT_ITEM_KINDS.includes(item.kind) || item.kind === "fileChange") {
+      pendingThoughtItems.push(item);
+      continue;
+    }
+
+    if (item.kind === "agentMessage") {
+      const pendingChanges = flushThoughts(true);
+      entries.push({ id: item.id, kind: "answer", item });
+
+      if (pendingChanges.length > 0) {
+        entries.push({
+          id: `changes-${item.id}`,
+          kind: "changes",
+          items: pendingChanges,
+        });
+      }
+
+      continue;
+    }
+
+    const pendingChanges = flushThoughts(true);
+
+    if (pendingChanges.length > 0) {
+      entries.push({
+        id: `changes-${pendingChanges[0]!.id}`,
+        kind: "changes",
+        items: pendingChanges,
+      });
+    }
+
+    entries.push({ id: item.id, kind: "system", item });
+  }
+
+  const trailingChanges = flushThoughts(false);
+
+  if (trailingChanges.length > 0) {
+    entries.push({
+      id: `changes-${trailingChanges[0]!.id}`,
+      kind: "changes",
+      items: trailingChanges,
+    });
+  }
+
+  return entries;
+}
+
+function getConversationEntryAnchor(entry: ConversationEntry): { entryId: string; turnId?: string; itemId?: string } {
+  if (entry.kind === "thought" || entry.kind === "changes") {
+    return {
+      entryId: entry.id,
+      turnId: entry.items[0]?.turnId,
+      itemId: entry.items[0]?.id,
+    };
+  }
+
+  return {
+    entryId: entry.id,
+    turnId: entry.item.turnId,
+    itemId: entry.item.id,
+  };
+}
+
+function escapeAttributeValue(value: string) {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function getItemDisplayText(item: ItemRecord) {
+  const tool = getToolReferenceFromMetadata(item.metadata);
+  const toolError = getToolErrorFromMetadata(item.metadata);
+  const sections = [item.title, item.body].filter(Boolean);
+
+  if (tool) {
+    sections.push(formatToolReferenceSummary(tool));
+  }
+
+  if (toolError) {
+    sections.push(formatToolErrorSummary(toolError));
+  }
+
+  return sections.join("\n\n");
+}
+
+function getUserDisplayText(item: ItemRecord) {
+  return item.body?.trim() || item.title?.trim() || "";
+}
+
+function getUserAttachmentSummaries(item: ItemRecord): UserAttachmentSummary[] {
+  const rawAttachments = item.metadata?.attachments;
+
+  if (!Array.isArray(rawAttachments)) {
+    return [];
+  }
+
+  return rawAttachments.flatMap((attachment) => {
+    if (!attachment || typeof attachment !== "object") {
+      return [];
+    }
+
+    const record = attachment as Record<string, unknown>;
+    const name = typeof record.name === "string" ? record.name : null;
+    const kind = record.kind;
+
+    if (!name || (kind !== "image" && kind !== "text" && kind !== "binary")) {
+      return [];
+    }
+
+    return [
+      {
+        name,
+        kind,
+        path: typeof record.path === "string" ? record.path : undefined,
+        mediaType: typeof record.mediaType === "string" ? record.mediaType : undefined,
+        truncated: record.truncated === true,
+        previewSrc: resolveAttachmentPreviewSrc(
+          kind,
+          typeof record.path === "string" ? record.path : undefined,
+          typeof record.imageDataUrl === "string" ? record.imageDataUrl : undefined,
+        ),
+      },
+    ];
+  });
+}
+
+function resolveAttachmentPreviewSrc(
+  kind: "image" | "text" | "binary",
+  path?: string,
+  imageDataUrl?: string,
+) {
+  if (kind !== "image") {
+    return undefined;
+  }
+
+  if (imageDataUrl) {
+    return imageDataUrl;
+  }
+
+  if (!path || path.startsWith("clipboard://")) {
+    return undefined;
+  }
+
+  return toFileUrl(path);
+}
+
+function toFileUrl(path: string) {
+  const normalized = path.replace(/\\/g, "/");
+
+  if (/^[a-zA-Z]:\//.test(normalized)) {
+    return encodeURI(`file:///${normalized}`);
+  }
+
+  if (normalized.startsWith("//")) {
+    return encodeURI(`file:${normalized}`);
+  }
+
+  return encodeURI(`file://${normalized}`);
+}
+
+function formatAttachmentKindLabel(kind: "image" | "text" | "binary") {
+  switch (kind) {
+    case "image":
+      return "Image";
+    case "text":
+      return "Text file";
+    case "binary":
+      return "File";
+    default:
+      return "Attachment";
+  }
+}
+
+function formatThoughtItemText(item: ItemRecord) {
+  const content = getItemDisplayText(item);
+
+  if (item.kind === "reasoning") {
+    return content;
+  }
+
+  return `${ITEM_LABELS[item.kind]}: ${content}`;
+}
+
+function getToolReferenceFromMetadata(metadata: ItemRecord["metadata"]): ToolReferenceRecord | undefined {
+  const raw = metadata?.tool;
+
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+
+  const record = raw as ToolReferenceRecord;
+  return record.name && record.source && record.capability ? record : undefined;
+}
+
+function getToolErrorFromMetadata(metadata: ItemRecord["metadata"]): ToolErrorRecord | undefined {
+  const raw = metadata?.toolError;
+
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+
+  const record = raw as ToolErrorRecord;
+  return record.code && record.message ? record : undefined;
+}
+
+function formatToolReferenceSummary(tool: ToolReferenceRecord): string {
+  const capabilitySummary = [
+    tool.capability.writes ? "writes" : "read-only",
+    tool.capability.network ? "network" : null,
+    tool.capability.interactive ? "interactive" : null,
+    tool.capability.approvalModes.filter((mode) => mode !== "none").join("/"),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  return [
+    `Tool: ${tool.name}`,
+    `Source: ${formatToolSourceLabel(tool)}`,
+    capabilitySummary ? `Capability: ${capabilitySummary}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function formatToolErrorSummary(toolError: ToolErrorRecord): string {
+  return [
+    `Tool error: ${toolError.code}`,
+    `Retryable: ${toolError.retryable ? "yes" : "no"}`,
+    toolError.tool ? `Tool source: ${formatToolSourceLabel(toolError.tool)}` : null,
+    toolError.approvalMode ? `Approval mode: ${toolError.approvalMode}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function formatToolSourceLabel(tool: ToolReferenceRecord): string {
+  const source = tool.source;
+  const name = source.label ?? source.id ?? source.type;
+  return `${source.type}${name && name !== source.type ? `:${name}` : ""}`;
+}
+
+function formatElapsedTime(durationMs: number) {
+  const totalSeconds = Math.max(1, Math.floor(durationMs / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  if (minutes === 0) {
+    return `${totalSeconds}s`;
+  }
+
+  return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+}
+
+function detectSkillMention(input: string, caretPosition: number) {
+  if (caretPosition < 0) {
+    return null;
+  }
+
+  const beforeCaret = input.slice(0, caretPosition);
+  const match = beforeCaret.match(/(?:^|\s)\$([^\s$]*)$/);
+
+  if (!match || match.index === undefined) {
+    return null;
+  }
+
+  const start = match.index + match[0].lastIndexOf("$");
+
+  return {
+    query: match[1] ?? "",
+    start,
+    end: caretPosition,
+  };
+}
+
+function formatSkillScopeLabel(scope: SkillDescriptor["scope"]) {
+  switch (scope) {
+    case "SYSTEM":
+      return "绯荤粺";
+    case "USER":
+      return "鐢ㄦ埛";
+    case "REPO":
+      return "浠撳簱";
+    case "CATALOG":
+      return "Catalog";
+    case "ADMIN":
+      return "绠＄悊";
+    default:
+      return scope;
+  }
+}
+
+function formatRequirementStatusLabel(status: RequirementRecord["status"]) {
+  switch (status) {
+    case "paused":
+      return "Paused";
+    case "completed":
+      return "Completed";
+    case "archived":
+      return "Archived";
+    default:
+      return "Active";
+  }
+}
+
+function formatRelativeTime(value: string) {
+  const target = new Date(value).getTime();
+  const deltaMs = Date.now() - target;
+  const deltaMinutes = Math.max(0, Math.floor(deltaMs / 60000));
+
+  if (deltaMinutes < 1) {
+    return "now";
+  }
+
+  if (deltaMinutes < 60) {
+    return `${deltaMinutes}m`;
+  }
+
+  const deltaHours = Math.floor(deltaMinutes / 60);
+
+  if (deltaHours < 24) {
+    return `${deltaHours}h`;
+  }
+
+  const deltaDays = Math.floor(deltaHours / 24);
+
+  if (deltaDays < 7) {
+    return `${deltaDays}d`;
+  }
+
+  const deltaWeeks = Math.floor(deltaDays / 7);
+
+  if (deltaWeeks < 5) {
+    return `${deltaWeeks}w`;
+  }
+
+  const deltaMonths = Math.floor(deltaDays / 30);
+
+  if (deltaMonths < 12) {
+    return `${Math.max(1, deltaMonths)}mo`;
+  }
+
+  return `${Math.floor(deltaDays / 365)}y`;
+}
+
+function getComposerDraft(drafts: Record<string, ComposerDraftState>, threadId?: string | null): ComposerDraftState {
+  return drafts[threadId ?? "__draft__"] ?? createDefaultComposerDraft();
+}
+
+function createDefaultComposerDraft(): ComposerDraftState {
+  return {
+    input: "",
+    attachments: [],
+    includeIdeContext: true,
+    planMode: false,
+  };
+}
+
+function createEmptyThreadSessionView() {
+  return {
+    turns: [] as TurnRecord[],
+    items: [] as ItemRecord[],
+    turnContexts: [] as TurnContextSnapshotRecord[],
+    turnPlans: [] as TurnPlanRecord[],
+    turnDiffs: [] as TurnDiffRecord[],
+    pendingApproval: null as PendingApproval | null,
+    submitting: false,
+  };
+}
+
+function estimateContextUsage(params: {
+  modelId?: string;
+  items: ItemRecord[];
+  turns: TurnRecord[];
+  input: string;
+  attachments: ComposerAttachment[];
+}): ContextSummary {
+  const totalTokens = inferContextLimit(params.modelId);
+  const itemTokens = params.items.reduce((sum, item) => sum + estimateTokenCount([item.title, item.body, JSON.stringify(item.metadata ?? {})].join(" ")), 0);
+  const turnTokens = params.turns.reduce((sum, turn) => sum + estimateTokenCount(turn.input), 0);
+  const attachmentTokens = params.attachments.reduce(
+    (sum, attachment) => sum + estimateTokenCount([attachment.name, attachment.path, attachment.mediaType ?? ""].join(" ")),
+    0,
+  );
+  const draftTokens = estimateTokenCount(params.input);
+  const usedTokens = Math.max(0, itemTokens + turnTokens + attachmentTokens + draftTokens);
+  const remainingTokens = Math.max(totalTokens - usedTokens, 0);
+  const usedRatio = totalTokens > 0 ? Math.min(usedTokens / totalTokens, 1) : 0;
+
+  return {
+    usedTokens,
+    totalTokens,
+    remainingTokens,
+    usedRatio,
+  };
+}
+
+function inferContextLimit(modelId?: string) {
+  const value = modelId?.toLowerCase() ?? "";
+
+  if (!value) {
+    return 950_000;
+  }
+
+  if (value.includes("mini") || value.includes("haiku") || value.includes("flash")) {
+    return 200_000;
+  }
+
+  if (value.includes("32k")) {
+    return 32_000;
+  }
+
+  if (value.includes("128k")) {
+    return 128_000;
+  }
+
+  return 950_000;
+}
+
+function estimateTokenCount(content: string) {
+  const normalized = content.trim();
+
+  if (!normalized) {
+    return 0;
+  }
+
+  return Math.ceil(normalized.length / 4);
+}
+
+function formatCompactTokens(value: number) {
+  if (value >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+  }
+
+  if (value >= 1_000) {
+    return `${Math.round(value / 1_000)}k`;
+  }
+
+  return `${value}`;
+}
+
+function buildComposerInput(params: {
+  message: string;
+  planMode: boolean;
+}) {
+  const sections: string[] = [];
+
+  if (params.planMode) {
+    sections.push(
+      [
+        "[Plan mode]",
+        "Plan mode is enabled for this turn.",
+        "Do not make changes yet unless I explicitly ask you to execute after the plan.",
+        "First provide a concise implementation plan, key risks, and the smallest safe next step.",
+      ].join("\n"),
+    );
+  }
+
+  if (params.message) {
+    sections.push(params.message);
+  }
+
+  return sections.join("\n\n");
+}
+
+function splitLines(value: string): string[] {
+  return [...new Set(value.split(/\r?\n/).map((entry) => entry.trim()).filter(Boolean))];
+}
+
+function buildThreadChangeSets(params: { items: ItemRecord[]; turns: TurnRecord[] }): ThreadChangeSet[] {
+  const turnsById = new Map(params.turns.map((turn, index) => [turn.id, { turn, index }]));
+  const grouped = new Map<string, ThreadChangeSet>();
+
+  for (const item of params.items) {
+    if (item.kind !== "fileChange") {
+      continue;
+    }
+
+    const path = getChangedFilePath(item);
+
+    if (!path) {
+      continue;
+    }
+
+    const turnEntry = turnsById.get(item.turnId);
+    const key = item.turnId || item.id;
+    const current = grouped.get(key) ?? {
+      id: key,
+      turnId: item.turnId,
+      threadId: item.threadId,
+      createdAt: item.createdAt,
+      updatedAt: item.updatedAt,
+      label: formatTurnDiffLabel(turnEntry?.turn, turnEntry ? turnEntry.index + 1 : grouped.size + 1),
+      stats: {
+        fileCount: 0,
+        additions: 0,
+        deletions: 0,
+      },
+      files: [],
+    };
+    const nextFile: ThreadChangeFile = {
+      itemId: item.id,
+      turnId: item.turnId,
+      path,
+      title: item.title,
+      status: "unknown",
+      updatedAt: item.updatedAt,
+    };
+    const existingIndex = current.files.findIndex((file) => file.path === path);
+
+    if (existingIndex >= 0) {
+      current.files[existingIndex] = nextFile;
+    } else {
+      current.files.push(nextFile);
+    }
+
+    current.createdAt = current.createdAt < item.createdAt ? current.createdAt : item.createdAt;
+    current.updatedAt = current.updatedAt > item.updatedAt ? current.updatedAt : item.updatedAt;
+    grouped.set(key, current);
+  }
+
+  return [...grouped.values()]
+    .map((changeSet) => ({
+      ...changeSet,
+      stats: {
+        fileCount: changeSet.files.length,
+        additions: changeSet.files.reduce((total, file) => total + (file.additions ?? 0), 0),
+        deletions: changeSet.files.reduce((total, file) => total + (file.deletions ?? 0), 0),
+      },
+      files: [...changeSet.files].sort((left, right) => left.path.localeCompare(right.path)),
+    }))
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+}
+
+function formatTurnDiffLabel(turn?: TurnRecord, ordinal?: number) {
+  const input = turn?.input?.trim() ?? "";
+  const firstLine = input.split(/\r?\n/)[0]?.trim() ?? "";
+  const snippet = firstLine.length > 54 ? `${firstLine.slice(0, 54).trimEnd()}…` : firstLine;
+
+  if (snippet) {
+    return snippet;
+  }
+
+  return `Turn ${ordinal ?? 1}`;
+}
+
+function getChangedFilePath(item: ItemRecord): string | null {
+  const metadataPath = typeof item.metadata?.path === "string" ? item.metadata.path : null;
+
+  if (metadataPath) {
+    return metadataPath;
+  }
+
+  const match = item.title.match(/^File change:\s+(.+)$/);
+  return match?.[1] ?? null;
+}
+
+function formatReviewSourceLabel(source: ReviewRecord["source"]): string {
+  if (source.kind === "base_branch") {
+    return `Base ${source.baseBranch ?? "branch"}`;
+  }
+
+  if (source.kind === "commit") {
+    return source.commit ? `Commit ${source.commit.slice(0, 12)}` : "Commit";
+  }
+
+  return source.kind === "workspace" ? "Workspace diff" : "Staged diff";
+}
+
+function buildReviewArtifactFallback(review: ReviewRecord): ReviewArtifactRecord {
+  return {
+    sourceLabel: formatReviewSourceLabel(review.source),
+    findingCounts: review.findings.reduce(
+      (counts, finding) => {
+        counts.total += 1;
+        counts[finding.severity] += 1;
+        return counts;
+      },
+      {
+        total: 0,
+        critical: 0,
+        high: 0,
+        medium: 0,
+        low: 0,
+      },
+    ),
+  };
+}
+
+function compareReviewSeverity(
+  left: ReviewRecord["findings"][number]["severity"],
+  right: ReviewRecord["findings"][number]["severity"],
+) {
+  return getReviewSeverityRank(right) - getReviewSeverityRank(left);
+}
+
+function getReviewSeverityRank(severity: ReviewRecord["findings"][number]["severity"]) {
+  switch (severity) {
+    case "critical":
+      return 4;
+    case "high":
+      return 3;
+    case "medium":
+      return 2;
+    case "low":
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+function findChangeSetSelectionForFile(
+  changeSets: ThreadChangeSet[],
+  filePath: string,
+): { changeSetId: string; filePath: string } | null {
+  const match = changeSets.find((changeSet) => changeSet.files.some((file) => file.path === filePath));
+
+  if (!match) {
+    return null;
+  }
+
+  return {
+    changeSetId: match.id,
+    filePath,
+  };
+}
+
+async function loadChangedFileSummaries(
+  threadId: string,
+  paths: string[],
+): Promise<Record<string, { additions?: number; deletions?: number }>> {
+  if (paths.length === 0) {
+    return {};
+  }
+
+  const command = `git -c core.quotepath=false diff --numstat --no-ext-diff -- ${paths.map(quoteGitPath).join(" ")}`;
+  const result = await window.myAgent.execCommand({ threadId, command });
+  const output = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
+
+  if (result.code !== 0 && !output) {
+    throw new Error(`git diff summary failed with exit code ${result.code}.`);
+  }
+
+  return parseNumstatOutput(result.stdout);
+}
+
+async function loadChangedFileDiff(threadId: string, path: string): Promise<string> {
+  const command = `git -c core.quotepath=false diff --no-ext-diff --unified=3 -- ${quoteGitPath(path)}`;
+  const result = await window.myAgent.execCommand({ threadId, command });
+
+  if (result.code !== 0 && !result.stdout.trim()) {
+    const message = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
+    throw new Error(message || `git diff failed with exit code ${result.code}.`);
+  }
+
+  return stripUnifiedDiffPreamble(result.stdout);
+}
+
+function parseNumstatOutput(output: string): Record<string, { additions?: number; deletions?: number }> {
+  const summary: Record<string, { additions?: number; deletions?: number }> = {};
+
+  for (const rawLine of output.split(/\r?\n/)) {
+    const line = rawLine.trim();
+
+    if (!line) {
+      continue;
+    }
+
+    const [additions, deletions, ...rest] = rawLine.split("\t");
+    const path = rest.join("\t").trim();
+
+    if (!path) {
+      continue;
+    }
+
+    summary[path] = {
+      additions: parseNumstatValue(additions),
+      deletions: parseNumstatValue(deletions),
+    };
+  }
+
+  return summary;
+}
+
+function parseNumstatValue(value: string | undefined): number | undefined {
+  if (!value || value === "-") {
+    return undefined;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function stripUnifiedDiffPreamble(diff: string): string {
+  return diff
+    .split(/\r?\n/)
+    .filter((line) => !line.startsWith("diff --git ") && !line.startsWith("index "))
+    .join("\n")
+    .trim();
+}
+
+function renderDiffLines(diff: string) {
+  return diff.split(/\r?\n/).map((line, index) => {
+    let className = "changed-file__diff-line";
+
+    if (line.startsWith("@@")) {
+      className += " changed-file__diff-line--hunk";
+    } else if (line.startsWith("+") && !line.startsWith("+++")) {
+      className += " changed-file__diff-line--add";
+    } else if (line.startsWith("-") && !line.startsWith("---")) {
+      className += " changed-file__diff-line--del";
+    } else if (line.startsWith("---") || line.startsWith("+++")) {
+      className += " changed-file__diff-line--file";
+    }
+
+    return (
+      <div key={`${index}:${line}`} className={className}>
+        <span className="changed-file__diff-gutter">{index + 1}</span>
+        <code>{line || " "}</code>
+      </div>
+    );
+  });
+}
+
+function quoteGitPath(path: string): string {
+  return `"${path.replace(/(["`$\\])/g, "`$1")}"`;
+}
+
+function formatPluginInstallSource(source: PluginRecord["installSource"]): string {
+  if (!source) {
+    return "discovered";
+  }
+
+  if (source.source === "git") {
+    return source.ref ? `git:${source.url}#${source.ref}` : `git:${source.url}`;
+  }
+
+  if (source.source === "npm") {
+    return source.version ? `npm:${source.packageName}@${source.version}` : `npm:${source.packageName}`;
+  }
+
+  return `local:${source.path}`;
+}
+
+function formatPluginComponents(components: PluginRecord["components"]): string {
+  if (!components) {
+    return "none";
+  }
+
+  return [
+    `skills:${components.skills}`,
+    `mcp:${components.mcpServers}`,
+    `tools:${components.tools}`,
+    `hooks:${components.hooks}`,
+    components.apps ? `apps:${components.apps}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(", ");
+}
+
+function mergeComposerAttachments(
+  current: ComposerAttachment[],
+  incoming: ComposerAttachment[],
+): ComposerAttachment[] {
+  const next = new Map(current.map((attachment) => [attachment.path, attachment]));
+
+  for (const attachment of incoming) {
+    next.set(attachment.path, attachment);
+  }
+
+  return [...next.values()];
+}
+
+async function createPastedImageAttachment(file: File, index: number): Promise<ComposerAttachment> {
+  const timestamp = Date.now();
+  const extension = inferImageExtension(file.type);
+  const name = `pasted-image-${timestamp}-${index + 1}.${extension}`;
+
+  return {
+    path: `clipboard://${name}`,
+    name,
+    kind: "image",
+    mediaType: file.type || `image/${extension}`,
+    sizeBytes: file.size,
+    imageDataUrl: await readFileAsDataUrl(file),
+  };
+}
+
+function inferImageExtension(mediaType: string): string {
+  if (!mediaType.startsWith("image/")) {
+    return "png";
+  }
+
+  const subtype = mediaType.slice("image/".length).toLowerCase();
+
+  if (!subtype || subtype.includes("svg")) {
+    return "png";
+  }
+
+  return subtype.replace(/[^a-z0-9]+/g, "-");
+}
+
+function readFileAsDataUrl(file: Blob): Promise<string> {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        resolvePromise(reader.result);
+        return;
+      }
+
+      rejectPromise(new Error("Failed to read pasted image."));
+    };
+
+    reader.onerror = () => {
+      rejectPromise(reader.error ?? new Error("Failed to read pasted image."));
+    };
+
+    reader.readAsDataURL(file);
+  });
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function getFileName(path: string) {
+  return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
+}
+
+function isImagePath(path: string) {
+  return /\.(png|jpg|jpeg|gif|webp|bmp|svg)$/i.test(path);
+}

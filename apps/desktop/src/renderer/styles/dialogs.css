@@ -1,0 +1,237 @@
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(10, 12, 11, 0.44);
+}
+
+.dialog-content {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  z-index: 101;
+  width: min(720px, calc(100vw - 40px));
+  max-height: min(82vh, 760px);
+  overflow: hidden;
+  transform: translate(-50%, -50%);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface-strong);
+  box-shadow: var(--shadow-lift);
+  -webkit-app-region: no-drag;
+}
+
+.dialog-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 20px;
+  font-weight: 650;
+}
+
+.dialog-description {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.skill-dialog {
+  width: min(920px, calc(100vw - 48px));
+}
+
+.skill-dialog__layout {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.skill-dialog__close,
+.image-preview-dialog__close {
+  position: absolute;
+  right: 12px;
+  top: 12px;
+  z-index: 2;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+}
+
+.skill-dialog__close:hover,
+.image-preview-dialog__close:hover {
+  background: var(--surface-soft);
+  color: var(--text);
+}
+
+.skill-dialog__header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 14px;
+  padding: 18px 54px 18px 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.skill-dialog__icon-container,
+.skill-dialog__icon {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.skill-dialog__title-row {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.skill-dialog__titles {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.skill-dialog__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.skill-dialog__badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: 11px;
+}
+
+.skill-dialog__subtitle {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.skill-dialog__actions-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.skill-dialog__folder {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text-soft);
+}
+
+.skill-dialog__body {
+  min-height: 0;
+  padding: 14px;
+}
+
+.skill-dialog__reader {
+  height: min(560px, 62vh);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+
+.skill-dialog__reader-bar {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.skill-dialog__reader-bar code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-dialog__reader-body {
+  min-height: 0;
+  overflow: auto;
+}
+
+.skill-dialog__document,
+.skill-dialog__reader-state {
+  margin: 0;
+  padding: 16px;
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.skill-dialog__reader-state--error {
+  color: var(--danger);
+}
+
+.image-preview-dialog {
+  width: min(980px, calc(100vw - 48px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.image-preview-dialog__header {
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 54px 14px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.image-preview-dialog__meta {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.image-preview-dialog__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-preview-dialog__viewport {
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  overflow: auto;
+  background: var(--surface-ghost);
+}
+
+.image-preview-dialog__image {
+  max-width: 100%;
+  max-height: 68vh;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+}
