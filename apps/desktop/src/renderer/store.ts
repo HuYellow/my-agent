@@ -10,6 +10,8 @@ import {
   type CreateRequirementParams,
   type DistributionTemplateRecord,
   type EnvironmentRecord,
+  type RuntimeEventRecord,
+  type RuntimeRunRecord,
   type ExecutionContextRecord,
   type HarnessEvent,
   type InitializeResult,
@@ -46,6 +48,7 @@ import {
 
 let bootstrapPromise: Promise<void> | null = null;
 let detachEventListener: (() => void) | null = null;
+let bufferedBootstrapEvents: HarnessEvent[] = [];
 
 export interface ThreadSessionState {
   turns: TurnRecord[];
@@ -77,6 +80,8 @@ interface AppState {
   workflows: WorkflowRecord[];
   workflowRuns: WorkflowRunRecord[];
   agentTasks: AgentTaskRecord[];
+  runs: RuntimeRunRecord[];
+  eventCursor: number;
   terminals: TerminalSessionRecord[];
   terminalOutputs: Record<string, string>;
   terminalOutputArchives: TerminalOutputArchiveRecord[];
@@ -127,6 +132,7 @@ interface AppState {
   installPlugin: (params: PluginInstallParams) => Promise<void>;
   scaffoldTemplate: (params: TemplateScaffoldParams) => Promise<{ rootPath: string; createdPaths: string[] }>;
   refreshRuntimeProjectState: (projectId?: string) => Promise<void>;
+  retryRun: (runId: string) => Promise<RuntimeRunRecord>;
   handleEvent: (event: HarnessEvent) => void;
 }
 
@@ -150,6 +156,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   workflows: [],
   workflowRuns: [],
   agentTasks: [],
+  runs: [],
+  eventCursor: 0,
   terminals: [],
   terminalOutputs: {},
   terminalOutputArchives: [],
@@ -175,6 +183,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({ loading: true, bootError: undefined });
 
       try {
+        if (!detachEventListener) {
+          detachEventListener = window.myAgent.onEvent((event) => {
+            if (!get().bootstrapped) {
+              bufferedBootstrapEvents.push(event);
+              return;
+            }
+            get().handleEvent(event);
+          });
+        }
         const initial = (await withTimeout(window.myAgent.initialize(), 10_000, "Harness initialization timed out.")) as InitializeResult;
         const activeProjectId = initial.config.selectedProjectId ?? initial.projects[0]?.id;
         const activeRequirementId = initial.config.selectedRequirementId ?? initial.requirements?.[0]?.id;
@@ -203,6 +220,8 @@ export const useAppStore = create<AppState>((set, get) => ({
           workflows: initial.workflows ?? [],
           workflowRuns: initial.workflowRuns ?? [],
           agentTasks: initial.agentTasks ?? [],
+          runs: initial.runs ?? [],
+          eventCursor: initial.eventCursor?.sequence ?? 0,
           terminals: initial.terminals ?? [],
           terminalOutputArchives: initial.terminalOutputArchives ?? [],
           terminalCapabilities: initial.terminalCapabilities ?? [],
@@ -222,8 +241,26 @@ export const useAppStore = create<AppState>((set, get) => ({
         await get().refreshProviderModels();
         await get().refreshRuntimeProjectState(activeProjectId);
 
-        if (!detachEventListener) {
-          detachEventListener = window.myAgent.onEvent((event) => get().handleEvent(event));
+        const bootstrapCursor = initial.eventCursor?.sequence ?? 0;
+        const buffered = bufferedBootstrapEvents;
+        bufferedBootstrapEvents = [];
+        for (const event of buffered) {
+          if ((event.meta?.sequence ?? 0) > bootstrapCursor) {
+            get().handleEvent(event);
+          }
+        }
+        let replayCursor = bootstrapCursor;
+        let hasMore = true;
+        while (hasMore) {
+          const replay = await window.myAgent.listEventsSince({ sequence: replayCursor, limit: 500 });
+          for (const record of replay.events) {
+            get().handleEvent(record.event);
+          }
+          replayCursor = replay.cursor.sequence;
+          hasMore = replay.hasMore;
+          if (replay.events.length === 0) {
+            hasMore = false;
+          }
         }
       } catch (error) {
         set({
@@ -555,6 +592,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       })),
     }));
   },
+  retryRun: async (runId) => {
+    const result = await window.myAgent.retryRun(runId);
+    set((state) => ({
+      runs: upsertRuntimeRun(state.runs, result.run),
+    }));
+    return result.run;
+  },
   startReview: async (params) => {
     const thread = params.threadId ? get().threads.find((entry) => entry.id === params.threadId) : undefined;
     const requirementId = params.requirementId ?? thread?.requirementId ?? get().activeRequirementId;
@@ -727,7 +771,19 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
   },
   handleEvent: (event) => {
+    const sequence = event.meta?.sequence;
+    if (sequence && sequence <= get().eventCursor) {
+      return;
+    }
+    if (sequence) {
+      set({ eventCursor: sequence });
+    }
     switch (event.type) {
+      case "run/updated":
+        set((state) => ({
+          runs: upsertRuntimeRun(state.runs, event.payload.run),
+        }));
+        break;
       case "thread/started":
         set((state) => ({
           threads: upsertThread(state.threads, event.payload.thread),
@@ -1057,6 +1113,10 @@ function upsertWorkflow(workflows: WorkflowRecord[], workflow: WorkflowRecord): 
 
 function upsertWorkflowRun(workflowRuns: WorkflowRunRecord[], run: WorkflowRunRecord): WorkflowRunRecord[] {
   return [...workflowRuns.filter((entry) => entry.id !== run.id), run].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+}
+
+function upsertRuntimeRun(runs: RuntimeRunRecord[], run: RuntimeRunRecord): RuntimeRunRecord[] {
+  return [...runs.filter((entry) => entry.id !== run.id), run].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 }
 
 function upsertTerminal(terminals: TerminalSessionRecord[], terminal: TerminalSessionRecord): TerminalSessionRecord[] {

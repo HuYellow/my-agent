@@ -20,9 +20,12 @@ export function createRuntimeKernel(options: {
   const homeDir = options.homeDir ?? process.env.MY_AGENT_HOME ?? getDefaultHomeDir();
   const database = new HarnessDatabase(getDefaultDatabasePath(homeDir));
   const emitRaw = (notification: JsonRpcNotification) => {
+    const rawParams = (notification.params ?? {}) as Record<string, unknown>;
+    const { __eventMeta, ...payload } = rawParams;
     options.emitEvent({
       type: notification.method as HarnessEvent["type"],
-      payload: notification.params as HarnessEvent["payload"],
+      payload: payload as HarnessEvent["payload"],
+      meta: __eventMeta as HarnessEvent["meta"],
     } as HarnessEvent);
   };
   const skillService = new SkillService(getDefaultSystemSkillsRoot(), homeDir, (skills) => {
@@ -33,7 +36,7 @@ export function createRuntimeKernel(options: {
     });
   });
   const promptBuilder = new PromptBuilder(skillService);
-  const server = new HarnessServer(database, skillService, promptBuilder, emitRaw);
+  const server = new HarnessServer(database, skillService, promptBuilder, emitRaw, homeDir);
 
   return {
     homeDir,
@@ -44,6 +47,7 @@ export function createRuntimeKernel(options: {
     dispose: () => {
       server.dispose();
       skillService.dispose();
+      database.close();
     },
   };
 }

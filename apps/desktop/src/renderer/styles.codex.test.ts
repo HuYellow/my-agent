@@ -41,7 +41,7 @@ describe("Codex-inspired desktop shell styling", () => {
     expect(combinedStyles).toContain("--sidebar-bg: #f3f3f1;");
     expect(combinedStyles).toContain("--accent: #10a37f;");
     expect(combinedStyles).toContain("--radius-md: 8px;");
-    expect(combinedStyles).toContain("body::before,\nbody::after {\n  content: none;");
+    expect(combinedStyles).toMatch(/body::before,\s*body::after\s*\{\s*content:\s*none;/s);
   });
 
   it("keeps the primary navigation text visible like the reference shell", () => {
@@ -57,13 +57,15 @@ describe("Codex-inspired desktop shell styling", () => {
   });
 
   it("centers the empty conversation composer on a white canvas", () => {
-    expect(combinedStyles).toContain(".main-content {\n  background: var(--main-bg);");
+    expect(combinedStyles).toMatch(/\.main-content\s*\{[^}]*background:\s*var\(--main-bg\);/s);
     expect(combinedStyles).toContain(".message-area:has(.empty-state)");
     expect(combinedStyles).toContain("flex: 0 0 clamp(300px, 40vh, 410px);");
     expect(combinedStyles).toContain("justify-content: flex-end;");
-    expect(combinedStyles).toContain(".composer-bar {\n  width: min(1012px, calc(100% - 56px));");
+    expect(combinedStyles).toMatch(/\.composer-bar\s*\{[^}]*width:\s*min\(820px, calc\(100% - 56px\)\);/s);
     expect(combinedStyles).toContain(".main-content:has(.empty-state) .composer-bar");
-    expect(combinedStyles).toContain(".composer-main {\n  min-height: 128px;");
+    expect(combinedStyles).toMatch(/\.composer-main\s*\{[^}]*min-height:\s*108px;/s);
+    expect(combinedStyles).toMatch(/\.conversation-feed[^{]*\{[^}]*max-width:\s*820px;/s);
+    expect(combinedStyles).toMatch(/\.thought-group,\s*\.answer-group,\s*\.system-note\s*\{[^}]*background:\s*transparent;/s);
   });
 
   it("keeps the review source dropdown above message content with a solid shell", () => {

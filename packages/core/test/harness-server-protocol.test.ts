@@ -6,6 +6,54 @@ import type { WorkflowRecord } from "@my-agent/protocol";
 import { createRuntimeKernel } from "../src/runtime-kernel.js";
 
 describe("HarnessServer protocol compatibility", () => {
+  it("exposes read-only git summary without using the approval-gated shell RPC", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "my-agent-kernel-git-summary-"));
+    const kernel = createRuntimeKernel({ homeDir, emitEvent: () => undefined });
+
+    try {
+      const response = await kernel.server.handle({
+        jsonrpc: "2.0",
+        id: "git-summary",
+        method: "git/summary",
+      });
+
+      expect("result" in response).toBe(true);
+      expect("result" in response && typeof (response as any).result.isGitRepo).toBe("boolean");
+      expect("result" in response && Array.isArray((response as any).result.branches)).toBe(true);
+    } finally {
+      kernel.dispose();
+    }
+  });
+
+  it("exposes recovery snapshots and ordered event replay", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "my-agent-kernel-events-"));
+    const events: import("@my-agent/protocol").HarnessEvent[] = [];
+    const kernel = createRuntimeKernel({ homeDir, emitEvent: (event) => events.push(event) });
+
+    try {
+      const started = await kernel.server.handle({
+        jsonrpc: "2.0",
+        id: "thread-start-events",
+        method: "thread/start",
+        params: { title: "Replay thread" },
+      });
+      expect("result" in started).toBe(true);
+      const snapshot = await kernel.server.handle({ jsonrpc: "2.0", id: "snapshot", method: "runtime/snapshot" });
+      const replay = await kernel.server.handle({
+        jsonrpc: "2.0",
+        id: "replay",
+        method: "event/listSince",
+        params: { sequence: 0, limit: 100 },
+      });
+
+      expect("result" in snapshot && (snapshot as any).result.protocolVersion).toBe("0.2.0");
+      expect("result" in replay && (replay as any).result.events.length).toBeGreaterThan(0);
+      expect(events.every((event) => typeof event.meta?.sequence === "number")).toBe(true);
+    } finally {
+      kernel.dispose();
+    }
+  });
+
   it("accepts review/list, requirement/list, automation/list/logs, template scaffolding, plugin/internal tool management, and turn/steer methods", async () => {
     const homeDir = mkdtempSync(join(tmpdir(), "my-agent-kernel-"));
     const kernel = createRuntimeKernel({
@@ -194,7 +242,7 @@ describe("HarnessServer protocol compatibility", () => {
         method: "initialize",
       });
 
-      expect("result" in initialized && (initialized as any).result.compatibility.protocolVersion).toBe("0.1.0");
+      expect("result" in initialized && (initialized as any).result.compatibility.protocolVersion).toBe("0.2.0");
       expect("result" in initialized && (initialized as any).result.compatibility.requiredToolSources).toEqual(
         expect.arrayContaining(["local", "plugin", "mcp", "internal"]),
       );

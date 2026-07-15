@@ -22,7 +22,7 @@ const skillService = new SkillService(getDefaultSystemSkillsRoot(), homeDir, (sk
   } satisfies JsonRpcNotification);
 });
 const promptBuilder = new PromptBuilder(skillService);
-const server = new HarnessServer(database, skillService, promptBuilder, writeJson);
+const server = new HarnessServer(database, skillService, promptBuilder, writeJson, homeDir);
 
 const reader = createInterface({
   input: process.stdin,

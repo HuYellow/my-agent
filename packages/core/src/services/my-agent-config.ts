@@ -137,18 +137,30 @@ export function watchStoredConfig(onChange: () => void): () => void {
   mkdirSync(myAgentHome, { recursive: true });
 
   let timer: NodeJS.Timeout | undefined;
+  let snapshot = readStoredConfigSnapshot(myAgentHome);
   const schedule = () => {
     if (timer) {
       clearTimeout(timer);
     }
 
     timer = setTimeout(() => {
+      const nextSnapshot = readStoredConfigSnapshot(myAgentHome);
+      if (nextSnapshot === snapshot) {
+        return;
+      }
+      snapshot = nextSnapshot;
       onChange();
     }, 50);
     timer.unref?.();
   };
 
-  const watcher = watch(myAgentHome, () => {
+  const watcher = watch(myAgentHome, (_eventType, filename) => {
+    if (filename) {
+      const normalized = filename.toString().replace(/\\/g, "/").split("/").at(-1);
+      if (normalized !== "config.toml" && normalized !== "auth.json") {
+        return;
+      }
+    }
     schedule();
   });
 
@@ -159,6 +171,15 @@ export function watchStoredConfig(onChange: () => void): () => void {
 
     watcher.close();
   };
+}
+
+function readStoredConfigSnapshot(myAgentHome: string): string {
+  return ["config.toml", "auth.json"]
+    .map((fileName) => {
+      const path = join(myAgentHome, fileName);
+      return existsSync(path) ? `${fileName}:${readFileSync(path, "utf8")}` : `${fileName}:<missing>`;
+    })
+    .join("\n");
 }
 
 export function getDefaultMyAgentHomeDir(): string {

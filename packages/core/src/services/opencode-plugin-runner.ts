@@ -135,7 +135,7 @@ function runOpenCodePlugin(action: string, pluginPath: string, payload: Record<s
 }
 
 function runtimeArgs(action: string, pluginPath: string): string[] {
-  return ["--import", "tsx", runtimePath(), action, pluginPath];
+  return ["--experimental-strip-types", runtimePath(), action, pluginPath];
 }
 
 function runtimePath(): string {

@@ -21,14 +21,13 @@
   "scripts": {
     "build": "npm run build --workspace @my-agent/protocol && node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
     "dev": "tsc -p tsconfig.build.json --watch",
-    "test": "vitest run",
+    "test": "vitest run --maxWorkers=4 --testTimeout=15000",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@my-agent/protocol": "file:../protocol",
     "@openai/agents": "^0.8.2",
     "node-pty": "^1.1.0",
-    "tsx": "^4.21.0",
     "yaml": "^2.7.1",
     "zod": "^4.0.0"
   }

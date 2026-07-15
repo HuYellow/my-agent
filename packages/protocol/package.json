@@ -12,7 +12,8 @@
     }
   },
   "scripts": {
-    "build": "tsup src/index.ts --format esm --dts",
+    "build": "tsc -p ./tsconfig.build.json",
+    "dev": "tsc -p ./tsconfig.build.json --watch",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   }
 }

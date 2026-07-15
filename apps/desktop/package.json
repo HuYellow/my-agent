@@ -5,11 +5,13 @@
   "type": "module",
   "main": "dist-electron/main/index.cjs",
   "scripts": {
-    "dev": "concurrently -k -n core,main,renderer,electron \"npm:dev:core\" \"npm:dev:main\" \"npm:dev:renderer\" \"npm:dev:electron\"",
+    "dev": "npm run dev:prepare && concurrently -k -n protocol,core,main,renderer,electron \"npm:dev:protocol\" \"npm:dev:core\" \"npm:dev:main\" \"npm:dev:renderer\" \"npm:dev:electron\"",
+    "dev:prepare": "npm run build --workspace @my-agent/app-server",
+    "dev:protocol": "npm run dev --workspace @my-agent/protocol",
     "dev:core": "npm run dev --workspace @my-agent/core",
     "dev:main": "tsup --config tsup.config.ts --watch",
     "dev:renderer": "vite",
-    "dev:electron": "wait-on ../../packages/core/dist/index.js dist-electron/main/index.cjs dist-electron/preload/index.cjs tcp:5173 && cross-env MY_AGENT_DEV_SERVER_URL=http://127.0.0.1:5173 electron .",
+    "dev:electron": "wait-on ../../packages/protocol/dist/index.js ../../packages/core/dist/index.js ../../packages/app-server/dist/index.js dist-electron/main/index.cjs dist-electron/preload/index.cjs tcp:5173 && cross-env MY_AGENT_DEV_SERVER_URL=http://127.0.0.1:5173 electron .",
     "build": "npm run build --workspace @my-agent/protocol && npm run build --workspace @my-agent/core && npm run build:renderer && npm run build:main",
     "build:renderer": "vite build",
     "build:main": "tsup --config tsup.config.ts",
@@ -17,12 +19,18 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit"
   },
   "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
     "@my-agent/protocol": "file:../../packages/protocol",
     "@radix-ui/react-dialog": "^1.1.13",
+    "@tanstack/react-virtual": "^3.14.6",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "lucide-react": "^1.7.0",
     "pdf-parse": "^2.4.5",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "zustand": "^5.0.3"
   }
 }

@@ -4,12 +4,20 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const appSource = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "App.tsx"), "utf8");
+const i18nSource = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "i18n.tsx"), "utf8");
+const workspaceTabsSource = readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), "components", "workspace-tabs.tsx"),
+  "utf8",
+);
 
 describe("Codex-inspired shell composition", () => {
   it("moves reusable presentation pieces into renderer components", () => {
     expect(appSource).toContain('from "./components/shell"');
     expect(appSource).toContain('from "./components/sidebar"');
     expect(appSource).toContain('from "./components/settings"');
+    expect(appSource).toContain('from "./components/workspace-tabs"');
+    expect(appSource).toContain('from "./components/run-status-bar"');
+    expect(appSource).toContain('from "./components/command-palette"');
   });
 
   it("uses the reference sidebar width by default", () => {
@@ -18,7 +26,7 @@ describe("Codex-inspired shell composition", () => {
   });
 
   it("does not render an empty terminal card on a fresh thread", () => {
-    expect(appSource).toContain("showingThreadWorkspace && activeThreadId && threadTerminals.length > 0");
+    expect(appSource).toContain('threadWorkspaceView !== "terminal" && activeThreadId && threadTerminals.length > 0');
   });
 
   it("hides the requirements group when there are no matching requirements", () => {
@@ -32,10 +40,15 @@ describe("Codex-inspired shell composition", () => {
     expect(appSource).toContain('setThemeMode((current) => (current === "light" ? "dark" : "light"))');
   });
 
-  it("uses Chinese-first copy for the primary workspace", () => {
-    expect(appSource).toContain('label="技能"');
-    expect(appSource).toContain("<span>对话</span>");
-    expect(appSource).toContain("<span>评审</span>");
+  it("uses Chinese-first copy and provides English workspace translations", () => {
+    expect(i18nSource).toContain('"nav.skills": "技能"');
+    expect(i18nSource).toContain('"workbench.conversation": "对话"');
+    expect(i18nSource).toContain('"workbench.review": "评审"');
+    expect(i18nSource).toContain('"nav.skills": "Skills"');
+    expect(i18nSource).toContain('"workbench.conversation": "Chat"');
+    expect(i18nSource).toContain('locale: "zh-CN"');
+    expect(workspaceTabsSource).toContain('t("workbench.conversation")');
+    expect(workspaceTabsSource).toContain('t("workbench.terminal")');
     expect(appSource).toContain("<span>安装插件</span>");
     expect(appSource).toContain("API 配置");
   });

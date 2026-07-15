@@ -1,6 +1,7 @@
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { HarnessDatabase } from "../src/store/database.js";
 
@@ -359,5 +360,65 @@ describe("HarnessDatabase projects", () => {
     expect(database.hasTerminalApprovalRule("terminal-1", "run_shell:key")).toBe(true);
     database.clearTerminalApprovalRules("terminal-1");
     expect(database.hasTerminalApprovalRule("terminal-1", "run_shell:key")).toBe(false);
+  });
+
+  it("backs up legacy databases and replays ordered runtime events after recovery", () => {
+    const root = mkdtempSync(join(tmpdir(), "my-agent-db-migration-"));
+    const filePath = join(root, "app.db");
+    const legacy = new DatabaseSync(filePath);
+    legacy.exec("CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL); PRAGMA user_version = 0;");
+    legacy.close();
+
+    const database = new HarnessDatabase(filePath);
+    const project = database.listProjects()[0]!;
+    const now = new Date().toISOString();
+    const thread = database.createThread({
+      id: "thread-runtime",
+      title: "Runtime recovery",
+      projectId: project.id,
+      sandboxMode: project.sandboxMode,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    database.createRuntimeRun({
+      id: "run-runtime",
+      kind: "turn",
+      status: "running",
+      projectId: project.id,
+      threadId: thread.id,
+      turnId: "turn-runtime",
+      title: "Runtime recovery",
+      createdAt: now,
+      updatedAt: now,
+      startedAt: now,
+    });
+    const first = database.appendEvent({
+      eventId: "event-1",
+      aggregateId: thread.id,
+      protocolVersion: "0.2.0",
+      timestamp: now,
+      event: { type: "thread/started", payload: { thread } },
+    });
+    const second = database.appendEvent({
+      eventId: "event-2",
+      aggregateId: "run-runtime",
+      protocolVersion: "0.2.0",
+      timestamp: now,
+      event: { type: "run/updated", payload: { run: database.getRuntimeRun("run-runtime")! } },
+    });
+
+    expect(existsSync(`${filePath}.backup-v0.2.0`)).toBe(true);
+    expect(second.sequence).toBe(first.sequence + 1);
+    expect(database.listEventsSince(first.sequence, 10)).toMatchObject({
+      hasMore: false,
+      events: [{ eventId: "event-2", sequence: second.sequence }],
+    });
+    database.close();
+
+    const recovered = new HarnessDatabase(filePath);
+    expect(recovered.getRuntimeRun("run-runtime")?.status).toBe("paused");
+    expect(recovered.getEventCursor()).toBe(second.sequence);
+    recovered.close();
   });
 });

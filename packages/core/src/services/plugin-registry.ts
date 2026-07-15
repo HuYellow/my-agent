@@ -406,6 +406,7 @@ function discoverMarketplaceEntries(
   persistedById: Map<string, PluginRecord>,
 ): DiscoveredPluginEntry[] {
   const repoRoot = findGitRoot(workspaceRoot);
+  const explicitHome = Boolean(homeDir);
   const resolvedHome = homeDir ?? join(homedir(), ".my-agent");
   const candidates: Array<{ path: string; baseRoot: string; source: PluginRecord["source"] }> = [];
 
@@ -413,7 +414,9 @@ function discoverMarketplaceEntries(
     candidates.push({ path: join(repoRoot, ".agents", "plugins", "marketplace.json"), baseRoot: repoRoot, source: "repo" });
   }
 
-  candidates.push({ path: join(homedir(), ".agents", "plugins", "marketplace.json"), baseRoot: homedir(), source: "user" });
+  if (!explicitHome) {
+    candidates.push({ path: join(homedir(), ".agents", "plugins", "marketplace.json"), baseRoot: homedir(), source: "user" });
+  }
   candidates.push({ path: join(resolvedHome, "catalogs", "plugins", "marketplace.json"), baseRoot: join(resolvedHome, "catalogs"), source: "catalog" });
 
   return candidates.flatMap((candidate) => discoverMarketplaceFile(candidate.path, candidate.baseRoot, candidate.source, persistedById));
@@ -552,7 +555,7 @@ function collectOpenCodeNpmPackages(
     join(repoRoot, "opencode.json"),
     join(repoRoot, ".opencode", "opencode.json"),
     join(homeDir ?? join(homedir(), ".my-agent"), "opencode.json"),
-    join(homedir(), ".config", "opencode", "opencode.json"),
+    ...(homeDir ? [] : [join(homedir(), ".config", "opencode", "opencode.json")]),
   ];
 
   for (const configPath of configCandidates) {

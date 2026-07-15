@@ -1,5 +1,7 @@
 ﻿import {
   useEffect,
+  lazy,
+  Suspense,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -42,6 +44,8 @@ import {
   FolderGit2,
   Shield,
   Server,
+  Languages,
+  TerminalSquare,
 } from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
@@ -90,7 +94,15 @@ import {
 import { LoadingShell, PlaceholderPanel, StartupErrorShell } from "./components/shell";
 import { NavButton } from "./components/sidebar";
 import { SettingsNavItem } from "./components/settings";
+import { WorkspaceTabs } from "./components/workspace-tabs";
+import { RunStatusBar } from "./components/run-status-bar";
+import { CommandPalette } from "./components/command-palette";
+import { MarkdownContent } from "./components/markdown-content";
+import { useI18n } from "./i18n";
 import { useAppStore } from "./store";
+
+const MonacoDiffEditor = lazy(() => import("@monaco-editor/react").then((module) => ({ default: module.DiffEditor })));
+const TerminalViewport = lazy(() => import("./components/terminal-viewport").then((module) => ({ default: module.TerminalViewport })));
 
 interface ProviderFormState {
   baseUrl: string;
@@ -106,7 +118,7 @@ type NavView = "threads" | "skills" | "plugins" | "automation" | "settings";
 type ComposerAttachment = TurnInputAttachment;
 type ThemeMode = "light" | "dark";
 type ReviewSourceKind = ReviewRecord["source"]["kind"];
-type ThreadWorkspaceView = "conversation" | "plan" | "review" | "diff" | "runtime";
+type ThreadWorkspaceView = "conversation" | "plan" | "review" | "diff" | "runtime" | "terminal";
 
 const SIDEBAR_WIDTH_STORAGE_KEY = "my-agent-sidebar-width-ratio-v2";
 const SIDEBAR_MIN_RATIO = 0.16;
@@ -260,6 +272,7 @@ interface AutomationDraftState {
 }
 
 export function App() {
+  const { locale, setLocale, t } = useI18n();
   const {
     bootstrapped,
     bootError,
@@ -280,6 +293,7 @@ export function App() {
     automationRuns,
     automationRunLogs,
     agentTasks,
+    runs,
     terminals,
     terminalOutputs,
     terminalOutputArchives,
@@ -322,9 +336,11 @@ export function App() {
     refreshToolCatalog,
     installPlugin,
     scaffoldTemplate,
+    retryRun,
   } = useAppStore();
 
   const [activeView, setActiveView] = useState<NavView>("threads");
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [composerDrafts, setComposerDrafts] = useState<Record<string, ComposerDraftState>>({});
   const [composerMenuOpen, setComposerMenuOpen] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
@@ -419,6 +435,17 @@ export function App() {
     window.localStorage.setItem("my-agent-theme", themeMode);
     void window.myAgent.setTitleBarTheme(themeMode);
   }, [themeMode]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setCommandPaletteOpen((current) => !current);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   useEffect(() => {
     window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(sidebarWidthRatio));
@@ -633,6 +660,15 @@ export function App() {
   const activeTurn = useMemo(
     () => [...(activeSession?.turns ?? [])].sort((left, right) => left.updatedAt.localeCompare(right.updatedAt)).at(-1),
     [activeSession?.turns],
+  );
+  const activeRun = useMemo(
+    () =>
+      activeThreadId
+        ? runs
+            .filter((run) => run.threadId === activeThreadId)
+            .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0] ?? null
+        : null,
+    [activeThreadId, runs],
   );
   const latestTurnContext = useMemo(() => {
     const contexts = activeSession?.turnContexts ?? [];
@@ -1074,17 +1110,16 @@ export function App() {
       setBranchSummary((current) => ({ ...current, loading: true, error: undefined }));
 
       try {
-        const scope = activeThreadId ? { threadId: activeThreadId, cwd: activeProject.rootPath } : { cwd: activeProject.rootPath };
-        const repoCheck = await window.myAgent.execCommand({
-          ...scope,
-          command: "git rev-parse --is-inside-work-tree",
+        const summary = await window.myAgent.getGitSummary({
+          projectId: activeProject.id,
+          threadId: activeThreadId,
         });
 
         if (cancelled) {
           return;
         }
 
-        if (repoCheck.code !== 0 || repoCheck.stdout.trim() !== "true") {
+        if (!summary.isGitRepo) {
           setBranchSummary({
             isGitRepo: false,
             currentBranch: null,
@@ -1094,31 +1129,10 @@ export function App() {
           return;
         }
 
-        const [currentResult, branchesResult] = await Promise.all([
-          window.myAgent.execCommand({
-            ...scope,
-            command: "git branch --show-current",
-          }),
-          window.myAgent.execCommand({
-            ...scope,
-            command: 'git for-each-ref --format="%(refname:short)" refs/heads',
-          }),
-        ]);
-
-        if (cancelled) {
-          return;
-        }
-
-        const currentBranch = currentResult.code === 0 ? currentResult.stdout.trim() || null : null;
-        const branches = branchesResult.stdout
-          .split(/\r?\n/)
-          .map((entry) => entry.trim())
-          .filter(Boolean);
-
         setBranchSummary({
           isGitRepo: true,
-          currentBranch,
-          branches,
+          currentBranch: summary.currentBranch,
+          branches: summary.branches,
           loading: false,
           error: undefined,
         });
@@ -1142,7 +1156,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeProject?.rootPath, activeThreadId]);
+  }, [activeProject?.id, activeProject?.rootPath, activeThreadId]);
 
   const handleCreateThread = async (projectId?: string, requirementId?: string) => {
     await createThread(undefined, projectId ?? activeProjectId, requirementId ?? activeRequirementId);
@@ -1525,6 +1539,14 @@ export function App() {
           >
             {themeMode === "light" ? <Moon size={14} /> : <Sun size={14} />}
           </button>
+          <button
+            className="app-toolbar__theme-toggle"
+            onClick={() => setLocale(locale === "zh-CN" ? "en-US" : "zh-CN")}
+            aria-label={t("action.switchLanguage")}
+            title={t("action.switchLanguage")}
+          >
+            <Languages size={14} />
+          </button>
           {APP_MENU_ITEMS.map((item) => (
             <button
               key={item.id}
@@ -1569,31 +1591,31 @@ export function App() {
           <nav className="sidebar__nav">
             <NavButton
               icon={<MessageSquarePlus size={18} />}
-              label="新对话"
+              label={t("nav.newThread")}
               active={activeView === "threads"}
               onClick={() => void handleCreateThread(activeProjectId, activeRequirementId)}
             />
             <NavButton
               icon={<Search size={18} />}
-              label="搜索"
+              label={t("nav.search")}
               active={false}
-              onClick={() => setActiveView("threads")}
+              onClick={() => setCommandPaletteOpen(true)}
             />
             <NavButton
               icon={<Zap size={18} />}
-              label="技能"
+              label={t("nav.skills")}
               active={activeView === "skills"}
               onClick={() => setActiveView("skills")}
             />
             <NavButton
               icon={<Grid3X3 size={18} />}
-              label="插件"
+              label={t("nav.plugins")}
               active={activeView === "plugins"}
               onClick={() => setActiveView("plugins")}
             />
             <NavButton
               icon={<GitBranch size={18} />}
-              label="自动化"
+              label={t("nav.automation")}
               active={activeView === "automation"}
               onClick={() => setActiveView("automation")}
             />
@@ -1628,7 +1650,7 @@ export function App() {
         <div className="sidebar__section sidebar__section--footer">
           <NavButton
             icon={<Settings size={18} />}
-            label="设置"
+            label={t("nav.settings")}
             active={activeView === "settings"}
             onClick={() => setActiveView("settings")}
           />
@@ -1657,65 +1679,16 @@ export function App() {
               <div className="main-header__actions">
                 {showingThreadWorkspace ? (
                   <>
-                    <div className="workspace-toggle" role="tablist" aria-label="Thread workspace">
-                      <button
-                        type="button"
-                        role="tab"
-                        aria-selected={threadWorkspaceView === "conversation"}
-                        className={`workspace-toggle__button ${threadWorkspaceView === "conversation" ? "workspace-toggle__button--active" : ""}`}
-                        onClick={() => setThreadWorkspaceView("conversation")}
-                      >
-                        <MessageSquarePlus size={14} />
-                        <span>对话</span>
-                      </button>
-                      <button
-                        type="button"
-                        role="tab"
-                        aria-selected={threadWorkspaceView === "plan"}
-                        className={`workspace-toggle__button ${threadWorkspaceView === "plan" ? "workspace-toggle__button--active" : ""}`}
-                        onClick={() => setThreadWorkspaceView("plan")}
-                      >
-                        <Grid3X3 size={14} />
-                        <span>计划</span>
-                        {latestTurnPlan && <span className="workspace-toggle__badge">{latestTurnPlan.steps.length}</span>}
-                      </button>
-                      <button
-                        type="button"
-                        role="tab"
-                        aria-selected={threadWorkspaceView === "review"}
-                        className={`workspace-toggle__button ${threadWorkspaceView === "review" ? "workspace-toggle__button--active" : ""}`}
-                        onClick={() => setThreadWorkspaceView("review")}
-                      >
-                        <Shield size={14} />
-                        <span>评审</span>
-                        {latestReviewArtifact && <span className="workspace-toggle__badge">{latestReviewArtifact.findingCounts.total}</span>}
-                      </button>
-                      <button
-                        type="button"
-                        role="tab"
-                        aria-selected={threadWorkspaceView === "diff"}
-                        className={`workspace-toggle__button ${threadWorkspaceView === "diff" ? "workspace-toggle__button--active" : ""}`}
-                        onClick={() => setThreadWorkspaceView("diff")}
-                        disabled={threadChangeSets.length === 0}
-                      >
-                        <FileText size={14} />
-                        <span>Diff</span>
-                        {threadChangedFileCount > 0 && <span className="workspace-toggle__badge">{threadChangedFileCount}</span>}
-                      </button>
-                      <button
-                        type="button"
-                        role="tab"
-                        aria-selected={threadWorkspaceView === "runtime"}
-                        className={`workspace-toggle__button ${threadWorkspaceView === "runtime" ? "workspace-toggle__button--active" : ""}`}
-                        onClick={() => setThreadWorkspaceView("runtime")}
-                      >
-                        <Cpu size={14} />
-                        <span>Runtime</span>
-                        {(threadAgentIds.size > 0 || threadExecutionContexts.length > 0) && (
-                          <span className="workspace-toggle__badge">{threadAgentIds.size + threadExecutionContexts.length}</span>
-                        )}
-                      </button>
-                    </div>
+                    <WorkspaceTabs
+                      value={threadWorkspaceView}
+                      onChange={setThreadWorkspaceView}
+                      planCount={latestTurnPlan?.steps.length}
+                      findingCount={latestReviewArtifact?.findingCounts.total}
+                      changedFileCount={threadChangedFileCount}
+                      runtimeCount={threadAgentIds.size + threadExecutionContexts.length}
+                      terminalCount={threadTerminals.length}
+                      diffDisabled={threadChangeSets.length === 0}
+                    />
                     <div className="review-popover-anchor" ref={reviewMenuRef}>
                       <button
                         type="button"
@@ -1810,6 +1783,17 @@ export function App() {
               </div>
             </header>
 
+            {showingThreadWorkspace && (
+              <RunStatusBar
+                run={activeRun}
+                onRetry={
+                  activeRun && ["failed", "cancelled", "paused"].includes(activeRun.status)
+                    ? () => void retryRun(activeRun.id)
+                    : undefined
+                }
+              />
+            )}
+
             <div className="message-area" ref={messageAreaRef}>
               {showingThreadWorkspace ? (
                 threadWorkspaceView === "diff" ? (
@@ -1840,6 +1824,35 @@ export function App() {
                     requestedSelection={runtimeFocusTarget}
                     onOpenThread={(threadId) => void handleSelectThread(threadId)}
                   />
+                ) : threadWorkspaceView === "terminal" ? (
+                  threadTerminals.length > 0 && activeTerminal ? (
+                    <TerminalCard
+                      sessions={threadTerminals}
+                      session={activeTerminal}
+                      selectedSessionId={activeTerminal.id}
+                      archives={activeTerminalArchives}
+                      output={activeTerminalOutput}
+                      input={terminalInput}
+                      onInputChange={setTerminalInput}
+                      onSelectSession={setSelectedTerminalId}
+                      onOpen={() => void createTerminalSession()}
+                      onSend={() => void sendTerminalInput()}
+                      onClose={() => void closeTerminalSession()}
+                      onArchive={(sessionId) => void window.myAgent.archiveTerminal({ sessionId, reason: "manual_archive" })}
+                      onClear={(sessionId) => void window.myAgent.clearTerminal({ sessionId })}
+                      onApproveOnce={(sessionId) => void window.myAgent.respondTerminalApproval({ sessionId, decision: "approve", scope: "once" })}
+                      onApproveSession={(sessionId) => void window.myAgent.respondTerminalApproval({ sessionId, decision: "approve", scope: "session" })}
+                      onReject={(sessionId) => void window.myAgent.respondTerminalApproval({ sessionId, decision: "reject" })}
+                    />
+                  ) : (
+                    <div className="terminal-empty-state">
+                      <TerminalSquare size={28} />
+                      <h2>{locale === "zh-CN" ? "尚未打开终端" : "No terminal session"}</h2>
+                      <button type="button" onClick={() => void createTerminalSession()}>
+                        {locale === "zh-CN" ? "打开终端" : "Open terminal"}
+                      </button>
+                    </div>
+                  )
                 ) : (
                   <>
                     {latestTurnContext && <RunContextCard snapshot={latestTurnContext} />}
@@ -1897,7 +1910,7 @@ export function App() {
               />
             )}
 
-            {showingThreadWorkspace && activeThreadId && threadTerminals.length > 0 && (
+            {showingThreadWorkspace && threadWorkspaceView !== "terminal" && activeThreadId && threadTerminals.length > 0 && (
               <TerminalCard
                 sessions={threadTerminals}
                 session={activeTerminal}
@@ -2133,6 +2146,15 @@ export function App() {
         </main>
       </div>
 
+      <CommandPalette
+        open={commandPaletteOpen}
+        onOpenChange={setCommandPaletteOpen}
+        threads={orderedThreads}
+        projects={projects}
+        locale={locale}
+        onSelectThread={(threadId) => void handleSelectThread(threadId)}
+      />
+
       <Dialog.Root open={Boolean(currentSkillDetail)} onOpenChange={(open) => !open && setSkillDetailId(null)}>
         <Dialog.Portal>
           <Dialog.Overlay className="dialog-overlay" />
@@ -2265,6 +2287,7 @@ function RequirementsPanel({
   );
   const initializedUnassignedProjectIds = useRef(new Set(unassignedProjectGroupIds));
   const [expandedUnassignedProjectIds, setExpandedUnassignedProjectIds] = useState<string[]>(() => unassignedProjectGroupIds);
+  const [showRequirementComposer, setShowRequirementComposer] = useState(false);
   const filteredRequirements = requirements.filter((requirement) => {
     if (!searchTerm) {
       return true;
@@ -2314,7 +2337,7 @@ function RequirementsPanel({
     <div className="sidebar-secondary__content thread-sidebar requirement-sidebar">
       <div className="thread-sidebar__header">
         <div className="thread-sidebar__title-row">
-          <span className="thread-sidebar__title">项目</span>
+          <span className="thread-sidebar__title">项目与上下文</span>
           <div className="thread-sidebar__actions">
             <button
               className="thread-sidebar__action"
@@ -2323,6 +2346,14 @@ function RequirementsPanel({
               title="Create project"
             >
               <FolderGit2 size={14} />
+            </button>
+            <button
+              className="thread-sidebar__action"
+              onClick={() => setShowRequirementComposer((current) => !current)}
+              aria-label="Create requirement context"
+              title="Create requirement context"
+            >
+              <Plus size={14} />
             </button>
           </div>
         </div>
@@ -2337,7 +2368,7 @@ function RequirementsPanel({
             />
           </div>
         </div>
-        <div className="requirement-sidebar__composer">
+        {showRequirementComposer && <div className="requirement-sidebar__composer">
           <input
             type="text"
             placeholder="新需求标题"
@@ -2367,14 +2398,14 @@ function RequirementsPanel({
               创建
             </button>
           </div>
-        </div>
+        </div>}
       </div>
 
       <div className="thread-sidebar__list">
         {(filteredRequirements.length > 0 || searchTerm) && (
           <div className="requirement-sidebar__section">
             <div className="requirement-sidebar__section-header">
-              <strong>活跃需求</strong>
+              <strong>需求上下文</strong>
               <span>{filteredRequirements.length}</span>
             </div>
             {filteredRequirements.length > 0 ? (
@@ -4796,7 +4827,7 @@ function DistributionTemplatesCard({
       </div>
       <div className="settings-card__body">
         <div className="settings-panel__message">
-          Protocol {protocolCompatibility?.protocolVersion ?? "0.1.0"} · additive changes {protocolCompatibility?.additiveChangesOnly ? "enabled" : "unknown"}
+          Protocol {protocolCompatibility?.protocolVersion ?? "0.2.0"} · additive changes {protocolCompatibility?.additiveChangesOnly ? "enabled" : "unknown"}
         </div>
         <div className="runtime-plugins-list">
           {templates.map((template) => {
@@ -5355,7 +5386,7 @@ function ConversationFeed({
                 <span className="answer-group__rule" />
               </div>
               <div className="answer-group__content">
-                <pre className="answer-group__text">{getItemDisplayText(entry.item)}</pre>
+                <MarkdownContent className="answer-group__text" content={getItemDisplayText(entry.item)} />
               </div>
             </section>
           );
@@ -5602,6 +5633,10 @@ function DiffPatchPanel({
     () => selectedChangeSet?.files.find((file) => file.path === selectedFilePath) ?? selectedChangeSet?.files[0] ?? null,
     [selectedChangeSet, selectedFilePath],
   );
+  const selectedModels = useMemo(
+    () => splitUnifiedPatch(selectedFile?.patch ?? ""),
+    [selectedFile?.patch],
+  );
 
   useEffect(() => {
     if (changeSets.length === 0) {
@@ -5800,7 +5835,26 @@ function DiffPatchPanel({
               <div className="diff-panel__viewer-body">
                 {selectedFile.patch ? (
                   viewerMode === "diff" ? (
-                    <div className="changed-file__diff-lines">{renderDiffLines(selectedFile.patch)}</div>
+                    <Suspense fallback={<div className="diff-panel__empty">Loading diff editor...</div>}>
+                      <MonacoDiffEditor
+                        height="100%"
+                        original={selectedModels.original}
+                        modified={selectedModels.modified}
+                        language={detectEditorLanguage(selectedFile.path)}
+                        theme={document.documentElement.dataset.theme === "dark" ? "vs-dark" : "light"}
+                        options={{
+                          readOnly: true,
+                          renderSideBySide: true,
+                          minimap: { enabled: false },
+                          fontFamily: "Cascadia Code, Consolas, monospace",
+                          fontSize: 12,
+                          lineNumbersMinChars: 3,
+                          scrollBeyondLastLine: false,
+                          automaticLayout: true,
+                          wordWrap: "on",
+                        }}
+                      />
+                    </Suspense>
                   ) : (
                     <pre className="diff-panel__patch">{selectedFile.patch}</pre>
                   )
@@ -6466,7 +6520,9 @@ function TerminalCard({
 
       {session && (
         <>
-          <pre className="terminal-card__output">{output || "终端已打开，等待输出…"}</pre>
+          <Suspense fallback={<div className="terminal-viewport">Loading terminal...</div>}>
+            <TerminalViewport session={session} output={output} />
+          </Suspense>
           {archives.length > 0 && (
             <div className="terminal-card__archives">
               <strong>归档输出</strong>
@@ -7871,6 +7927,52 @@ function stripUnifiedDiffPreamble(diff: string): string {
     .filter((line) => !line.startsWith("diff --git ") && !line.startsWith("index "))
     .join("\n")
     .trim();
+}
+
+function splitUnifiedPatch(patch: string): { original: string; modified: string } {
+  const original: string[] = [];
+  const modified: string[] = [];
+
+  for (const line of patch.split(/\r?\n/)) {
+    if (line.startsWith("diff --git ") || line.startsWith("index ") || line.startsWith("@@") || line.startsWith("---") || line.startsWith("+++")) {
+      continue;
+    }
+    if (line.startsWith("\\ No newline")) {
+      continue;
+    }
+    if (line.startsWith("+")) {
+      modified.push(line.slice(1));
+    } else if (line.startsWith("-")) {
+      original.push(line.slice(1));
+    } else {
+      const content = line.startsWith(" ") ? line.slice(1) : line;
+      original.push(content);
+      modified.push(content);
+    }
+  }
+
+  return { original: original.join("\n"), modified: modified.join("\n") };
+}
+
+function detectEditorLanguage(path: string): string {
+  const extension = path.split(".").at(-1)?.toLowerCase();
+  return ({
+    ts: "typescript",
+    tsx: "typescript",
+    js: "javascript",
+    jsx: "javascript",
+    json: "json",
+    java: "java",
+    css: "css",
+    html: "html",
+    md: "markdown",
+    yml: "yaml",
+    yaml: "yaml",
+    xml: "xml",
+    sql: "sql",
+    py: "python",
+    ps1: "powershell",
+  } as Record<string, string>)[extension ?? ""] ?? "plaintext";
 }
 
 function renderDiffLines(diff: string) {

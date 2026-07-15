@@ -40,6 +40,15 @@ export type ApiFlavor = "chat_completions" | "responses";
 export type ModelReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
 export type SkillScope = "SYSTEM" | "USER" | "REPO" | "CATALOG" | "ADMIN" | "PLUGIN";
 export type RuntimeRunMode = "no-tools" | "limited-tools" | "full-tools";
+export type RuntimeRunKind = "turn" | "review" | "workflow" | "automation" | "agent";
+export type RuntimeRunStatus =
+  | "queued"
+  | "running"
+  | "awaiting_approval"
+  | "paused"
+  | "completed"
+  | "failed"
+  | "cancelled";
 export type RequirementStatus = "active" | "paused" | "completed" | "archived";
 export type AutomationStatus = "active" | "paused";
 export type AutomationKind = "workflow" | "prompt";
@@ -317,6 +326,7 @@ export interface ThreadRecord {
 
 export interface TurnRecord {
   id: string;
+  runId?: string;
   threadId: string;
   status: "queued" | "running" | "awaiting_approval" | "completed" | "failed" | "cancelled";
   input: string;
@@ -326,6 +336,7 @@ export interface TurnRecord {
 
 export interface ItemRecord {
   id: string;
+  runId?: string;
   turnId: string;
   threadId: string;
   kind: ItemKind;
@@ -408,6 +419,84 @@ export interface InitializeResult {
   plugins?: PluginRecord[];
   internalTools?: InternalToolRecord[];
   templates?: DistributionTemplateRecord[];
+  runs?: RuntimeRunRecord[];
+  eventCursor?: EventCursor;
+}
+
+export interface RuntimeRunRecord {
+  id: string;
+  kind: RuntimeRunKind;
+  status: RuntimeRunStatus;
+  projectId: string;
+  threadId?: string;
+  turnId?: string;
+  parentRunId?: string;
+  agentId?: string;
+  title: string;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+
+export interface EventCursor {
+  sequence: number;
+}
+
+export interface RuntimeEventRecord {
+  eventId: string;
+  sequence: number;
+  aggregateId?: string;
+  timestamp: string;
+  protocolVersion: string;
+  event: HarnessEvent;
+}
+
+export interface RuntimeSnapshotResult {
+  protocolVersion: string;
+  cursor: EventCursor;
+  runs: RuntimeRunRecord[];
+  threads: ThreadRecord[];
+  pendingApprovals: PendingApproval[];
+  agentTasks: AgentTaskRecord[];
+}
+
+export interface EventListSinceParams {
+  sequence?: number;
+  limit?: number;
+}
+
+export interface EventListSinceResult {
+  events: RuntimeEventRecord[];
+  cursor: EventCursor;
+  hasMore: boolean;
+}
+
+export interface RunListParams {
+  projectId?: string;
+  threadId?: string;
+  status?: RuntimeRunStatus[];
+}
+
+export interface RunListResult {
+  runs: RuntimeRunRecord[];
+}
+
+export interface RunGetParams {
+  runId: string;
+}
+
+export interface RunGetResult {
+  run: RuntimeRunRecord;
+}
+
+export interface RunRetryParams {
+  runId: string;
+}
+
+export interface RunRetryResult {
+  run: RuntimeRunRecord;
 }
 
 export interface StartThreadParams {
@@ -691,9 +780,18 @@ export interface ConfigWriteParams {
   config: Partial<AppConfig>;
 }
 
+export interface EventMetadata {
+  eventId: string;
+  sequence: number;
+  aggregateId?: string;
+  timestamp: string;
+  protocolVersion: string;
+}
+
 export interface EventEnvelope<TType extends string, TPayload> {
   type: TType;
   payload: TPayload;
+  meta?: EventMetadata;
 }
 
 export interface TurnContextSectionRecord {
@@ -875,7 +973,7 @@ export interface AgentTaskRecord {
   parentThreadId: string;
   parentTurnId?: string;
   title: string;
-  status: "running" | "awaiting_approval" | "completed" | "failed" | "cancelled";
+  status: "queued" | "running" | "awaiting_approval" | "completed" | "failed" | "cancelled";
   finalOutput?: string;
   childThreadId?: string;
   lastTurnId?: string;
@@ -1180,6 +1278,7 @@ export interface McpToolRecord {
 }
 
 export type HarnessEvent =
+  | EventEnvelope<"run/updated", { run: RuntimeRunRecord }>
   | EventEnvelope<"thread/started", { thread: ThreadRecord }>
   | EventEnvelope<"requirement/updated", { requirement: RequirementRecord }>
   | EventEnvelope<"requirement/memoryUpdated", { memory: RequirementMemoryRecord }>
@@ -1224,6 +1323,17 @@ export interface CommandExecParams {
   command: string;
   cwd?: string;
   threadId?: string;
+}
+
+export interface GitSummaryParams {
+  projectId?: string;
+  threadId?: string;
+}
+
+export interface GitSummaryResult {
+  isGitRepo: boolean;
+  currentBranch: string | null;
+  branches: string[];
 }
 
 export interface CommandExecResult {

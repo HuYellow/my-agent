@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { type AgentInputItem } from "@openai/agents";
@@ -12,6 +12,7 @@ import {
   type AppConfig,
   type ExecutionContextRecord,
   type ItemRecord,
+  type HarnessEvent,
   type InternalToolRecord,
   type McpMountRecord,
   type McpPromptRecord,
@@ -26,6 +27,9 @@ import {
   type RequirementManualMemoryRecord,
   type RequirementDerivedMemoryRecord,
   type ReviewRecord,
+  type RuntimeEventRecord,
+  type RuntimeRunRecord,
+  type RuntimeRunStatus,
   type TerminalSessionRecord,
   type ThreadRecord,
   type TurnContextSnapshotRecord,
@@ -84,9 +88,12 @@ const EMPTY_REQUIREMENT_DERIVED_MEMORY: RequirementDerivedMemoryRecord = {
 
 export class HarnessDatabase {
   private readonly db: DatabaseSync;
+  readonly filePath: string;
 
   constructor(filePath: string) {
+    this.filePath = filePath;
     mkdirSync(dirname(filePath), { recursive: true });
+    backupLegacyDatabase(filePath);
     this.db = new DatabaseSync(filePath);
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS config (
@@ -145,6 +152,7 @@ export class HarnessDatabase {
 
       CREATE TABLE IF NOT EXISTS turns (
         id TEXT PRIMARY KEY,
+        run_id TEXT,
         thread_id TEXT NOT NULL,
         status TEXT NOT NULL,
         input TEXT NOT NULL,
@@ -154,6 +162,7 @@ export class HarnessDatabase {
 
       CREATE TABLE IF NOT EXISTS items (
         id TEXT PRIMARY KEY,
+        run_id TEXT,
         thread_id TEXT NOT NULL,
         turn_id TEXT NOT NULL,
         kind TEXT NOT NULL,
@@ -491,8 +500,48 @@ export class HarnessDatabase {
         updated_at TEXT NOT NULL,
         completed_at TEXT
       );
+
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        version INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        applied_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS runtime_runs (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        status TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        thread_id TEXT,
+        turn_id TEXT,
+        parent_run_id TEXT,
+        agent_id TEXT,
+        title TEXT NOT NULL,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        started_at TEXT,
+        completed_at TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_runtime_runs_project_updated
+      ON runtime_runs(project_id, updated_at DESC);
+
+      CREATE INDEX IF NOT EXISTS idx_runtime_runs_thread_status
+      ON runtime_runs(thread_id, status);
+
+      CREATE TABLE IF NOT EXISTS event_journal (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_id TEXT NOT NULL UNIQUE,
+        aggregate_id TEXT,
+        event_type TEXT NOT NULL,
+        event_json TEXT NOT NULL,
+        protocol_version TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
     `);
-    this.migrate();
+    this.runMigrations();
+    this.pauseInterruptedRuns();
   }
 
   getDefaultConfig(): AppConfig {
@@ -505,6 +554,150 @@ export class HarnessDatabase {
       disabledSkillIds: [],
       runtimeRunMode: providerCapabilities.recommendedRunMode,
     };
+  }
+
+  close(): void {
+    this.db.close();
+  }
+
+  createRuntimeRun(run: RuntimeRunRecord): RuntimeRunRecord {
+    this.db
+      .prepare(
+        `INSERT INTO runtime_runs(
+          id, kind, status, project_id, thread_id, turn_id, parent_run_id, agent_id,
+          title, error, created_at, updated_at, started_at, completed_at
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        run.id,
+        run.kind,
+        run.status,
+        run.projectId,
+        run.threadId ?? null,
+        run.turnId ?? null,
+        run.parentRunId ?? null,
+        run.agentId ?? null,
+        run.title,
+        run.error ?? null,
+        run.createdAt,
+        run.updatedAt,
+        run.startedAt ?? null,
+        run.completedAt ?? null,
+      );
+    return run;
+  }
+
+  updateRuntimeRun(run: RuntimeRunRecord): RuntimeRunRecord {
+    this.db
+      .prepare(
+        `UPDATE runtime_runs SET
+          kind = ?, status = ?, project_id = ?, thread_id = ?, turn_id = ?, parent_run_id = ?,
+          agent_id = ?, title = ?, error = ?, updated_at = ?, started_at = ?, completed_at = ?
+        WHERE id = ?`,
+      )
+      .run(
+        run.kind,
+        run.status,
+        run.projectId,
+        run.threadId ?? null,
+        run.turnId ?? null,
+        run.parentRunId ?? null,
+        run.agentId ?? null,
+        run.title,
+        run.error ?? null,
+        run.updatedAt,
+        run.startedAt ?? null,
+        run.completedAt ?? null,
+        run.id,
+      );
+    return run;
+  }
+
+  getRuntimeRun(runId: string): RuntimeRunRecord | null {
+    const row = this.db.prepare("SELECT * FROM runtime_runs WHERE id = ?").get(runId) as Record<string, unknown> | undefined;
+    return row ? this.mapRuntimeRun(row) : null;
+  }
+
+  listRuntimeRuns(filters: { projectId?: string; threadId?: string; status?: RuntimeRunStatus[] } = {}): RuntimeRunRecord[] {
+    const clauses: string[] = [];
+    const values: Array<string | number> = [];
+
+    if (filters.projectId) {
+      clauses.push("project_id = ?");
+      values.push(filters.projectId);
+    }
+    if (filters.threadId) {
+      clauses.push("thread_id = ?");
+      values.push(filters.threadId);
+    }
+    if (filters.status?.length) {
+      clauses.push(`status IN (${filters.status.map(() => "?").join(", ")})`);
+      values.push(...filters.status);
+    }
+
+    const where = clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
+    return this.db
+      .prepare(`SELECT * FROM runtime_runs${where} ORDER BY updated_at DESC`)
+      .all(...values)
+      .map((row) => this.mapRuntimeRun(row as Record<string, unknown>));
+  }
+
+  appendEvent(params: {
+    eventId: string;
+    aggregateId?: string;
+    protocolVersion: string;
+    timestamp: string;
+    event: HarnessEvent;
+  }): RuntimeEventRecord {
+    const result = this.db
+      .prepare(
+        `INSERT INTO event_journal(event_id, aggregate_id, event_type, event_json, protocol_version, created_at)
+         VALUES(?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        params.eventId,
+        params.aggregateId ?? null,
+        params.event.type,
+        JSON.stringify(params.event),
+        params.protocolVersion,
+        params.timestamp,
+      );
+    const sequence = Number(result.lastInsertRowid);
+    const event: HarnessEvent = {
+      ...params.event,
+      meta: {
+        eventId: params.eventId,
+        sequence,
+        aggregateId: params.aggregateId,
+        timestamp: params.timestamp,
+        protocolVersion: params.protocolVersion,
+      },
+    };
+    this.db.prepare("UPDATE event_journal SET event_json = ? WHERE sequence = ?").run(JSON.stringify(event), sequence);
+    return {
+      eventId: params.eventId,
+      sequence,
+      aggregateId: params.aggregateId,
+      timestamp: params.timestamp,
+      protocolVersion: params.protocolVersion,
+      event,
+    };
+  }
+
+  listEventsSince(sequence = 0, limit = 500): { events: RuntimeEventRecord[]; hasMore: boolean } {
+    const normalizedLimit = Math.min(Math.max(Math.trunc(limit), 1), 2_000);
+    const rows = this.db
+      .prepare("SELECT * FROM event_journal WHERE sequence > ? ORDER BY sequence ASC LIMIT ?")
+      .all(sequence, normalizedLimit + 1) as Array<Record<string, unknown>>;
+    return {
+      events: rows.slice(0, normalizedLimit).map((row) => this.mapRuntimeEvent(row)),
+      hasMore: rows.length > normalizedLimit,
+    };
+  }
+
+  getEventCursor(): number {
+    const row = this.db.prepare("SELECT COALESCE(MAX(sequence), 0) AS sequence FROM event_journal").get() as { sequence: number };
+    return Number(row.sequence ?? 0);
   }
 
   getConfig(): AppConfig {
@@ -721,8 +914,8 @@ export class HarnessDatabase {
 
   createTurn(turn: TurnRecord): TurnRecord {
     this.db
-      .prepare("INSERT INTO turns(id, thread_id, status, input, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?)")
-      .run(turn.id, turn.threadId, turn.status, turn.input, turn.createdAt, turn.updatedAt);
+      .prepare("INSERT INTO turns(id, run_id, thread_id, status, input, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?)")
+      .run(turn.id, turn.runId ?? null, turn.threadId, turn.status, turn.input, turn.createdAt, turn.updatedAt);
     return turn;
   }
 
@@ -740,17 +933,17 @@ export class HarnessDatabase {
 
   updateTurn(turn: TurnRecord): TurnRecord {
     this.db
-      .prepare("UPDATE turns SET status = ?, updated_at = ?, input = ? WHERE id = ?")
-      .run(turn.status, turn.updatedAt, turn.input, turn.id);
+      .prepare("UPDATE turns SET run_id = ?, status = ?, updated_at = ?, input = ? WHERE id = ?")
+      .run(turn.runId ?? null, turn.status, turn.updatedAt, turn.input, turn.id);
     return turn;
   }
 
   createItem(item: ItemRecord): ItemRecord {
     this.db
       .prepare(
-        "INSERT INTO items(id, thread_id, turn_id, kind, status, title, body, metadata_json, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO items(id, run_id, thread_id, turn_id, kind, status, title, body, metadata_json, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       )
-      .run(item.id, item.threadId, item.turnId, item.kind, item.status, item.title, item.body, JSON.stringify(item.metadata ?? {}), item.createdAt, item.updatedAt);
+      .run(item.id, item.runId ?? null, item.threadId, item.turnId, item.kind, item.status, item.title, item.body, JSON.stringify(item.metadata ?? {}), item.createdAt, item.updatedAt);
     return item;
   }
 
@@ -937,6 +1130,12 @@ export class HarnessDatabase {
   getPendingApprovalForTurn(turnId: string): PendingApproval | null {
     const row = this.db.prepare("SELECT * FROM approvals WHERE turn_id = ? ORDER BY created_at DESC LIMIT 1").get(turnId) as Record<string, unknown> | undefined;
     return row ? this.mapApproval(row) : null;
+  }
+
+  listPendingApprovals(): PendingApproval[] {
+    return (this.db.prepare("SELECT * FROM approvals ORDER BY created_at ASC").all() as Array<Record<string, unknown>>).map((row) =>
+      this.mapApproval(row),
+    );
   }
 
   deletePendingApproval(approvalId: string): void {
@@ -1879,6 +2078,7 @@ export class HarnessDatabase {
   private mapTurn(row: Record<string, unknown>): TurnRecord {
     return {
       id: String(row.id),
+      runId: row.run_id ? String(row.run_id) : undefined,
       threadId: String(row.thread_id),
       status: row.status as TurnRecord["status"],
       input: String(row.input),
@@ -1890,6 +2090,7 @@ export class HarnessDatabase {
   private mapItem(row: Record<string, unknown>): ItemRecord {
     return {
       id: String(row.id),
+      runId: row.run_id ? String(row.run_id) : undefined,
       threadId: String(row.thread_id),
       turnId: String(row.turn_id),
       kind: row.kind as ItemRecord["kind"],
@@ -1899,6 +2100,36 @@ export class HarnessDatabase {
       metadata: row.metadata_json ? (JSON.parse(String(row.metadata_json)) as Record<string, unknown>) : {},
       createdAt: String(row.created_at),
       updatedAt: String(row.updated_at),
+    };
+  }
+
+  private mapRuntimeRun(row: Record<string, unknown>): RuntimeRunRecord {
+    return {
+      id: String(row.id),
+      kind: row.kind as RuntimeRunRecord["kind"],
+      status: row.status as RuntimeRunRecord["status"],
+      projectId: String(row.project_id),
+      threadId: row.thread_id ? String(row.thread_id) : undefined,
+      turnId: row.turn_id ? String(row.turn_id) : undefined,
+      parentRunId: row.parent_run_id ? String(row.parent_run_id) : undefined,
+      agentId: row.agent_id ? String(row.agent_id) : undefined,
+      title: String(row.title),
+      error: row.error ? String(row.error) : undefined,
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+      startedAt: row.started_at ? String(row.started_at) : undefined,
+      completedAt: row.completed_at ? String(row.completed_at) : undefined,
+    };
+  }
+
+  private mapRuntimeEvent(row: Record<string, unknown>): RuntimeEventRecord {
+    return {
+      eventId: String(row.event_id),
+      sequence: Number(row.sequence),
+      aggregateId: row.aggregate_id ? String(row.aggregate_id) : undefined,
+      timestamp: String(row.created_at),
+      protocolVersion: String(row.protocol_version),
+      event: JSON.parse(String(row.event_json)) as HarnessEvent,
     };
   }
 
@@ -2274,6 +2505,28 @@ export class HarnessDatabase {
     }
   }
 
+  private runMigrations(): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.migrate();
+      this.db
+        .prepare("INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES(?, ?, ?)")
+        .run(2, "runtime-event-journal", new Date().toISOString());
+      this.db.exec("PRAGMA user_version = 2");
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  private pauseInterruptedRuns(): void {
+    const now = new Date().toISOString();
+    this.db
+      .prepare("UPDATE runtime_runs SET status = 'paused', updated_at = ?, error = COALESCE(error, ?) WHERE status IN ('queued', 'running')")
+      .run(now, "Application stopped before the run completed.");
+  }
+
   private migrate(): void {
     if (!this.tableExists("requirements")) {
       this.db.exec(`
@@ -2343,6 +2596,14 @@ export class HarnessDatabase {
 
     if (!this.columnExists("threads", "hidden")) {
       this.db.exec("ALTER TABLE threads ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0");
+    }
+
+    if (!this.columnExists("turns", "run_id")) {
+      this.db.exec("ALTER TABLE turns ADD COLUMN run_id TEXT");
+    }
+
+    if (!this.columnExists("items", "run_id")) {
+      this.db.exec("ALTER TABLE items ADD COLUMN run_id TEXT");
     }
 
     if (!this.columnExists("agent_tasks", "worktree_id")) {
@@ -2833,6 +3094,31 @@ export class HarnessDatabase {
       hidden: thread.hidden ?? false,
       archivedAt: thread.archivedAt ?? null,
     };
+  }
+}
+
+function backupLegacyDatabase(filePath: string): void {
+  if (!existsSync(filePath)) {
+    return;
+  }
+
+  let schemaVersion = 0;
+  try {
+    const probe = new DatabaseSync(filePath);
+    const row = probe.prepare("PRAGMA user_version").get() as Record<string, unknown> | undefined;
+    schemaVersion = Number(row?.user_version ?? row?.["user_version"] ?? 0);
+    probe.close();
+  } catch {
+    return;
+  }
+
+  if (schemaVersion >= 2) {
+    return;
+  }
+
+  const backupPath = `${filePath}.backup-v0.2.0`;
+  if (!existsSync(backupPath)) {
+    copyFileSync(filePath, backupPath);
   }
 }
 

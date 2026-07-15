@@ -41,7 +41,7 @@ describe("app-server RPC bridge", () => {
       }),
     }).then((response) => response.json() as Promise<any>);
 
-    expect(initializeResponse.result.compatibility.protocolVersion).toBe("0.1.0");
+    expect(initializeResponse.result.compatibility.protocolVersion).toBe("0.2.0");
     expect(initializeResponse.result.compatibility.structuredEventTypes).toEqual(
       expect.arrayContaining(["tools/catalogUpdated"]),
     );

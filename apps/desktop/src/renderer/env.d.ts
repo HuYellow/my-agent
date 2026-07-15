@@ -46,6 +46,10 @@ import {
   type ToolListParams,
   type WorktreeRecord,
   type EnvironmentRecord,
+  type EventListSinceParams,
+  type RuntimeEventRecord,
+  type RuntimeRunRecord,
+  type RuntimeSnapshotResult,
   type WorkflowRecord,
   type WorkflowRunRecord,
   type TurnContextSnapshotRecord,
@@ -101,6 +105,15 @@ declare global {
       startTurn: (params: StartTurnParams) => Promise<{ turn: TurnRecord }>;
       steerTurn: (params: TurnSteerParams) => Promise<{ steer: TurnSteerRecord }>;
       interruptTurn: (params: InterruptTurnParams) => Promise<{ turn: TurnRecord }>;
+      runtimeSnapshot: () => Promise<RuntimeSnapshotResult>;
+      listEventsSince: (params?: EventListSinceParams) => Promise<{
+        events: RuntimeEventRecord[];
+        cursor: { sequence: number };
+        hasMore: boolean;
+      }>;
+      listRuns: (params?: { projectId?: string; threadId?: string; status?: RuntimeRunRecord["status"][] }) => Promise<{ runs: RuntimeRunRecord[] }>;
+      getRun: (runId: string) => Promise<{ run: RuntimeRunRecord }>;
+      retryRun: (runId: string) => Promise<{ run: RuntimeRunRecord }>;
       startReview: (params: ReviewStartParams) => Promise<{ review: ReviewRecord }>;
       listReviews: (params?: { projectId?: string; threadId?: string }) => Promise<{ reviews: ReviewRecord[] }>;
       createTerminal: (params: TerminalCreateParams) => Promise<{ session: TerminalSessionRecord }>;
@@ -156,6 +169,11 @@ declare global {
       pickWorkspace: () => Promise<string | null>;
       pickFiles: () => Promise<TurnInputAttachment[]>;
       execCommand: (params: { command: string; cwd?: string; threadId?: string }) => Promise<{ code: number; stdout: string; stderr: string }>;
+      getGitSummary: (params: { projectId?: string; threadId?: string }) => Promise<{
+        isGitRepo: boolean;
+        currentBranch: string | null;
+        branches: string[];
+      }>;
       revealSkillPath: (skillPath: string) => Promise<{ ok: boolean; error?: string }>;
       revealProjectPath: (projectPath: string) => Promise<{ ok: boolean; error?: string }>;
       windowMinimize: () => Promise<void>;

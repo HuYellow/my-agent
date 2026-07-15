@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ToolActionDescriptor, ToolPermissionDecision } from "../src/tools/types.js";
 import { SandboxPolicy } from "../src/tools/sandbox-policy.js";
 
@@ -74,18 +77,45 @@ describe("SandboxPolicy", () => {
       },
     );
   });
+
+  it("lets repository policy tighten local write and network permissions", () => {
+    const root = mkdtempSync(join(tmpdir(), "my-agent-policy-"));
+    mkdirSync(join(root, ".my-agent"), { recursive: true });
+    writeFileSync(
+      join(root, ".my-agent", "policy.json"),
+      JSON.stringify({ denyNetwork: true, requireApprovalForWrites: true, protectedPaths: ["protected"] }),
+      "utf8",
+    );
+    const policy = new SandboxPolicy();
+    const activeWorkspace = workspace({ rootPath: root, sandboxMode: "danger-full-access", approvalPolicy: "never" });
+
+    expectDecision(policy.evaluate(descriptor({ network: true, paths: [root] }), activeWorkspace), {
+      allowed: false,
+      denialReason: expect.stringContaining("Repository policy blocks network"),
+    });
+    expectDecision(policy.evaluate(descriptor({ writes: true, paths: [join(root, "file.txt")] }), activeWorkspace), {
+      allowed: true,
+      requiresApproval: true,
+      approvalMode: "preflight",
+    });
+    expectDecision(policy.evaluate(descriptor({ writes: true, paths: [join(root, "protected", "secret.txt")] }), activeWorkspace), {
+      allowed: false,
+      denialReason: expect.stringContaining("protects this path"),
+    });
+  });
 });
 
 function workspace(
   overrides: Partial<{
     sandboxMode: "read-only" | "workspace-write" | "danger-full-access";
     approvalPolicy: "on-request" | "on-failure" | "never";
+    rootPath: string;
   }> = {},
 ) {
   return {
     id: "workspace-1",
     name: "Workspace",
-    rootPath: "C:/repo",
+    rootPath: overrides.rootPath ?? "C:/repo",
     shell: "powershell",
     sandboxMode: overrides.sandboxMode ?? "workspace-write",
     approvalPolicy: overrides.approvalPolicy ?? "on-request",

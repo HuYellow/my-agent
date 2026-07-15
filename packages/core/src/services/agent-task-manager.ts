@@ -41,11 +41,14 @@ interface LiveAgentTask {
   worktree?: WorktreeRecord;
   environment: EnvironmentRecord;
   currentRun?: Promise<AgentTaskRecord>;
+  pendingInput?: string;
   lastRunOptions: AgentTaskRunOptions;
 }
 
 export class AgentTaskManager {
   private readonly tasks = new Map<string, LiveAgentTask>();
+  private readonly pendingQueue: string[] = [];
+  private readonly maxConcurrency = normalizeAgentConcurrency(process.env.MY_AGENT_AGENT_CONCURRENCY);
 
   constructor(
     private readonly database: HarnessDatabase,
@@ -111,12 +114,13 @@ export class AgentTaskManager {
       worktree,
       environment,
     });
+    const shouldQueue = this.activeTaskCount() >= this.maxConcurrency;
     const task = this.database.createAgentTask({
       id: taskId,
       parentThreadId: params.parentThreadId,
       parentTurnId: params.parentTurnId,
       title: params.title,
-      status: "running",
+      status: shouldQueue ? "queued" : "running",
       childThreadId: childThread.id,
       worktreeId: worktree?.id,
       environmentId: environment.id,
@@ -131,6 +135,7 @@ export class AgentTaskManager {
       workspace: delegatedWorkspace,
       worktree,
       environment,
+      pendingInput: shouldQueue ? params.input : undefined,
       lastRunOptions: {
         provider: params.provider,
         globalInstructions: params.globalInstructions,
@@ -144,7 +149,11 @@ export class AgentTaskManager {
 
     this.tasks.set(task.id, live);
     this.onUpdate(task);
-    live.currentRun = this.runTask(live, params.input, live.lastRunOptions);
+    if (shouldQueue) {
+      this.pendingQueue.push(task.id);
+    } else {
+      this.launchTask(live, params.input);
+    }
     return task;
   }
 
@@ -154,14 +163,12 @@ export class AgentTaskManager {
     options: AgentTaskRunOptions,
   ): Promise<AgentTaskRecord> {
     const live = this.requireTask(agentId);
+    if (live.task.status === "queued") {
+      throw new Error(`Agent task is still queued: ${agentId}`);
+    }
     live.lastRunOptions = options;
-    live.task = this.persistTask({
-      ...live.task,
-      status: "running",
-      updatedAt: new Date().toISOString(),
-    });
-    live.currentRun = this.runTask(live, input, options);
-    return live.currentRun;
+    this.launchTask(live, input);
+    return live.currentRun!;
   }
 
   async resumeAfterApproval(
@@ -210,6 +217,10 @@ export class AgentTaskManager {
 
   close(agentId: string): AgentTaskRecord {
     const live = this.requireTask(agentId);
+    const queueIndex = this.pendingQueue.indexOf(agentId);
+    if (queueIndex >= 0) {
+      this.pendingQueue.splice(queueIndex, 1);
+    }
 
     if (live.task.lastTurnId) {
       this.runner.interruptTurn(live.task.lastTurnId);
@@ -228,6 +239,7 @@ export class AgentTaskManager {
       status: live.task.status === "completed" ? "completed" : "cancelled",
       updatedAt: new Date().toISOString(),
     });
+    this.pumpQueue();
     return live.task;
   }
 
@@ -279,6 +291,7 @@ export class AgentTaskManager {
         this.runner.interruptTurn(live.task.lastTurnId);
       }
     }
+    this.pendingQueue.length = 0;
     this.tasks.clear();
   }
 
@@ -329,6 +342,34 @@ export class AgentTaskManager {
     }
   }
 
+  private launchTask(live: LiveAgentTask, input: string): void {
+    live.pendingInput = undefined;
+    live.task = this.persistTask({
+      ...live.task,
+      status: "running",
+      updatedAt: new Date().toISOString(),
+    });
+    live.currentRun = this.runTask(live, input, live.lastRunOptions).finally(() => {
+      live.currentRun = undefined;
+      this.pumpQueue();
+    });
+  }
+
+  private pumpQueue(): void {
+    while (this.activeTaskCount() < this.maxConcurrency && this.pendingQueue.length > 0) {
+      const nextId = this.pendingQueue.shift();
+      const live = nextId ? this.tasks.get(nextId) : undefined;
+      if (!live || live.task.status !== "queued" || !live.pendingInput) {
+        continue;
+      }
+      this.launchTask(live, live.pendingInput);
+    }
+  }
+
+  private activeTaskCount(): number {
+    return [...this.tasks.values()].filter((entry) => entry.task.status === "running" || entry.task.status === "awaiting_approval").length;
+  }
+
   private persistTask(task: AgentTaskRecord): AgentTaskRecord {
     const updated = this.database.updateAgentTask(task);
     this.onUpdate(updated);
@@ -374,6 +415,11 @@ function mapTaskStatus(turnStatus: TurnRecord["status"]): AgentTaskRecord["statu
     default:
       return "running";
   }
+}
+
+function normalizeAgentConcurrency(value: string | undefined): number {
+  const parsed = Number.parseInt(value ?? "4", 10);
+  return Number.isFinite(parsed) ? Math.min(Math.max(parsed, 1), 16) : 4;
 }
 
 function summarizeAgentThread(database: HarnessDatabase, threadId: string, turnId: string): NonNullable<AgentTaskRecord["summary"]> {

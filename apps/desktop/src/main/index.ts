@@ -12,6 +12,7 @@ import {
   type CreateProjectParams,
   type CreateAutomationParams,
   type EnvironmentDetectParams,
+  type GitSummaryParams,
   type HarnessEvent,
   type AutomationRunLogsParams,
   type InternalToolListParams,
@@ -67,6 +68,7 @@ class HarnessClient {
   private activeServerUrl: string | null = process.env.MY_AGENT_SERVER_URL?.replace(/\/$/, "") ?? null;
   private activeServerToken: string | null = process.env.MY_AGENT_SERVER_TOKEN ?? null;
   private serverAbortController: AbortController | null = null;
+  private serverReadyPromise: Promise<boolean> | null = null;
 
   start(coreEntry: string, appServerEntry: string): void {
     const backendMode = process.env.MY_AGENT_BACKEND_MODE ?? "server";
@@ -115,9 +117,12 @@ class HarnessClient {
 
       if ("method" in message) {
         const notification = message as JsonRpcNotification;
+        const rawParams = (notification.params ?? {}) as Record<string, unknown>;
+        const { __eventMeta, ...payload } = rawParams;
         const event = {
           type: notification.method,
-          payload: notification.params,
+          payload,
+          meta: __eventMeta,
         } as HarnessEvent;
         for (const listener of this.listeners) {
           listener(event);
@@ -139,6 +144,8 @@ class HarnessClient {
     this.serverAbortController = null;
     this.serverChild?.kill();
     this.serverChild = null;
+    this.serverReadyPromise = null;
+    this.activeServerUrl = null;
     this.child?.kill();
     this.child = null;
   }
@@ -149,8 +156,16 @@ class HarnessClient {
   }
 
   async request<TResult>(method: string, params?: unknown): Promise<TResult> {
+    if (!this.activeServerUrl && this.serverReadyPromise) {
+      await this.serverReadyPromise;
+    }
+
     if (this.activeServerUrl) {
       return this.requestRemote<TResult>(method, params);
+    }
+
+    if (this.serverChild) {
+      throw new Error("Local runtime server did not become ready.");
     }
 
     if (!this.child) {
@@ -214,6 +229,21 @@ class HarnessClient {
       },
     });
     this.serverChild = child;
+    let resolveReady: (ready: boolean) => void = () => undefined;
+    let readySettled = false;
+    const settleReady = (ready: boolean) => {
+      if (readySettled) {
+        return;
+      }
+      readySettled = true;
+      clearTimeout(readyTimeout);
+      resolveReady(ready);
+    };
+    const readyTimeout = setTimeout(() => settleReady(false), 10_000);
+    readyTimeout.unref();
+    this.serverReadyPromise = new Promise<boolean>((resolve) => {
+      resolveReady = resolve;
+    });
     const output = createInterface({
       input: child.stdout!,
       terminal: false,
@@ -224,6 +254,7 @@ class HarnessClient {
         if (payload.port) {
           this.activeServerUrl = `http://127.0.0.1:${payload.port}`;
           this.activeServerToken = payload.authToken ?? token;
+          settleReady(true);
           this.startRemoteEventStream();
         }
       } catch {
@@ -234,8 +265,10 @@ class HarnessClient {
       safeConsoleError(`[my-agent-app-server] ${chunk.toString()}`);
     });
     child.on("exit", () => {
+      settleReady(false);
       this.serverChild = null;
       this.activeServerUrl = null;
+      this.serverReadyPromise = null;
     });
   }
 
@@ -424,6 +457,11 @@ ipcMain.handle("thread:update", (_event, params: UpdateThreadParams) => harness.
 ipcMain.handle("turn:start", (_event, params: StartTurnParams) => harness.request("turn/start", params));
 ipcMain.handle("turn:steer", (_event, params: TurnSteerParams) => harness.request("turn/steer", params));
 ipcMain.handle("turn:interrupt", (_event, params: InterruptTurnParams) => harness.request("turn/interrupt", params));
+ipcMain.handle("runtime:snapshot", () => harness.request("runtime/snapshot"));
+ipcMain.handle("event:list-since", (_event, params: { sequence?: number; limit?: number }) => harness.request("event/listSince", params));
+ipcMain.handle("run:list", (_event, params: { projectId?: string; threadId?: string; status?: string[] }) => harness.request("run/list", params));
+ipcMain.handle("run:get", (_event, params: { runId: string }) => harness.request("run/get", params));
+ipcMain.handle("run:retry", (_event, params: { runId: string }) => harness.request("run/retry", params));
 ipcMain.handle("review:start", (_event, params: ReviewStartParams) => harness.request("review/start", params));
 ipcMain.handle("review:list", (_event, params: { projectId?: string; threadId?: string }) => harness.request("review/list", params));
 ipcMain.handle("terminal:create", (_event, params: TerminalCreateParams) => harness.request("terminal/create", params));
@@ -437,6 +475,7 @@ ipcMain.handle("terminal:approval:respond", (_event, params: TerminalApprovalRes
   harness.request("terminal/approval/respond", params),
 );
 ipcMain.handle("command:exec", (_event, params: CommandExecParams) => harness.request("command/exec", params));
+  ipcMain.handle("git:summary", (_event, params: GitSummaryParams) => harness.request("git/summary", params));
   ipcMain.handle("approval:respond", (_event, params: ApprovalResponseParams) => harness.request("approval/respond", params));
   ipcMain.handle("skills:list", () => harness.request("skills/list"));
   ipcMain.handle("skills:config:write", (_event, params: { disabledSkillIds: string[] }) => harness.request("skills/config/write", params));

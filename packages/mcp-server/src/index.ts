@@ -58,6 +58,20 @@ export async function handleMcpMessage(runtime: RuntimeKernel, message: McpMessa
               inputSchema: { type: "object", properties: {}, additionalProperties: false },
             },
             {
+              name: "runtime_snapshot",
+              description: "Read the current runtime snapshot and event cursor for recovery-aware clients.",
+              inputSchema: { type: "object", properties: {}, additionalProperties: false },
+            },
+            {
+              name: "list_events_since",
+              description: "Replay structured runtime events after a journal sequence.",
+              inputSchema: {
+                type: "object",
+                properties: { sequence: { type: "number" }, limit: { type: "number" } },
+                additionalProperties: false,
+              },
+            },
+            {
               name: "start_turn",
               description: "Start a new turn in a thread.",
               inputSchema: {
@@ -191,6 +205,23 @@ export async function handleMcpMessage(runtime: RuntimeKernel, message: McpMessa
 
 export async function callTool(runtime: RuntimeKernel, name: string, args: Record<string, unknown>): Promise<string> {
   switch (name) {
+    case "runtime_snapshot": {
+      const response = await runtime.server.handle({
+        jsonrpc: "2.0",
+        id: "runtime-snapshot",
+        method: "runtime/snapshot",
+      });
+      return JSON.stringify("result" in response ? response.result : response.error, null, 2);
+    }
+    case "list_events_since": {
+      const response = await runtime.server.handle({
+        jsonrpc: "2.0",
+        id: "event-list-since",
+        method: "event/listSince",
+        params: args,
+      });
+      return JSON.stringify("result" in response ? response.result : response.error, null, 2);
+    }
     case "list_threads": {
       const response = await runtime.server.handle({
         jsonrpc: "2.0",

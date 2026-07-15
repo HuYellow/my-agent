@@ -626,7 +626,9 @@ describe("desktop thread smoke", () => {
     expect(source).toContain("打开子线程");
     expect(source).toContain("Runtime 详情");
     expect(source).toContain("Diff / Patch");
-    expect(source).toContain("workspace-toggle");
+    expect(source).toContain("WorkspaceTabs");
+    expect(source).toContain("RunStatusBar");
+    expect(source).toContain("CommandPalette");
     expect(source).toContain("buildThreadChangeSets");
     expect(source).toContain("threadTerminals");
     expect(source).toContain("selectedTerminalId");

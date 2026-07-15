@@ -20,6 +20,8 @@ import {
   type CreateProjectParams,
   type DiffStatRecord,
   type ForkThreadParams,
+  type GitSummaryParams,
+  type GitSummaryResult,
   type HarnessEvent,
   type InitializeResult,
   type ItemRecord,
@@ -90,6 +92,16 @@ import {
   type WorkflowRunsResult,
   type WorkflowRunResult,
   type EnvironmentDetectParams,
+  type EventListSinceParams,
+  type EventListSinceResult,
+  type RunGetParams,
+  type RunGetResult,
+  type RunListParams,
+  type RunListResult,
+  type RunRetryParams,
+  type RunRetryResult,
+  type RuntimeRunRecord,
+  type RuntimeSnapshotResult,
   type UpdateProjectParams,
   type WritePatchParams,
   type UpdateThreadParams,
@@ -145,6 +157,7 @@ export class HarnessServer {
     private readonly skillService: SkillService,
     private readonly promptBuilder: PromptBuilder,
     private readonly emitRaw: (notification: JsonRpcNotification) => void,
+    private readonly homeDir = process.env.MY_AGENT_HOME ?? getDefaultHomeDir(),
   ) {
     const config = this.syncProjectSelection(this.database.getConfig());
     const activeProject = this.resolveWorkspaceByProjectId(config.selectedProjectId);
@@ -231,7 +244,7 @@ export class HarnessServer {
       this.requirementMemoryManager,
       (event) => this.emit(event),
     );
-    this.templateService = new TemplateService(process.env.MY_AGENT_HOME ?? getDefaultHomeDir());
+    this.templateService = new TemplateService(this.homeDir);
     this.workflowManager = new WorkflowManager(
       this.database,
       this.worktreeManager,
@@ -365,6 +378,16 @@ export class HarnessServer {
         return this.steerTurn(message.params as TurnSteerParams);
       case "turn/interrupt":
         return this.interruptTurn(String((message.params as { turnId: string }).turnId));
+      case "runtime/snapshot":
+        return this.runtimeSnapshot();
+      case "event/listSince":
+        return this.listEventsSince(message.params as EventListSinceParams | undefined);
+      case "run/list":
+        return this.listRuns(message.params as RunListParams | undefined);
+      case "run/get":
+        return this.getRun(message.params as RunGetParams);
+      case "run/retry":
+        return this.retryRun(message.params as RunRetryParams);
       case "review/start":
         return this.startReview((message.params ?? {}) as ReviewStartParams);
       case "review/list":
@@ -373,6 +396,8 @@ export class HarnessServer {
         return this.respondApproval(message.params as ApprovalResponseParams);
       case "command/exec":
         return this.execCommand(message.params as CommandExecParams);
+      case "git/summary":
+        return this.getGitSummary(message.params as GitSummaryParams | undefined);
       case "fs/readFile":
         return this.readFile(message.params as ReadFileParams);
       case "fs/writePatch":
@@ -481,7 +506,7 @@ export class HarnessServer {
     const skills = this.refreshSkills(config.selectedProjectId);
     const activeProject = this.resolveWorkspaceByProjectId(config.selectedProjectId);
     return {
-      protocolVersion: "0.1.0",
+      protocolVersion: "0.2.0",
       server: {
         name: "my-agent-core",
         version: "0.1.0",
@@ -510,7 +535,61 @@ export class HarnessServer {
       internalTools: this.internalToolManager.list(activeProject),
       templates: this.templateService.listTemplates(),
       tools: this.buildToolCatalog(activeProject),
+      runs: this.database.listRuntimeRuns({ projectId: config.selectedProjectId }),
+      eventCursor: { sequence: this.database.getEventCursor() },
     };
+  }
+
+  private runtimeSnapshot(): RuntimeSnapshotResult {
+    return {
+      protocolVersion: "0.2.0",
+      cursor: { sequence: this.database.getEventCursor() },
+      runs: this.database.listRuntimeRuns(),
+      threads: this.database.listThreads(),
+      pendingApprovals: this.database.listPendingApprovals(),
+      agentTasks: this.database.listAgentTasks(),
+    };
+  }
+
+  private listEventsSince(params: EventListSinceParams = {}): EventListSinceResult {
+    const result = this.database.listEventsSince(params.sequence ?? 0, params.limit ?? 500);
+    return {
+      events: result.events,
+      cursor: { sequence: result.events.at(-1)?.sequence ?? params.sequence ?? 0 },
+      hasMore: result.hasMore,
+    };
+  }
+
+  private listRuns(params: RunListParams = {}): RunListResult {
+    return { runs: this.database.listRuntimeRuns(params) };
+  }
+
+  private getRun(params: RunGetParams): RunGetResult {
+    const run = this.database.getRuntimeRun(params.runId);
+    if (!run) {
+      throw new Error(`Run not found: ${params.runId}`);
+    }
+    return { run };
+  }
+
+  private async retryRun(params: RunRetryParams): Promise<RunRetryResult> {
+    const previous = this.getRun(params).run;
+    if (previous.kind !== "turn" || !previous.turnId || !previous.threadId) {
+      throw new Error(`Run kind ${previous.kind} cannot be retried through run/retry.`);
+    }
+    if (!["failed", "cancelled", "paused"].includes(previous.status)) {
+      throw new Error(`Run ${previous.id} is not retryable while status is ${previous.status}.`);
+    }
+    const previousTurn = this.database.getTurn(previous.turnId);
+    if (!previousTurn) {
+      throw new Error(`Turn not found for run: ${previous.id}`);
+    }
+    const result = await this.startTurn({ threadId: previous.threadId, input: previousTurn.input });
+    const run = result.turn.runId ? this.database.getRuntimeRun(result.turn.runId) : null;
+    if (!run) {
+      throw new Error("Retried run was not persisted.");
+    }
+    return { run };
   }
 
   private createProject(params: CreateProjectParams): { project: ProjectRecord } {
@@ -820,16 +899,42 @@ export class HarnessServer {
       throw new Error(`Thread not found: ${params.threadId}`);
     }
 
+    const activeRun = this.database
+      .listRuntimeRuns({
+        threadId: thread.id,
+        status: ["queued", "running", "awaiting_approval"],
+      })
+      .at(0);
+    if (activeRun) {
+      throw new Error(`Thread already has an active run: ${activeRun.id} (${activeRun.status}).`);
+    }
+
     const config = this.database.getConfig();
     const project = this.requireProject(thread.projectId);
+    const createdAt = new Date().toISOString();
+    const runId = createId("run");
     const turn: TurnRecord = {
       id: createId("turn"),
+      runId,
       threadId: thread.id,
       status: "running",
       input: params.input,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      createdAt,
+      updatedAt: createdAt,
     };
+
+    this.database.createRuntimeRun({
+      id: runId,
+      kind: "turn",
+      status: "running",
+      projectId: project.id,
+      threadId: thread.id,
+      turnId: turn.id,
+      title: inferThreadTitle(params.input),
+      createdAt,
+      updatedAt: createdAt,
+      startedAt: createdAt,
+    });
 
     this.database.createTurn(turn);
     this.emit({ type: "turn/started", payload: { turn } });
@@ -1056,6 +1161,24 @@ export class HarnessServer {
       },
     );
     return JSON.parse(raw) as { code: number; stdout: string; stderr: string };
+  }
+
+  private getGitSummary(params?: GitSummaryParams): GitSummaryResult {
+    const workspace = params?.threadId
+      ? this.resolveWorkspace(params.threadId)
+      : this.resolveWorkspaceByProjectId(params?.projectId);
+
+    if (!isGitWorkspace(workspace.rootPath)) {
+      return { isGitRepo: false, currentBranch: null, branches: [] };
+    }
+
+    const currentBranch = runGitMaybe(workspace.rootPath, ["branch", "--show-current"])?.trim() || null;
+    const branches = (runGitMaybe(workspace.rootPath, ["for-each-ref", "--format=%(refname:short)", "refs/heads"]) ?? "")
+      .split(/\r?\n/)
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+
+    return { isGitRepo: true, currentBranch, branches };
   }
 
   private async readFile(params: ReadFileParams): Promise<{ path: string; content: string }> {
@@ -2147,13 +2270,74 @@ export class HarnessServer {
   }
 
   private emit(event: HarnessEvent): void {
+    const updatedRun = this.syncRuntimeRunFromEvent(event);
     this.refreshRequirementMemoryFromEvent(event);
+    this.persistAndEmit(event);
+    if (updatedRun && event.type !== "run/updated") {
+      this.persistAndEmit({ type: "run/updated", payload: { run: updatedRun } });
+    }
+    this.emitStructuredThreadArtifacts(event);
+  }
+
+  private persistAndEmit(event: HarnessEvent): void {
+    const timestamp = new Date().toISOString();
+    const persisted = this.database.appendEvent({
+      eventId: createId("event"),
+      aggregateId: resolveEventAggregateId(event),
+      protocolVersion: "0.2.0",
+      timestamp,
+      event,
+    });
     this.emitRaw({
       jsonrpc: "2.0",
-      method: event.type,
-      params: event.payload,
+      method: persisted.event.type,
+      params: {
+        ...(persisted.event.payload as Record<string, unknown>),
+        __eventMeta: persisted.event.meta,
+      },
     });
-    this.emitStructuredThreadArtifacts(event);
+  }
+
+  private syncRuntimeRunFromEvent(event: HarnessEvent): RuntimeRunRecord | null {
+    let turn: TurnRecord | null = null;
+    let status: RuntimeRunRecord["status"] | undefined;
+    let error: string | undefined;
+
+    if (event.type === "turn/started") {
+      turn = event.payload.turn;
+      status = "running";
+    } else if (event.type === "approval/requested") {
+      turn = this.database.getTurn(event.payload.approval.turnId);
+      status = "awaiting_approval";
+    } else if (event.type === "turn/completed") {
+      turn = event.payload.turn;
+      status = "completed";
+    } else if (event.type === "turn/cancelled") {
+      turn = event.payload.turn;
+      status = "cancelled";
+      error = event.payload.message;
+    } else if (event.type === "turn/failed") {
+      turn = event.payload.turn;
+      status = "failed";
+      error = event.payload.message;
+    }
+
+    if (!turn?.runId || !status) {
+      return null;
+    }
+    const current = this.database.getRuntimeRun(turn.runId);
+    if (!current) {
+      return null;
+    }
+    const timestamp = new Date().toISOString();
+    return this.database.updateRuntimeRun({
+      ...current,
+      status,
+      error,
+      updatedAt: timestamp,
+      startedAt: current.startedAt ?? (status === "running" ? timestamp : undefined),
+      completedAt: ["completed", "failed", "cancelled"].includes(status) ? timestamp : undefined,
+    });
   }
 
   private refreshRequirementMemoryFromEvent(event: HarnessEvent): void {
@@ -2655,12 +2839,34 @@ function truncateForSummary(value: string, maxLength: number): string {
   return `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}...`;
 }
 
+function resolveEventAggregateId(event: HarnessEvent): string | undefined {
+  const payload = event.payload as unknown as Record<string, unknown>;
+  for (const key of ["run", "turn", "plan", "diff", "steer", "item", "approval", "review", "task", "session", "workflow", "automation"]) {
+    const value = payload[key];
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      continue;
+    }
+    const record = value as Record<string, unknown>;
+    for (const idKey of ["runId", "turnId", "id"]) {
+      if (typeof record[idKey] === "string") {
+        return record[idKey];
+      }
+    }
+  }
+  for (const key of ["itemId", "sessionId", "approvalId"]) {
+    if (typeof payload[key] === "string") {
+      return payload[key];
+    }
+  }
+  return undefined;
+}
+
 function buildProtocolCompatibility(): ProtocolCompatibilityRecord {
   return {
-    protocolVersion: "0.1.0",
+    protocolVersion: "0.2.0",
     additiveChangesOnly: true,
     requiredToolSources: ["local", "plugin", "mcp", "internal"],
-    structuredEventTypes: ["turn/planUpdated", "turn/diffUpdated", "review/started", "review/status", "review/result", "tools/catalogUpdated"],
+    structuredEventTypes: ["run/updated", "turn/planUpdated", "turn/diffUpdated", "review/started", "review/status", "review/result", "tools/catalogUpdated"],
     guarantees: [
       "New protocol fields and event payload fields are additive within the same protocolVersion.",
       "Tool source kinds are stable across local, plugin, mcp, and internal tools.",

@@ -137,6 +137,23 @@ describe("my-agent file config integration", () => {
     await changed;
   });
 
+  it("ignores unrelated runtime database changes", async () => {
+    const myAgentHome = mkdtempSync(join(tmpdir(), "my-agent-home-"));
+    process.env.MY_AGENT_HOME = myAgentHome;
+    writeFileSync(join(myAgentHome, "config.toml"), 'model = "gpt-5.4"\n', "utf8");
+    writeFileSync(join(myAgentHome, "auth.json"), "{}\n", "utf8");
+    let changeCount = 0;
+    const stop = watchStoredConfig(() => {
+      changeCount += 1;
+    });
+
+    writeFileSync(join(myAgentHome, "app.db"), "runtime event", "utf8");
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    stop();
+
+    expect(changeCount).toBe(0);
+  });
+
   it("creates missing config files from the current provider", () => {
     const myAgentHome = mkdtempSync(join(tmpdir(), "my-agent-home-"));
     process.env.MY_AGENT_HOME = myAgentHome;

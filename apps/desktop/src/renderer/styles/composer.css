@@ -1,7 +1,7 @@
 .composer-bar {
-  width: min(1012px, calc(100% - 56px));
+  width: min(820px, calc(100% - 56px));
   flex: 0 0 auto;
-  margin: 0 auto 30px;
+  margin: 0 auto 24px;
   background: transparent;
 }
 
@@ -16,25 +16,25 @@
 }
 
 .composer-main {
-  min-height: 128px;
+  min-height: 108px;
   position: relative;
   display: flex;
   flex-direction: column;
-  padding: 16px 18px 54px;
+  padding: 14px 16px 50px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-lg);
   background: var(--surface);
-  box-shadow: 0 14px 36px rgba(31, 35, 32, 0.08);
+  box-shadow: 0 8px 24px rgba(31, 35, 32, 0.07);
 }
 
 .composer-main:focus-within {
   border-color: color-mix(in srgb, var(--accent) 48%, var(--line-strong));
-  box-shadow: 0 0 0 3px var(--accent-soft), 0 16px 38px rgba(31, 35, 32, 0.1);
+  box-shadow: 0 0 0 2px var(--accent-soft), 0 10px 28px rgba(31, 35, 32, 0.09);
 }
 
 .composer-input {
   width: 100%;
-  min-height: 58px;
+  min-height: 44px;
   max-height: 130px;
   padding: 0;
   border: none;
@@ -42,7 +42,7 @@
   resize: none;
   background: transparent;
   color: var(--text);
-  font-size: 16px;
+  font-size: 14px;
   line-height: 1.55;
 }
 

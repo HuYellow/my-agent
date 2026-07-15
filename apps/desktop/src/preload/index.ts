@@ -13,6 +13,8 @@ import {
   type DistributionTemplateRecord,
   type ExecutionContextRecord,
   type HarnessEvent,
+  type GitSummaryParams,
+  type GitSummaryResult,
   type InternalToolRecord,
   type InterruptTurnParams,
   type ProviderActionParams,
@@ -32,6 +34,10 @@ import {
   type TerminalWriteParams,
   type WorktreeRecord,
   type EnvironmentRecord,
+  type EventListSinceParams,
+  type RuntimeEventRecord,
+  type RuntimeRunRecord,
+  type RuntimeSnapshotResult,
   type WorkflowRecord,
   type PluginRecord,
   type McpMountRecord,
@@ -95,6 +101,16 @@ const api = {
   startTurn: (params: StartTurnParams) => ipcRenderer.invoke("turn:start", params),
   steerTurn: (params: TurnSteerParams) => ipcRenderer.invoke("turn:steer", params) as Promise<{ steer: TurnSteerRecord }>,
   interruptTurn: (params: InterruptTurnParams) => ipcRenderer.invoke("turn:interrupt", params),
+  runtimeSnapshot: () => ipcRenderer.invoke("runtime:snapshot") as Promise<RuntimeSnapshotResult>,
+  listEventsSince: (params?: EventListSinceParams) => ipcRenderer.invoke("event:list-since", params ?? {}) as Promise<{
+    events: RuntimeEventRecord[];
+    cursor: { sequence: number };
+    hasMore: boolean;
+  }>,
+  listRuns: (params?: { projectId?: string; threadId?: string; status?: RuntimeRunRecord["status"][] }) =>
+    ipcRenderer.invoke("run:list", params ?? {}) as Promise<{ runs: RuntimeRunRecord[] }>,
+  getRun: (runId: string) => ipcRenderer.invoke("run:get", { runId }) as Promise<{ run: RuntimeRunRecord }>,
+  retryRun: (runId: string) => ipcRenderer.invoke("run:retry", { runId }) as Promise<{ run: RuntimeRunRecord }>,
   startReview: (params: ReviewStartParams) => ipcRenderer.invoke("review:start", params) as Promise<{ review: ReviewRecord }>,
   listReviews: (params?: { projectId?: string; threadId?: string }) =>
     ipcRenderer.invoke("review:list", params ?? {}) as Promise<{ reviews: ReviewRecord[] }>,
@@ -161,6 +177,8 @@ const api = {
     ipcRenderer.invoke("project:path:reveal", { projectPath }) as Promise<{ ok: boolean; error?: string }>,
   execCommand: (params: CommandExecParams) =>
     ipcRenderer.invoke("command:exec", params) as Promise<{ code: number; stdout: string; stderr: string }>,
+  getGitSummary: (params: GitSummaryParams) =>
+    ipcRenderer.invoke("git:summary", params) as Promise<GitSummaryResult>,
   windowMinimize: () => ipcRenderer.invoke("window:minimize"),
   windowToggleFullscreen: () => ipcRenderer.invoke("window:toggle-fullscreen"),
   windowClose: () => ipcRenderer.invoke("window:close"),
