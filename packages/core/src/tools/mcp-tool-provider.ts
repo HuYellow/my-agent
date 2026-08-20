@@ -1,5 +1,5 @@
 import { type HarnessDatabase } from "../store/database.js";
-import { type WorkspaceProfile } from "@my-agent/protocol";
+import { type WorkspaceProfile } from "@yellow-flow/protocol";
 import { type JsonSchemaObject, type RuntimeToolCapability, type RuntimeToolDefinition, type RuntimeToolSourceMetadata, type ToolProvider } from "./types.js";
 import { McpManager } from "../services/mcp-manager.js";
 

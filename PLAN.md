@@ -1,7 +1,7 @@
-# my-agent 路线图与 Issue Backlog
+# Yellow Flow 路线图与 Issue Backlog
 
 ## 摘要
-按当前仓库状态，路线图采用 `Runtime 优先`、`可直接开发 issue` 的拆分方式，目标是先把 `my-agent` 从“功能骨架”推进到“可持续完成真实 coding 任务的通用 agent”，再补强编排、上下文与平台能力，最后再做工作台体验和生态分发。
+按当前仓库状态，路线图采用 `Runtime 优先`、`可直接开发 issue` 的拆分方式，目标是先把 Yellow Flow 从“功能骨架”推进到“可持续完成真实 coding 任务的通用 agent”，再补强编排、上下文与平台能力，最后再做工作台体验和生态分发。
 
 Milestone 顺序固定为：
 
@@ -203,7 +203,7 @@ Issue：
 - 用户可管理、可审计、可启停。
 
 ### P2-M3 分发与模板化
-目标：降低他人为 `my-agent` 编写 skill / workflow / plugin 的门槛。
+目标：降低他人为 Yellow Flow 编写 skill / workflow / plugin 的门槛。
 
 Issue：
 1. skill / workflow / plugin 模板脚手架  
@@ -220,7 +220,7 @@ Issue：
 验证生成物能被 runtime 正常发现、加载和执行。
 
 完成标准：
-- 第三方开发者能低成本扩展 `my-agent`。
+- 第三方开发者能低成本扩展 Yellow Flow。
 - 平台接口有清晰的版本和迁移边界。
 
 ## 测试计划

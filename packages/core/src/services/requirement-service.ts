@@ -4,7 +4,7 @@ import {
   type RequirementRecord,
   type RequirementStatus,
   type ThreadRecord,
-} from "@my-agent/protocol";
+} from "@yellow-flow/protocol";
 import { HarnessDatabase } from "../store/database.js";
 import { createId } from "../utils/ids.js";
 import { RequirementMemoryManager } from "./requirement-memory-manager.js";

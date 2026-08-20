@@ -2,13 +2,13 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { EnvironmentRecord, ExecutionContextRecord, ProjectRecord, WorktreeRecord } from "@my-agent/protocol";
+import type { EnvironmentRecord, ExecutionContextRecord, ProjectRecord, WorktreeRecord } from "@yellow-flow/protocol";
 import { ExecutionContextManager } from "../src/services/execution-context-manager.js";
 import { HarnessDatabase } from "../src/store/database.js";
 
 describe("ExecutionContextManager", () => {
   it("creates and updates execution contexts using environment metadata", () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-exec-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-exec-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const project = createProject(database, root);
     const emitted: ExecutionContextRecord[] = [];
@@ -30,7 +30,7 @@ describe("ExecutionContextManager", () => {
       id: "worktree-1",
       projectId: project.id,
       branch: "codex/context",
-      path: join(root, ".my-agent", "worktrees", "codex", "context"),
+      path: join(root, ".yellow-flow", "worktrees", "codex", "context"),
       status: "ready",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),

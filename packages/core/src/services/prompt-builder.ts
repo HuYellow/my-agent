@@ -6,7 +6,7 @@ import {
   type TurnContextSectionRecord,
   type TurnInputAttachment,
   type WorkspaceProfile,
-} from "@my-agent/protocol";
+} from "@yellow-flow/protocol";
 import { readFileSync } from "node:fs";
 import { findAgentDocuments } from "../utils/path-utils.js";
 import { SkillService } from "./skill-service.js";

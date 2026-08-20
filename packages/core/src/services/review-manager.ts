@@ -8,7 +8,7 @@ import {
   type ReviewFinding,
   type ReviewRecord,
   type ReviewSource,
-} from "@my-agent/protocol";
+} from "@yellow-flow/protocol";
 import { HarnessDatabase } from "../store/database.js";
 import { createId } from "../utils/ids.js";
 import { EnvironmentManager } from "./environment-manager.js";

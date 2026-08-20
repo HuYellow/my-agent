@@ -30,16 +30,16 @@ import { HarnessDatabase } from "../src/store/database.js";
 describe("TerminalManager", () => {
   beforeEach(() => {
     spawnMock.mockReset();
-    process.env.MY_AGENT_TERMINAL_BACKEND = "pipe";
+    process.env.YELLOW_FLOW_TERMINAL_BACKEND = "pipe";
   });
 
   afterEach(() => {
-    delete process.env.MY_AGENT_TERMINAL_BACKEND;
+    delete process.env.YELLOW_FLOW_TERMINAL_BACKEND;
     vi.restoreAllMocks();
   });
 
   it("stores PTY-ready session metadata while still using the pipe backend", () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-terminal-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-terminal-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const child = new MockChild();
     spawnMock.mockReturnValue(child);
@@ -132,8 +132,8 @@ describe("TerminalManager", () => {
   });
 
   it("rejects terminal cwd outside the workspace before spawning", () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-terminal-"));
-    const outside = mkdtempSync(join(tmpdir(), "my-agent-terminal-outside-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-terminal-"));
+    const outside = mkdtempSync(join(tmpdir(), "yellow-flow-terminal-outside-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const manager = new TerminalManager(database, () => undefined, () => undefined, () => undefined, () => undefined);
 
@@ -146,7 +146,7 @@ describe("TerminalManager", () => {
   });
 
   it("rejects unexpected terminal shells before spawning", () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-terminal-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-terminal-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const manager = new TerminalManager(database, () => undefined, () => undefined, () => undefined, () => undefined);
 
@@ -159,7 +159,7 @@ describe("TerminalManager", () => {
   });
 
   it("rejects unconfigured terminal shell paths before spawning", () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-terminal-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-terminal-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const manager = new TerminalManager(database, () => undefined, () => undefined, () => undefined, () => undefined);
 

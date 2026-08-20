@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { createRuntimeKernel } from "@my-agent/core/runtime-kernel";
+import { createRuntimeKernel } from "@yellow-flow/core/runtime-kernel";
 import { appendFileSync } from "node:fs";
 
 async function main() {
@@ -9,10 +9,10 @@ async function main() {
   });
 
   try {
-    const automationId = process.env.MY_AGENT_AUTOMATION_ID;
-    const workflowId = process.env.MY_AGENT_WORKFLOW_ID;
-    const projectId = process.env.MY_AGENT_PROJECT_ID ?? runtime.database.getConfig().selectedProjectId;
-    const prompt = process.env.MY_AGENT_PROMPT;
+    const automationId = process.env.YELLOW_FLOW_AUTOMATION_ID;
+    const workflowId = process.env.YELLOW_FLOW_WORKFLOW_ID;
+    const projectId = process.env.YELLOW_FLOW_PROJECT_ID ?? runtime.database.getConfig().selectedProjectId;
+    const prompt = process.env.YELLOW_FLOW_PROMPT;
 
     if (automationId) {
       const response = await runtime.server.handle({
@@ -66,7 +66,7 @@ async function main() {
         method: "thread/start",
         params: {
           projectId,
-          title: process.env.MY_AGENT_THREAD_TITLE ?? "GitHub Action Run",
+          title: process.env.YELLOW_FLOW_THREAD_TITLE ?? "GitHub Action Run",
         },
       });
 
@@ -95,7 +95,7 @@ async function main() {
       return;
     }
 
-    throw new Error("Provide MY_AGENT_WORKFLOW_ID + MY_AGENT_PROJECT_ID, or MY_AGENT_PROMPT + MY_AGENT_PROJECT_ID.");
+    throw new Error("Provide YELLOW_FLOW_WORKFLOW_ID + YELLOW_FLOW_PROJECT_ID, or YELLOW_FLOW_PROMPT + YELLOW_FLOW_PROJECT_ID.");
   } finally {
     runtime.dispose();
   }
@@ -122,7 +122,7 @@ function writeGithubSummary(mode: string, payload: unknown): void {
     return;
   }
   const body = [
-    `# my-agent ${mode} result`,
+    `# Yellow Flow ${mode} result`,
     "",
     "```json",
     JSON.stringify(payload, null, 2),

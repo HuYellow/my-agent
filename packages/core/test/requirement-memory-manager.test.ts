@@ -2,13 +2,13 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { AgentTaskRecord, ProjectRecord, RequirementRecord, ThreadRecord, WorkflowRecord } from "@my-agent/protocol";
+import type { AgentTaskRecord, ProjectRecord, RequirementRecord, ThreadRecord, WorkflowRecord } from "@yellow-flow/protocol";
 import { RequirementMemoryManager } from "../src/services/requirement-memory-manager.js";
 import { HarnessDatabase } from "../src/store/database.js";
 
 describe("RequirementMemoryManager", () => {
   it("normalizes manual memory and renders a prompt context section", () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-req-memory-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-req-memory-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const project = createProject(database, "project-primary", "Primary Project", root);
     const requirement = createRequirement(database, "requirement-1", project.id);
@@ -41,7 +41,7 @@ describe("RequirementMemoryManager", () => {
   });
 
   it("rebuilds derived memory from linked threads, reviews, workflow runs, and agent outputs", () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-req-memory-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-req-memory-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const primaryProject = createProject(database, "project-primary", "Primary Project", join(root, "primary"));
     const relatedProject = createProject(database, "project-related", "Related Project", join(root, "related"));
@@ -249,7 +249,7 @@ describe("RequirementMemoryManager", () => {
   });
 
   it("renders prompt context in requirement memory order", () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-req-memory-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-req-memory-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const project = createProject(database, "project-primary", "Primary Project", root);
     const requirement = createRequirement(database, "requirement-1", project.id);

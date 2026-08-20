@@ -9,7 +9,7 @@ vi.mock("node:child_process", () => ({
   spawnSync: (...args: unknown[]) => spawnSyncMock(...args),
 }));
 
-import type { ProjectRecord } from "@my-agent/protocol";
+import type { ProjectRecord } from "@yellow-flow/protocol";
 import { WorktreeManager } from "../src/services/worktree-manager.js";
 import { HarnessDatabase } from "../src/store/database.js";
 import { isPathInside } from "../src/utils/path-utils.js";
@@ -43,7 +43,7 @@ describe("WorktreeManager", () => {
 
     expect(worktree.status).toBe("ready");
     expect(worktree.branch).toMatch(/^codex\//);
-    expect(isPathInside(resolve(root, ".my-agent", "worktrees"), worktree.path)).toBe(true);
+    expect(isPathInside(resolve(root, ".yellow-flow", "worktrees"), worktree.path)).toBe(true);
     expect(database.getWorktree(worktree.id)).toMatchObject({
       id: worktree.id,
       status: "ready",
@@ -89,7 +89,7 @@ describe("WorktreeManager", () => {
       branch: "codex/failure-path",
       status: "failed",
     });
-    expect(existsSync(resolve(root, ".my-agent", "worktrees", "codex", "failure-path"))).toBe(false);
+    expect(existsSync(resolve(root, ".yellow-flow", "worktrees", "codex", "failure-path"))).toBe(false);
   });
 
   it("refuses to remove worktrees that point outside the managed root", () => {
@@ -115,7 +115,7 @@ describe("WorktreeManager", () => {
   it("falls back to removing managed directories when git worktree remove fails", () => {
     const { database, project } = createWorktreeHarness();
     const now = new Date().toISOString();
-    const worktreePath = resolve(project.rootPath, ".my-agent", "worktrees", "codex", "cleanup");
+    const worktreePath = resolve(project.rootPath, ".yellow-flow", "worktrees", "codex", "cleanup");
     mkdirSync(worktreePath, { recursive: true });
     spawnSyncMock.mockReturnValue({
       status: 1,
@@ -146,7 +146,7 @@ function createWorktreeHarness(): {
   database: HarnessDatabase;
   project: ProjectRecord;
 } {
-  const root = mkdtempSync(join(tmpdir(), "my-agent-worktree-"));
+  const root = mkdtempSync(join(tmpdir(), "yellow-flow-worktree-"));
   const database = new HarnessDatabase(join(root, "app.db"));
   const now = new Date().toISOString();
   const project = database.createProject({

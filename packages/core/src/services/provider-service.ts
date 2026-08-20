@@ -1,4 +1,4 @@
-import { type ProviderModelRecord, type ProviderProfile } from "@my-agent/protocol";
+import { type ProviderModelRecord, type ProviderProfile } from "@yellow-flow/protocol";
 import { buildLlmEndpointUrl, buildModelsUrl } from "./provider-url.js";
 import { appendLlmRequestLog, buildProviderMetadata, summarizeResponseBody } from "./llm-request-logger.js";
 

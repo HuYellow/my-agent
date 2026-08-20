@@ -1,13 +1,13 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { type WorkspaceProfile } from "@my-agent/protocol";
+import { type WorkspaceProfile } from "@yellow-flow/protocol";
 import { HarnessDatabase } from "../store/database.js";
 import { discoverInternalToolEntries, type InternalToolManifest } from "../services/internal-tool-registry.js";
 import { type JsonSchemaObject, type RuntimeToolCapability, type RuntimeToolDefinition, type RuntimeToolSourceMetadata, type ToolProvider } from "./types.js";
 
 export class InternalToolProvider implements ToolProvider {
   constructor(
-    private readonly homeDir = process.env.MY_AGENT_HOME ?? join(homedir(), ".my-agent"),
+    private readonly homeDir = process.env.YELLOW_FLOW_HOME ?? join(homedir(), ".yellow-flow"),
     private readonly database?: HarnessDatabase,
   ) {}
 

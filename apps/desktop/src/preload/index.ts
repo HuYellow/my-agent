@@ -55,7 +55,7 @@ import {
   type UpdateProjectParams,
   type AutomationRunLogsParams,
   type TemplateScaffoldParams,
-} from "@my-agent/protocol";
+} from "@yellow-flow/protocol";
 
 const api = {
   initialize: () => ipcRenderer.invoke("harness:initialize"),
@@ -82,10 +82,10 @@ const api = {
   updateRequirement: (params: UpdateRequirementParams) =>
     ipcRenderer.invoke("requirement:update", params) as Promise<{ requirement: RequirementRecord; memory: RequirementMemoryRecord }>,
   assignThreadToRequirement: (params: { requirementId: string; threadId: string }) =>
-    ipcRenderer.invoke("requirement:assign-thread", params) as Promise<{ requirement: RequirementRecord; memory: RequirementMemoryRecord; thread: import("@my-agent/protocol").ThreadRecord }>,
+    ipcRenderer.invoke("requirement:assign-thread", params) as Promise<{ requirement: RequirementRecord; memory: RequirementMemoryRecord; thread: import("@yellow-flow/protocol").ThreadRecord }>,
   unassignThreadFromRequirement: (params: { threadId: string }) =>
     ipcRenderer.invoke("requirement:unassign-thread", params) as Promise<{
-      thread: import("@my-agent/protocol").ThreadRecord;
+      thread: import("@yellow-flow/protocol").ThreadRecord;
       requirementId?: string;
       memory?: RequirementMemoryRecord;
     }>,
@@ -107,7 +107,7 @@ const api = {
   resizeTerminal: (params: TerminalResizeParams) => ipcRenderer.invoke("terminal:resize", params) as Promise<{ session: TerminalSessionRecord }>,
   closeTerminal: (params: TerminalCloseParams) => ipcRenderer.invoke("terminal:close", params) as Promise<{ session: TerminalSessionRecord }>,
   respondTerminalApproval: (params: TerminalApprovalResponseParams) =>
-    ipcRenderer.invoke("terminal:approval:respond", params) as Promise<{ session: import("@my-agent/protocol").TerminalSessionRecord }>,
+    ipcRenderer.invoke("terminal:approval:respond", params) as Promise<{ session: import("@yellow-flow/protocol").TerminalSessionRecord }>,
   respondApproval: (params: ApprovalResponseParams) => ipcRenderer.invoke("approval:respond", params),
   listSkills: () => ipcRenderer.invoke("skills:list"),
   writeSkillConfig: (disabledSkillIds: string[]) => ipcRenderer.invoke("skills:config:write", { disabledSkillIds }),
@@ -171,10 +171,10 @@ const api = {
   },
 };
 
-contextBridge.exposeInMainWorld("myAgent", api);
+contextBridge.exposeInMainWorld("yellowFlow", api);
 
 declare global {
   interface Window {
-    myAgent: typeof api;
+    yellowFlow: typeof api;
   }
 }

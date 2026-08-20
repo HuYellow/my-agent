@@ -1,21 +1,21 @@
 {
-  "name": "@my-agent/github-action",
+  "name": "@yellow-flow/github-action",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "my-agent-action": "dist/index.js"
+    "yellow-flow-action": "dist/index.js"
   },
   "scripts": {
-    "build": "npm run build --workspace @my-agent/protocol && npm run build --workspace @my-agent/core && node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
-    "test": "npm run build --workspace @my-agent/protocol && npm run build --workspace @my-agent/core && vitest run --passWithNoTests",
-    "typecheck": "npm run build --workspace @my-agent/protocol && npm run build --workspace @my-agent/core && tsc -p tsconfig.json --noEmit"
+    "build": "npm run build --workspace @yellow-flow/protocol && npm run build --workspace @yellow-flow/core && node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
+    "test": "npm run build --workspace @yellow-flow/protocol && npm run build --workspace @yellow-flow/core && vitest run --passWithNoTests",
+    "typecheck": "npm run build --workspace @yellow-flow/protocol && npm run build --workspace @yellow-flow/core && tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@my-agent/core": "file:../core",
-    "@my-agent/protocol": "file:../protocol",
+    "@yellow-flow/core": "file:../core",
+    "@yellow-flow/protocol": "file:../protocol",
     "yaml": "^2.7.1"
   }
 }

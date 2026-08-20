@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { type EnvironmentRecord, type ProjectRecord } from "@my-agent/protocol";
+import { type EnvironmentRecord, type ProjectRecord } from "@yellow-flow/protocol";
 import { HarnessDatabase } from "../store/database.js";
 import { createId } from "../utils/ids.js";
 

@@ -1,4 +1,4 @@
-﻿import {
+import {
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -86,7 +86,7 @@ import {
   type EnvironmentRecord,
   type WorkflowRecord,
   type WorkflowRunRecord,
-} from "@my-agent/protocol";
+} from "@yellow-flow/protocol";
 import { LoadingShell, PlaceholderPanel, StartupErrorShell } from "./components/shell";
 import { NavButton } from "./components/sidebar";
 import { SettingsNavItem } from "./components/settings";
@@ -108,7 +108,7 @@ type ThemeMode = "light" | "dark";
 type ReviewSourceKind = ReviewRecord["source"]["kind"];
 type ThreadWorkspaceView = "conversation" | "plan" | "review" | "diff" | "runtime";
 
-const SIDEBAR_WIDTH_STORAGE_KEY = "my-agent-sidebar-width-ratio-v2";
+const SIDEBAR_WIDTH_STORAGE_KEY = "yellow-flow-sidebar-width-ratio-v2";
 const SIDEBAR_MIN_RATIO = 0.16;
 const SIDEBAR_MAX_RATIO = 0.34;
 const SIDEBAR_DEFAULT_RATIO = 0.20;
@@ -403,7 +403,7 @@ export function App() {
   }, [bootstrap]);
 
   useEffect(() => {
-    const storedTheme = window.localStorage.getItem("my-agent-theme");
+    const storedTheme = window.localStorage.getItem("yellow-flow-theme");
 
     if (storedTheme === "light" || storedTheme === "dark") {
       setThemeMode(storedTheme);
@@ -416,8 +416,8 @@ export function App() {
 
   useEffect(() => {
     document.documentElement.dataset.theme = themeMode;
-    window.localStorage.setItem("my-agent-theme", themeMode);
-    void window.myAgent.setTitleBarTheme(themeMode);
+    window.localStorage.setItem("yellow-flow-theme", themeMode);
+    void window.yellowFlow.setTitleBarTheme(themeMode);
   }, [themeMode]);
 
   useEffect(() => {
@@ -997,10 +997,10 @@ export function App() {
 
     const loadSkillDocument = async () => {
       try {
-        const readSkillDocument = window.myAgent?.readSkillDocument;
+        const readSkillDocument = window.yellowFlow?.readSkillDocument;
 
         if (typeof readSkillDocument !== "function") {
-          throw new Error("Skill document reader is unavailable. Restart my-agent and try again.");
+          throw new Error("Skill document reader is unavailable. Restart Yellow Flow and try again.");
         }
 
         const { content } = await readSkillDocument(currentSkillDetail.path);
@@ -1033,10 +1033,10 @@ export function App() {
 
   const refreshRuntimeSurfaces = async (projectId = activeProjectId) => {
     const [pluginsResult, internalToolsResult, mcpMountsResult, mcpSessionsResult] = await Promise.all([
-      window.myAgent.listPlugins({ projectId }),
-      window.myAgent.listInternalTools({ projectId }),
-      window.myAgent.listMcpMounts(),
-      window.myAgent.listMcpSessions(),
+      window.yellowFlow.listPlugins({ projectId }),
+      window.yellowFlow.listInternalTools({ projectId }),
+      window.yellowFlow.listMcpMounts(),
+      window.yellowFlow.listMcpSessions(),
     ]);
 
     setRuntimePlugins(pluginsResult.plugins);
@@ -1075,7 +1075,7 @@ export function App() {
 
       try {
         const scope = activeThreadId ? { threadId: activeThreadId, cwd: activeProject.rootPath } : { cwd: activeProject.rootPath };
-        const repoCheck = await window.myAgent.execCommand({
+        const repoCheck = await window.yellowFlow.execCommand({
           ...scope,
           command: "git rev-parse --is-inside-work-tree",
         });
@@ -1095,11 +1095,11 @@ export function App() {
         }
 
         const [currentResult, branchesResult] = await Promise.all([
-          window.myAgent.execCommand({
+          window.yellowFlow.execCommand({
             ...scope,
             command: "git branch --show-current",
           }),
-          window.myAgent.execCommand({
+          window.yellowFlow.execCommand({
             ...scope,
             command: 'git for-each-ref --format="%(refname:short)" refs/heads',
           }),
@@ -1222,7 +1222,7 @@ export function App() {
   };
 
   const handleCreateProject = async () => {
-    const picked = await window.myAgent.pickWorkspace();
+    const picked = await window.yellowFlow.pickWorkspace();
 
     if (!picked) {
       return;
@@ -1252,7 +1252,7 @@ export function App() {
   ) => {
     const rect = event.currentTarget.getBoundingClientRect();
 
-    void window.myAgent.showAppMenu({
+    void window.yellowFlow.showAppMenu({
       menuId,
       x: Math.round(rect.left),
       y: Math.round(rect.bottom + 6),
@@ -1260,7 +1260,7 @@ export function App() {
   };
 
   const handlePickFiles = async () => {
-    const pickedFiles = await window.myAgent.pickFiles();
+    const pickedFiles = await window.yellowFlow.pickFiles();
 
     if (pickedFiles.length === 0) {
       return;
@@ -1279,7 +1279,7 @@ export function App() {
     }
 
     const scope = activeThreadId ? { threadId: activeThreadId, cwd: activeProject.rootPath } : { cwd: activeProject.rootPath };
-    const result = await window.myAgent.execCommand({
+    const result = await window.yellowFlow.execCommand({
       ...scope,
       command: `git checkout ${quoteGitPath(branchName)}`,
     });
@@ -1315,7 +1315,7 @@ export function App() {
     }
 
     const scope = activeThreadId ? { threadId: activeThreadId, cwd: activeProject.rootPath } : { cwd: activeProject.rootPath };
-    const result = await window.myAgent.execCommand({
+    const result = await window.yellowFlow.execCommand({
       ...scope,
       command: `git checkout -b ${quoteGitPath(trimmed)}`,
     });
@@ -1426,7 +1426,7 @@ export function App() {
       return;
     }
 
-    const result = await window.myAgent.createTerminal({
+    const result = await window.yellowFlow.createTerminal({
       threadId: activeThreadId,
       cols: 120,
       rows: 30,
@@ -1441,7 +1441,7 @@ export function App() {
       return;
     }
 
-    await window.myAgent.writeTerminal({
+    await window.yellowFlow.writeTerminal({
       sessionId: activeTerminal.id,
       input: `${command}${command.endsWith("\n") ? "" : "\n"}`,
     });
@@ -1453,7 +1453,7 @@ export function App() {
       return;
     }
 
-    await window.myAgent.closeTerminal({ sessionId: activeTerminal.id });
+    await window.yellowFlow.closeTerminal({ sessionId: activeTerminal.id });
   };
 
   const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -1539,7 +1539,7 @@ export function App() {
         <div className="app-toolbar__controls">
           <button
             className="app-toolbar__control"
-            onClick={() => window.myAgent.windowMinimize()}
+            onClick={() => window.yellowFlow.windowMinimize()}
             aria-label="Minimize"
             title="Minimize"
           >
@@ -1547,7 +1547,7 @@ export function App() {
           </button>
           <button
             className="app-toolbar__control"
-            onClick={() => window.myAgent.windowToggleFullscreen()}
+            onClick={() => window.yellowFlow.windowToggleFullscreen()}
             aria-label="Toggle fullscreen"
             title="Toggle fullscreen"
           >
@@ -1555,7 +1555,7 @@ export function App() {
           </button>
           <button
             className="app-toolbar__control app-toolbar__control--close"
-            onClick={() => window.myAgent.windowClose()}
+            onClick={() => window.yellowFlow.windowClose()}
             aria-label="Close"
             title="Close"
           >
@@ -1910,11 +1910,11 @@ export function App() {
                 onOpen={() => void createTerminalSession()}
                 onSend={() => void sendTerminalInput()}
                 onClose={() => void closeTerminalSession()}
-                onArchive={(sessionId) => void window.myAgent.archiveTerminal({ sessionId, reason: "manual_archive" })}
-                onClear={(sessionId) => void window.myAgent.clearTerminal({ sessionId })}
-                onApproveOnce={(sessionId) => void window.myAgent.respondTerminalApproval({ sessionId, decision: "approve", scope: "once" })}
-                onApproveSession={(sessionId) => void window.myAgent.respondTerminalApproval({ sessionId, decision: "approve", scope: "session" })}
-                onReject={(sessionId) => void window.myAgent.respondTerminalApproval({ sessionId, decision: "reject" })}
+                onArchive={(sessionId) => void window.yellowFlow.archiveTerminal({ sessionId, reason: "manual_archive" })}
+                onClear={(sessionId) => void window.yellowFlow.clearTerminal({ sessionId })}
+                onApproveOnce={(sessionId) => void window.yellowFlow.respondTerminalApproval({ sessionId, decision: "approve", scope: "once" })}
+                onApproveSession={(sessionId) => void window.yellowFlow.respondTerminalApproval({ sessionId, decision: "approve", scope: "session" })}
+                onReject={(sessionId) => void window.yellowFlow.respondTerminalApproval({ sessionId, decision: "reject" })}
               />
             )}
 
@@ -2027,10 +2027,10 @@ export function App() {
             terminalCapabilities={terminalCapabilities}
             activeProjectId={activeProjectId}
             onRespondTerminalApproval={(sessionId, decision, scope) =>
-              window.myAgent.respondTerminalApproval({ sessionId, decision, scope })
+              window.yellowFlow.respondTerminalApproval({ sessionId, decision, scope })
             }
             onUpdatePlugin={async (pluginId, patch) => {
-              await window.myAgent.updatePlugin({ pluginId, patch });
+              await window.yellowFlow.updatePlugin({ pluginId, patch });
               await Promise.all([
                 refreshToolCatalog(activeProjectId ? { projectId: activeProjectId } : undefined),
                 refreshRuntimeSurfaces(activeProjectId),
@@ -2044,14 +2044,14 @@ export function App() {
               ]);
             }}
             onUpdateInternalTool={async (internalToolId, patch) => {
-              await window.myAgent.updateInternalTool({ internalToolId, patch });
+              await window.yellowFlow.updateInternalTool({ internalToolId, patch });
               await Promise.all([
                 refreshToolCatalog(activeProjectId ? { projectId: activeProjectId } : undefined),
                 refreshRuntimeSurfaces(activeProjectId),
               ]);
             }}
             onRefreshMount={async (mountId) => {
-              await window.myAgent.refreshMcpMount(mountId);
+              await window.yellowFlow.refreshMcpMount(mountId);
               await Promise.all([
                 refreshToolCatalog(activeProjectId ? { projectId: activeProjectId } : undefined),
                 refreshRuntimeSurfaces(activeProjectId),
@@ -2077,10 +2077,10 @@ export function App() {
             onRunAutomation={(automationId) => runAutomation(automationId)}
             onRunWorkflow={(workflowId) =>
               activeProjectId
-                ? window.myAgent.runWorkflow({ workflowId, projectId: activeProjectId })
+                ? window.yellowFlow.runWorkflow({ workflowId, projectId: activeProjectId })
                 : Promise.resolve(null)
             }
-            onResumeWorkflow={(params) => window.myAgent.resumeWorkflow(params)}
+            onResumeWorkflow={(params) => window.yellowFlow.resumeWorkflow(params)}
           />
         ) : (
             <SettingsPanel
@@ -2122,7 +2122,7 @@ export function App() {
               ])
             }
             onPickWorkspace={async () => {
-              const picked = await window.myAgent.pickWorkspace();
+              const picked = await window.yellowFlow.pickWorkspace();
               if (picked) {
                 setProviderForm((state) => ({ ...state, rootPath: picked }));
               }
@@ -2173,7 +2173,7 @@ export function App() {
                       title="Open skill folder"
                       onClick={() =>
                         currentSkillDetail
-                          ? window.myAgent.revealSkillPath(currentSkillDetail.path).catch(() => null)
+                          ? window.yellowFlow.revealSkillPath(currentSkillDetail.path).catch(() => null)
                           : Promise.resolve(undefined)
                       }
                     >
@@ -2490,7 +2490,7 @@ function ThreadsPanel({
 }: {
   projects: ProjectRecord[];
   activeProjectId?: string;
-  threads: import("@my-agent/protocol").ThreadRecord[];
+  threads: import("@yellow-flow/protocol").ThreadRecord[];
   activeThreadId?: string;
   workingThreadIds: Set<string>;
   search: string;
@@ -3185,8 +3185,8 @@ function RuntimePluginsPanel({
   onUpdateInternalTool,
   onRefreshMount,
 }: {
-  compatibility?: import("@my-agent/protocol").ProtocolCompatibilityRecord;
-  tools: import("@my-agent/protocol").ToolCatalogRecord[];
+  compatibility?: import("@yellow-flow/protocol").ProtocolCompatibilityRecord;
+  tools: import("@yellow-flow/protocol").ToolCatalogRecord[];
   plugins: PluginRecord[];
   internalTools: InternalToolRecord[];
   mcpMounts: McpMountRecord[];
@@ -3450,7 +3450,7 @@ function RuntimePluginsPanel({
             </div>
             <p>{plugin.path}</p>
             <pre>
-              format={plugin.format ?? "my-agent"}
+              format={plugin.format ?? "yellow-flow"}
               {`\n`}source={formatPluginInstallSource(plugin.installSource)}
               {plugin.marketplaceName ? `\nmarketplace=${plugin.marketplaceName}` : ""}
               {`\n`}components={formatPluginComponents(plugin.components)}
@@ -4626,7 +4626,7 @@ function SettingsPanel({
 }: {
   project?: ProjectRecord;
   templates: DistributionTemplateRecord[];
-  protocolCompatibility?: import("@my-agent/protocol").ProtocolCompatibilityRecord;
+  protocolCompatibility?: import("@yellow-flow/protocol").ProtocolCompatibilityRecord;
   providerForm: ProviderFormState;
   setProviderForm: React.Dispatch<React.SetStateAction<ProviderFormState>>;
   providerTestMessage?: string;
@@ -4775,7 +4775,7 @@ function DistributionTemplatesCard({
 }: {
   project?: ProjectRecord;
   templates: DistributionTemplateRecord[];
-  protocolCompatibility?: import("@my-agent/protocol").ProtocolCompatibilityRecord;
+  protocolCompatibility?: import("@yellow-flow/protocol").ProtocolCompatibilityRecord;
   onScaffoldTemplate: (params: {
     templateId: string;
     projectId?: string;
@@ -5108,8 +5108,8 @@ function EmptyState() {
       <div className="empty-state__icon">
         <MessageSquarePlus size={48} />
       </div>
-      <h2>要在 my-agent 中构建什么？</h2>
-      <p>向 my-agent 描述你的想法，或粘贴图片和文件开始协作。</p>
+      <h2>要在 Yellow Flow 中构建什么？</h2>
+      <p>向 Yellow Flow 描述你的想法，或粘贴图片和文件开始协作。</p>
     </div>
   );
 }
@@ -6405,7 +6405,7 @@ function TerminalCard({
   sessions: TerminalSessionRecord[];
   session: TerminalSessionRecord | null;
   selectedSessionId: string | null;
-  archives: import("@my-agent/protocol").TerminalOutputArchiveRecord[];
+  archives: import("@yellow-flow/protocol").TerminalOutputArchiveRecord[];
   output: string;
   input: string;
   onInputChange: (value: string) => void;
@@ -6818,7 +6818,7 @@ function ComposerBar({
           <textarea
             ref={textareaRef}
             className="composer-input"
-            placeholder="问 my-agent 任何事。输入 @ 使用插件或提交文件"
+            placeholder="问 Yellow Flow 任何事。输入 @ 使用插件或提交文件"
             value={input}
             onChange={(e) => handleInputChange(e.target.value, e.target.selectionStart)}
             onKeyDown={handleTextareaKeyDown}
@@ -7808,7 +7808,7 @@ async function loadChangedFileSummaries(
   }
 
   const command = `git -c core.quotepath=false diff --numstat --no-ext-diff -- ${paths.map(quoteGitPath).join(" ")}`;
-  const result = await window.myAgent.execCommand({ threadId, command });
+  const result = await window.yellowFlow.execCommand({ threadId, command });
   const output = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
 
   if (result.code !== 0 && !output) {
@@ -7820,7 +7820,7 @@ async function loadChangedFileSummaries(
 
 async function loadChangedFileDiff(threadId: string, path: string): Promise<string> {
   const command = `git -c core.quotepath=false diff --no-ext-diff --unified=3 -- ${quoteGitPath(path)}`;
-  const result = await window.myAgent.execCommand({ threadId, command });
+  const result = await window.yellowFlow.execCommand({ threadId, command });
 
   if (result.code !== 0 && !result.stdout.trim()) {
     const message = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();

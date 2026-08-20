@@ -1,4 +1,4 @@
-import { type RuntimeKernel } from "@my-agent/core/runtime-kernel";
+import { type RuntimeKernel } from "@yellow-flow/core/runtime-kernel";
 
 export class AutomationScheduler {
   private intervalHandle: ReturnType<typeof setInterval> | null = null;

@@ -63,11 +63,11 @@ import {
   type UpdateThreadParams,
   type UpdateProjectParams,
   type TemplateScaffoldParams,
-} from "@my-agent/protocol";
+} from "@yellow-flow/protocol";
 
 declare global {
   interface Window {
-    myAgent: {
+    yellowFlow: {
       initialize: () => Promise<InitializeResult>;
       createProject: (params: CreateProjectParams) => Promise<{ project: ProjectRecord }>;
       updateProject: (params: UpdateProjectParams) => Promise<{ project: ProjectRecord }>;

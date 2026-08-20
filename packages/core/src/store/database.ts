@@ -34,9 +34,9 @@ import {
   type WorkspaceProfile,
   type WorkflowRecord,
   type WorkflowRunRecord,
-} from "@my-agent/protocol";
+} from "@yellow-flow/protocol";
 import { detectProviderCapabilities } from "../services/provider-capabilities.js";
-import { mergeStoredProviderConfig } from "../services/my-agent-config.js";
+import { mergeStoredProviderConfig } from "../services/yellow-flow-config.js";
 
 const DEFAULT_PROVIDER = {
   id: "default-provider",
@@ -1125,7 +1125,7 @@ export class HarnessDatabase {
     this.db.prepare("DELETE FROM terminal_approval_rules WHERE session_id = ?").run(sessionId);
   }
 
-  createTerminalOutputArchive(archive: import("@my-agent/protocol").TerminalOutputArchiveRecord): import("@my-agent/protocol").TerminalOutputArchiveRecord {
+  createTerminalOutputArchive(archive: import("@yellow-flow/protocol").TerminalOutputArchiveRecord): import("@yellow-flow/protocol").TerminalOutputArchiveRecord {
     this.db
       .prepare(
         "INSERT INTO terminal_output_archives(id, session_id, thread_id, reason, output, created_at) VALUES(?, ?, ?, ?, ?, ?)",
@@ -1134,7 +1134,7 @@ export class HarnessDatabase {
     return archive;
   }
 
-  listTerminalOutputArchives(sessionId?: string): import("@my-agent/protocol").TerminalOutputArchiveRecord[] {
+  listTerminalOutputArchives(sessionId?: string): import("@yellow-flow/protocol").TerminalOutputArchiveRecord[] {
     const rows = sessionId
       ? (this.db.prepare("SELECT * FROM terminal_output_archives WHERE session_id = ? ORDER BY created_at DESC").all(sessionId) as Record<string, unknown>[])
       : (this.db.prepare("SELECT * FROM terminal_output_archives ORDER BY created_at DESC").all() as Record<string, unknown>[]);
@@ -1969,12 +1969,12 @@ export class HarnessDatabase {
     };
   }
 
-  private mapTerminalOutputArchive(row: Record<string, unknown>): import("@my-agent/protocol").TerminalOutputArchiveRecord {
+  private mapTerminalOutputArchive(row: Record<string, unknown>): import("@yellow-flow/protocol").TerminalOutputArchiveRecord {
     return {
       id: String(row.id),
       sessionId: String(row.session_id),
       threadId: row.thread_id ? String(row.thread_id) : undefined,
-      reason: String(row.reason) as import("@my-agent/protocol").TerminalOutputArchiveRecord["reason"],
+      reason: String(row.reason) as import("@yellow-flow/protocol").TerminalOutputArchiveRecord["reason"],
       output: String(row.output),
       createdAt: String(row.created_at),
     };

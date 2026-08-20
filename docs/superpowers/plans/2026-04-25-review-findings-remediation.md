@@ -47,7 +47,7 @@ it("blocks shell commands that reference absolute paths outside the workspace", 
     sandboxMode: "workspace-write",
     approvalPolicy: "never",
   });
-  const outsidePath = join(tmpdir(), `my-agent-outside-${Date.now()}.txt`);
+  const outsidePath = join(tmpdir(), `yellow-flow-outside-${Date.now()}.txt`);
   writeFileSync(outsidePath, "outside secret", "utf8");
   const service = new ToolService(workspace, { database, threadId: "thread-1" });
   const command = process.platform === "win32" ? `Get-Content ${JSON.stringify(outsidePath)}` : `cat ${JSON.stringify(outsidePath)}`;
@@ -67,7 +67,7 @@ it("blocks shell commands that reference absolute paths outside the workspace", 
 Run:
 
 ```powershell
-npm run test --workspace @my-agent/core -- test/tool-service.test.ts -t "blocks shell commands that reference absolute paths outside the workspace"
+npm run test --workspace @yellow-flow/core -- test/tool-service.test.ts -t "blocks shell commands that reference absolute paths outside the workspace"
 ```
 
 Expected before implementation: FAIL because `plan.permission.allowed` is `true` or execution reads the outside file.
@@ -104,8 +104,8 @@ Add helper objects or inline workspace records and two tests:
 
 ```ts
 it("rejects terminal cwd outside the workspace before spawning", () => {
-  const root = mkdtempSync(join(tmpdir(), "my-agent-terminal-"));
-  const outside = mkdtempSync(join(tmpdir(), "my-agent-terminal-outside-"));
+  const root = mkdtempSync(join(tmpdir(), "yellow-flow-terminal-"));
+  const outside = mkdtempSync(join(tmpdir(), "yellow-flow-terminal-outside-"));
   const database = new HarnessDatabase(join(root, "app.db"));
   const manager = new TerminalManager(database, () => undefined, () => undefined, () => undefined, () => undefined);
 
@@ -126,7 +126,7 @@ it("rejects terminal cwd outside the workspace before spawning", () => {
 });
 
 it("rejects unexpected terminal shells before spawning", () => {
-  const root = mkdtempSync(join(tmpdir(), "my-agent-terminal-"));
+  const root = mkdtempSync(join(tmpdir(), "yellow-flow-terminal-"));
   const database = new HarnessDatabase(join(root, "app.db"));
   const manager = new TerminalManager(database, () => undefined, () => undefined, () => undefined, () => undefined);
 
@@ -152,7 +152,7 @@ it("rejects unexpected terminal shells before spawning", () => {
 Run:
 
 ```powershell
-npm run test --workspace @my-agent/core -- test/terminal-manager.test.ts -t "rejects terminal"
+npm run test --workspace @yellow-flow/core -- test/terminal-manager.test.ts -t "rejects terminal"
 ```
 
 Expected before implementation: FAIL because backend spawn is attempted or no error is thrown.
@@ -191,7 +191,7 @@ Use those helpers before `this.defaultBackend.start()`.
 Run:
 
 ```powershell
-npm run test --workspace @my-agent/core -- test/terminal-manager.test.ts
+npm run test --workspace @yellow-flow/core -- test/terminal-manager.test.ts
 ```
 
 Expected: PASS.
@@ -236,7 +236,7 @@ it("includes staged-only changes in workspace reviews", async () => {
 Run:
 
 ```powershell
-npm run test --workspace @my-agent/core -- test/review-manager.test.ts -t "includes staged-only changes in workspace reviews"
+npm run test --workspace @yellow-flow/core -- test/review-manager.test.ts -t "includes staged-only changes in workspace reviews"
 ```
 
 Expected before implementation: FAIL because only `git diff` runs and the review completes with "No diff is available for review."
@@ -266,7 +266,7 @@ function joinDiffs(...diffs: string[]): string {
 Run:
 
 ```powershell
-npm run test --workspace @my-agent/core -- test/review-manager.test.ts
+npm run test --workspace @yellow-flow/core -- test/review-manager.test.ts
 ```
 
 Expected: PASS.
@@ -337,9 +337,9 @@ Expected: exit 0 or no production vulnerabilities. If audit still reports the sa
 - [ ] **Step 1: Run targeted regression tests**
 
 ```powershell
-npm run test --workspace @my-agent/core -- test/tool-service.test.ts -t "blocks shell commands that reference absolute paths outside the workspace"
-npm run test --workspace @my-agent/core -- test/terminal-manager.test.ts
-npm run test --workspace @my-agent/core -- test/review-manager.test.ts
+npm run test --workspace @yellow-flow/core -- test/tool-service.test.ts -t "blocks shell commands that reference absolute paths outside the workspace"
+npm run test --workspace @yellow-flow/core -- test/terminal-manager.test.ts
+npm run test --workspace @yellow-flow/core -- test/review-manager.test.ts
 ```
 
 - [ ] **Step 2: Run repo-level verification**

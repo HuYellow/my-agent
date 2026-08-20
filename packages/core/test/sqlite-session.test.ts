@@ -7,7 +7,7 @@ import { HarnessDatabase } from "../src/store/database.js";
 
 describe("SqliteSession", () => {
   it("stores and retrieves session history in order", async () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-session-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-session-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const session = new SqliteSession(database, "thread-1");
 

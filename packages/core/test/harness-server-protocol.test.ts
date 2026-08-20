@@ -2,12 +2,12 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { WorkflowRecord } from "@my-agent/protocol";
+import type { WorkflowRecord } from "@yellow-flow/protocol";
 import { createRuntimeKernel } from "../src/runtime-kernel.js";
 
 describe("HarnessServer protocol compatibility", () => {
   it("accepts review/list, requirement/list, automation/list/logs, template scaffolding, plugin/internal tool management, and turn/steer methods", async () => {
-    const homeDir = mkdtempSync(join(tmpdir(), "my-agent-kernel-"));
+    const homeDir = mkdtempSync(join(tmpdir(), "yellow-flow-kernel-"));
     const kernel = createRuntimeKernel({
       homeDir,
       emitEvent: () => undefined,
@@ -143,7 +143,7 @@ describe("HarnessServer protocol compatibility", () => {
   });
 
   it("returns structured tool error data for RPC failures", async () => {
-    const homeDir = mkdtempSync(join(tmpdir(), "my-agent-kernel-"));
+    const homeDir = mkdtempSync(join(tmpdir(), "yellow-flow-kernel-"));
     const kernel = createRuntimeKernel({
       homeDir,
       emitEvent: () => undefined,
@@ -181,7 +181,7 @@ describe("HarnessServer protocol compatibility", () => {
   });
 
   it("exposes protocol compatibility metadata and governed tool sources during initialize", async () => {
-    const homeDir = mkdtempSync(join(tmpdir(), "my-agent-kernel-"));
+    const homeDir = mkdtempSync(join(tmpdir(), "yellow-flow-kernel-"));
     const kernel = createRuntimeKernel({
       homeDir,
       emitEvent: () => undefined,
@@ -207,7 +207,7 @@ describe("HarnessServer protocol compatibility", () => {
   });
 
   it("returns structured plan and diff snapshots when resuming a thread", async () => {
-    const homeDir = mkdtempSync(join(tmpdir(), "my-agent-kernel-"));
+    const homeDir = mkdtempSync(join(tmpdir(), "yellow-flow-kernel-"));
     const kernel = createRuntimeKernel({
       homeDir,
       emitEvent: () => undefined,
@@ -276,7 +276,7 @@ describe("HarnessServer protocol compatibility", () => {
   });
 
   it("inherits selected requirement for review, workflow, and automation entrypoints", async () => {
-    const homeDir = mkdtempSync(join(tmpdir(), "my-agent-kernel-"));
+    const homeDir = mkdtempSync(join(tmpdir(), "yellow-flow-kernel-"));
     const kernel = createRuntimeKernel({
       homeDir,
       emitEvent: () => undefined,
@@ -361,7 +361,7 @@ describe("HarnessServer protocol compatibility", () => {
   });
 
   it("uses thread requirement before selected requirement and returns refreshed memory when unassigning", async () => {
-    const homeDir = mkdtempSync(join(tmpdir(), "my-agent-kernel-"));
+    const homeDir = mkdtempSync(join(tmpdir(), "yellow-flow-kernel-"));
     const kernel = createRuntimeKernel({
       homeDir,
       emitEvent: () => undefined,

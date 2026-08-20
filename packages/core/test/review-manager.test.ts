@@ -9,7 +9,7 @@ vi.mock("node:child_process", () => ({
   spawnSync: (...args: unknown[]) => spawnSyncMock(...args),
 }));
 
-import type { ProjectRecord, ReviewRecord, ReviewSource } from "@my-agent/protocol";
+import type { ProjectRecord, ReviewRecord, ReviewSource } from "@yellow-flow/protocol";
 import { ReviewManager } from "../src/services/review-manager.js";
 import { HarnessDatabase } from "../src/store/database.js";
 
@@ -28,7 +28,7 @@ describe("ReviewManager", () => {
     ["base_branch", ["-c", "core.quotepath=false", "diff", "--no-ext-diff", "--unified=3", "main...HEAD"]],
     ["commit", ["-c", "core.quotepath=false", "show", "--no-ext-diff", "--format=medium", "--stat", "--patch", "abc123"]],
   ] as const)("reviews %s diff sources and stores structured findings", async (kind, expectedArgs) => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-review-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-review-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const project = database.listProjects()[0]!;
     const now = new Date().toISOString();
@@ -202,7 +202,7 @@ function configuredProvider() {
 }
 
 function createReviewHarness() {
-  const root = mkdtempSync(join(tmpdir(), "my-agent-review-"));
+  const root = mkdtempSync(join(tmpdir(), "yellow-flow-review-"));
   const database = new HarnessDatabase(join(root, "app.db"));
   const project = database.listProjects()[0]!;
   const now = new Date().toISOString();

@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { type WorkspaceProfile } from "@my-agent/protocol";
+import { type WorkspaceProfile } from "@yellow-flow/protocol";
 import { z } from "zod";
 import {
   type RuntimeToolCapability,

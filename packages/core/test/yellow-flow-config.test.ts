@@ -4,30 +4,30 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   ensureStoredProviderConfig,
-  getDefaultMyAgentHomeDir,
+  getDefaultYellowFlowHomeDir,
   loadStoredProviderConfig,
   parseTomlDocument,
   serializeTomlDocument,
   syncStoredProviderConfig,
   watchStoredConfig,
-} from "../src/services/my-agent-config.js";
+} from "../src/services/yellow-flow-config.js";
 
-const ORIGINAL_MY_AGENT_HOME = process.env.MY_AGENT_HOME;
+const ORIGINAL_YELLOW_FLOW_HOME = process.env.YELLOW_FLOW_HOME;
 
 afterEach(() => {
-  if (ORIGINAL_MY_AGENT_HOME === undefined) {
-    delete process.env.MY_AGENT_HOME;
+  if (ORIGINAL_YELLOW_FLOW_HOME === undefined) {
+    delete process.env.YELLOW_FLOW_HOME;
   } else {
-    process.env.MY_AGENT_HOME = ORIGINAL_MY_AGENT_HOME;
+    process.env.YELLOW_FLOW_HOME = ORIGINAL_YELLOW_FLOW_HOME;
   }
 });
 
-describe("my-agent file config integration", () => {
-  it("loads provider and auth from ~/.my-agent files", () => {
-    const myAgentHome = mkdtempSync(join(tmpdir(), "my-agent-home-"));
-    process.env.MY_AGENT_HOME = myAgentHome;
+describe("yellow-flow file config integration", () => {
+  it("loads provider and auth from ~/.yellow-flow files", () => {
+    const yellowFlowHome = mkdtempSync(join(tmpdir(), "yellow-flow-home-"));
+    process.env.YELLOW_FLOW_HOME = yellowFlowHome;
     writeFileSync(
-      join(myAgentHome, "config.toml"),
+      join(yellowFlowHome, "config.toml"),
       [
         'model_provider = "sub2api"',
         'model = "gpt-5.4"',
@@ -42,13 +42,13 @@ describe("my-agent file config integration", () => {
       ].join("\n"),
       "utf8",
     );
-    writeFileSync(join(myAgentHome, "auth.json"), JSON.stringify({ OPENAI_API_KEY: "sk-test" }, null, 2), "utf8");
+    writeFileSync(join(yellowFlowHome, "auth.json"), JSON.stringify({ OPENAI_API_KEY: "sk-test" }, null, 2), "utf8");
 
     const loaded = loadStoredProviderConfig();
 
-    expect(getDefaultMyAgentHomeDir()).toBe(myAgentHome);
+    expect(getDefaultYellowFlowHomeDir()).toBe(yellowFlowHome);
     expect(loaded?.provider).toMatchObject({
-      id: "my-agent:sub2api",
+      id: "yellow-flow:sub2api",
       name: "sub2api",
       baseUrl: "https://aixj.vip",
       apiKey: "sk-test",
@@ -59,8 +59,8 @@ describe("my-agent file config integration", () => {
   });
 
   it("syncs provider changes back to config.toml and auth.json", () => {
-    const myAgentHome = mkdtempSync(join(tmpdir(), "my-agent-home-"));
-    process.env.MY_AGENT_HOME = myAgentHome;
+    const yellowFlowHome = mkdtempSync(join(tmpdir(), "yellow-flow-home-"));
+    process.env.YELLOW_FLOW_HOME = yellowFlowHome;
 
     syncStoredProviderConfig({
       id: "codex:sub2api",
@@ -72,12 +72,12 @@ describe("my-agent file config integration", () => {
       reasoningEffort: "minimal",
     });
 
-    expect(existsSync(join(myAgentHome, "config.toml"))).toBe(true);
-    expect(readFileSync(join(myAgentHome, "auth.json"), "utf8")).toContain("sk-new");
+    expect(existsSync(join(yellowFlowHome, "config.toml"))).toBe(true);
+    expect(readFileSync(join(yellowFlowHome, "auth.json"), "utf8")).toContain("sk-new");
 
     const loaded = loadStoredProviderConfig();
     expect(loaded?.provider).toMatchObject({
-      id: "my-agent:sub2api",
+      id: "yellow-flow:sub2api",
       baseUrl: "https://api.deepseek.com",
       apiKey: "sk-new",
       model: "deepseek-chat",
@@ -107,10 +107,10 @@ describe("my-agent file config integration", () => {
   });
 
   it("watches config file changes", async () => {
-    const myAgentHome = mkdtempSync(join(tmpdir(), "my-agent-home-"));
-    process.env.MY_AGENT_HOME = myAgentHome;
+    const yellowFlowHome = mkdtempSync(join(tmpdir(), "yellow-flow-home-"));
+    process.env.YELLOW_FLOW_HOME = yellowFlowHome;
     writeFileSync(
-      join(myAgentHome, "config.toml"),
+      join(yellowFlowHome, "config.toml"),
       [
         'model_provider = "sub2api"',
         'model = "gpt-5.4"',
@@ -132,14 +132,14 @@ describe("my-agent file config integration", () => {
       });
     });
 
-    writeFileSync(join(myAgentHome, "auth.json"), JSON.stringify({ OPENAI_API_KEY: "sk-live" }, null, 2), "utf8");
+    writeFileSync(join(yellowFlowHome, "auth.json"), JSON.stringify({ OPENAI_API_KEY: "sk-live" }, null, 2), "utf8");
 
     await changed;
   });
 
   it("creates missing config files from the current provider", () => {
-    const myAgentHome = mkdtempSync(join(tmpdir(), "my-agent-home-"));
-    process.env.MY_AGENT_HOME = myAgentHome;
+    const yellowFlowHome = mkdtempSync(join(tmpdir(), "yellow-flow-home-"));
+    process.env.YELLOW_FLOW_HOME = yellowFlowHome;
 
     ensureStoredProviderConfig({
       id: "default-provider",
@@ -151,15 +151,15 @@ describe("my-agent file config integration", () => {
       reasoningEffort: "minimal",
     });
 
-    expect(existsSync(join(myAgentHome, "config.toml"))).toBe(true);
-    expect(existsSync(join(myAgentHome, "auth.json"))).toBe(true);
+    expect(existsSync(join(yellowFlowHome, "config.toml"))).toBe(true);
+    expect(existsSync(join(yellowFlowHome, "auth.json"))).toBe(true);
   });
 
   it("falls back from legacy ai_sdk provider config to responses", () => {
-    const myAgentHome = mkdtempSync(join(tmpdir(), "my-agent-home-"));
-    process.env.MY_AGENT_HOME = myAgentHome;
+    const yellowFlowHome = mkdtempSync(join(tmpdir(), "yellow-flow-home-"));
+    process.env.YELLOW_FLOW_HOME = yellowFlowHome;
     writeFileSync(
-      join(myAgentHome, "config.toml"),
+      join(yellowFlowHome, "config.toml"),
       [
         'model_provider = "legacy"',
         'model = "gpt-5.4"',
@@ -173,7 +173,7 @@ describe("my-agent file config integration", () => {
       ].join("\n"),
       "utf8",
     );
-    writeFileSync(join(myAgentHome, "auth.json"), JSON.stringify({ OPENAI_API_KEY: "sk-test" }, null, 2), "utf8");
+    writeFileSync(join(yellowFlowHome, "auth.json"), JSON.stringify({ OPENAI_API_KEY: "sk-test" }, null, 2), "utf8");
 
     expect(loadStoredProviderConfig()?.provider.apiFlavor).toBe("responses");
   });

@@ -7,7 +7,7 @@ describe("github-action automation support", () => {
     const source = readFileSync(join(process.cwd(), "src", "index.ts"), "utf8");
     const manifest = readFileSync(join(process.cwd(), "action.yml"), "utf8");
 
-    expect(source).toContain("MY_AGENT_AUTOMATION_ID");
+    expect(source).toContain("YELLOW_FLOW_AUTOMATION_ID");
     expect(source).toContain('method: "automation/run"');
     expect(source).toContain('trigger: "github_action"');
     expect(source).toContain('runner: "github-action"');

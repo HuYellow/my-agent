@@ -2,14 +2,14 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { ProjectRecord } from "@my-agent/protocol";
+import type { ProjectRecord } from "@yellow-flow/protocol";
 import { InternalToolManager } from "../src/services/internal-tool-manager.js";
 import { HarnessDatabase } from "../src/store/database.js";
 
 describe("InternalToolManager", () => {
   it("discovers repo and user internal tools with validation metadata", () => {
-    const repoRoot = mkdtempSync(join(tmpdir(), "my-agent-internal-tools-repo-"));
-    const homeDir = join(mkdtempSync(join(tmpdir(), "my-agent-internal-tools-home-")), ".my-agent");
+    const repoRoot = mkdtempSync(join(tmpdir(), "yellow-flow-internal-tools-repo-"));
+    const homeDir = join(mkdtempSync(join(tmpdir(), "yellow-flow-internal-tools-home-")), ".yellow-flow");
     mkdirSync(join(repoRoot, ".git"), { recursive: true });
     writeInternalToolManifest(join(repoRoot, ".agents", "internal-tools", "notify.json"), {
       name: "notify_team",
@@ -71,10 +71,10 @@ describe("InternalToolManager", () => {
   });
 
   it("updates persisted internal tool state and rejects unknown tool ids", () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-internal-tool-update-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-internal-tool-update-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const now = new Date().toISOString();
-    const manager = new InternalToolManager(database, () => undefined, join(root, ".my-agent"));
+    const manager = new InternalToolManager(database, () => undefined, join(root, ".yellow-flow"));
 
     database.upsertInternalTool({
       id: "internal-tool-1",

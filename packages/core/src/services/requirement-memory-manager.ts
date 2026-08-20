@@ -10,7 +10,7 @@ import {
   type RequirementManualMemoryRecord,
   type RequirementMemoryRecord,
   type RequirementRecord,
-} from "@my-agent/protocol";
+} from "@yellow-flow/protocol";
 import { HarnessDatabase } from "../store/database.js";
 
 const EMPTY_MANUAL_MEMORY: RequirementManualMemoryRecord = {

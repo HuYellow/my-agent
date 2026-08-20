@@ -6,7 +6,7 @@ import { HarnessDatabase } from "../src/store/database.js";
 
 describe("HarnessDatabase projects", () => {
   it("seeds a default project and stores threads by projectId", () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-db-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-db-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const projects = database.listProjects();
 
@@ -30,7 +30,7 @@ describe("HarnessDatabase projects", () => {
   });
 
   it("hides hidden threads from the default listing and persists execution contexts", () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-db-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-db-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const project = database.listProjects()[0]!;
     const now = new Date().toISOString();
@@ -80,7 +80,7 @@ describe("HarnessDatabase projects", () => {
   });
 
   it("persists review runs with structured findings", () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-db-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-db-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const project = database.listProjects()[0]!;
     const now = new Date().toISOString();
@@ -128,7 +128,7 @@ describe("HarnessDatabase projects", () => {
   });
 
   it("stores requirement entities, thread bindings, and structured memories", () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-db-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-db-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const primaryProject = database.listProjects()[0]!;
     const relatedProject = database.createProject({
@@ -202,7 +202,7 @@ describe("HarnessDatabase projects", () => {
   });
 
   it("stores automations and run history", () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-db-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-db-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const project = database.listProjects()[0]!;
     const now = new Date().toISOString();
@@ -251,7 +251,7 @@ describe("HarnessDatabase projects", () => {
   });
 
   it("stores managed plugin and internal tool metadata", () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-db-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-db-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const now = new Date().toISOString();
 
@@ -318,7 +318,7 @@ describe("HarnessDatabase projects", () => {
   });
 
   it("persists extended terminal session state for future PTY backends", () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-db-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-db-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const now = new Date().toISOString();
 

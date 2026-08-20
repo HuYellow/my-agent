@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { type McpMountRecord, type McpPromptRecord, type McpResourceRecord, type McpSessionRecord, type McpToolRecord } from "@my-agent/protocol";
+import { type McpMountRecord, type McpPromptRecord, type McpResourceRecord, type McpSessionRecord, type McpToolRecord } from "@yellow-flow/protocol";
 import { HarnessDatabase } from "../store/database.js";
 import { createId } from "../utils/ids.js";
 
@@ -230,7 +230,7 @@ export class McpSessionManager {
         protocolVersion: "2024-11-05",
         capabilities: {},
         clientInfo: {
-          name: "my-agent",
+          name: "yellow-flow",
           version: "0.1.0",
         },
       });

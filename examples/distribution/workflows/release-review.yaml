@@ -1,4 +1,4 @@
-apiVersion: "my-agent/v1alpha1"
+apiVersion: "yellow-flow/v1alpha1"
 templateVersion: "1.0"
 compatibility:
   protocolVersion: "0.1.0"

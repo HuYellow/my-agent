@@ -1075,7 +1075,7 @@ export interface PluginRecord {
   updatedAt: string;
 }
 
-export type PluginFormat = "my-agent" | "codex" | "opencode";
+export type PluginFormat = "yellow-flow" | "codex" | "opencode";
 
 export type PluginInstallSourceRecord =
   | {

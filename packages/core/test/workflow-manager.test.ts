@@ -7,7 +7,7 @@ import { HarnessDatabase } from "../src/store/database.js";
 
 describe("WorkflowManager", () => {
   it("records executionContextId and artifactSummary for workflow steps", async () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-workflow-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-workflow-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const project = database.listProjects()[0]!;
     const manager = new WorkflowManager(
@@ -100,7 +100,7 @@ describe("WorkflowManager", () => {
   });
 
   it("executes review steps through the shared execution unit path", async () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-workflow-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-workflow-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const project = database.listProjects()[0]!;
     const now = new Date().toISOString();
@@ -219,7 +219,7 @@ describe("WorkflowManager", () => {
   });
 
   it("waits long enough for slower review steps to finish", async () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-workflow-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-workflow-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const project = database.listProjects()[0]!;
     const now = new Date().toISOString();
@@ -338,7 +338,7 @@ describe("WorkflowManager", () => {
   });
 
   it("pauses on approval steps and resumes the remaining workflow", async () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-workflow-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-workflow-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const project = database.listProjects()[0]!;
     const now = new Date().toISOString();
@@ -470,7 +470,7 @@ describe("WorkflowManager", () => {
   });
 
   it("executes agent steps through the shared execution unit path", async () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-workflow-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-workflow-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const project = database.listProjects()[0]!;
     const now = new Date().toISOString();
@@ -600,7 +600,7 @@ describe("WorkflowManager", () => {
   });
 
   it("retries failed steps and continues downstream workflow execution", async () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-workflow-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-workflow-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const project = database.listProjects()[0]!;
     const now = new Date().toISOString();
@@ -794,7 +794,7 @@ describe("WorkflowManager", () => {
   });
 
   it("rejects retry requests for steps that are not failed", async () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-workflow-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-workflow-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const project = database.listProjects()[0]!;
     const now = new Date().toISOString();
@@ -898,7 +898,7 @@ describe("WorkflowManager", () => {
   });
 
   it("cleans up workflow-owned worktrees after successful runs", async () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-workflow-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-workflow-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const project = database.listProjects()[0]!;
     const now = new Date().toISOString();
@@ -925,7 +925,7 @@ describe("WorkflowManager", () => {
       {
         create: ({ branch }: { branch?: string }) => {
           worktreeCounter += 1;
-          const path = join(project.rootPath, ".my-agent", "worktrees", `test-${worktreeCounter}`);
+          const path = join(project.rootPath, ".yellow-flow", "worktrees", `test-${worktreeCounter}`);
           mkdirSync(path, { recursive: true });
           const worktree = {
             id: `worktree-${worktreeCounter}`,
@@ -1023,7 +1023,7 @@ describe("WorkflowManager", () => {
   });
 
   it("retains failed worktrees until retry and then cleans old and new worktrees", async () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-workflow-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-workflow-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const project = database.listProjects()[0]!;
     const now = new Date().toISOString();
@@ -1099,7 +1099,7 @@ describe("WorkflowManager", () => {
       {
         create: ({ branch }: { branch?: string }) => {
           worktreeCounter += 1;
-          const path = join(project.rootPath, ".my-agent", "worktrees", `retry-${worktreeCounter}`);
+          const path = join(project.rootPath, ".yellow-flow", "worktrees", `retry-${worktreeCounter}`);
           mkdirSync(path, { recursive: true });
           const worktree = {
             id: `worktree-${worktreeCounter}`,
@@ -1227,11 +1227,11 @@ describe("WorkflowManager", () => {
   });
 
   it("discovers system workflows without depending on process.cwd()", () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-workflow-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-workflow-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const project = database.listProjects()[0]!;
     const originalCwd = process.cwd();
-    const isolatedCwd = mkdtempSync(join(tmpdir(), "my-agent-workflow-cwd-"));
+    const isolatedCwd = mkdtempSync(join(tmpdir(), "yellow-flow-workflow-cwd-"));
 
     const manager = new WorkflowManager(
       database,

@@ -45,7 +45,7 @@ describe("ToolService", () => {
       sandboxMode: "workspace-write",
       approvalPolicy: "never",
     });
-    const outsidePath = join(tmpdir(), `my-agent-outside-${Date.now()}.txt`);
+    const outsidePath = join(tmpdir(), `yellow-flow-outside-${Date.now()}.txt`);
     writeFileSync(outsidePath, "outside secret", "utf8");
     const service = new ToolService(workspace, { database, threadId: "thread-1" });
     const command = process.platform === "win32" ? `Get-Content ${JSON.stringify(outsidePath)}` : `cat ${JSON.stringify(outsidePath)}`;
@@ -191,7 +191,7 @@ describe("ToolService", () => {
   });
 
   it("exposes unified source and capability metadata across local, internal, plugin, and mcp tools", () => {
-    const homeDir = mkdtempSync(join(tmpdir(), "my-agent-home-"));
+    const homeDir = mkdtempSync(join(tmpdir(), "yellow-flow-home-"));
     const { database, workspace, root } = createWorkspace({
       sandboxMode: "danger-full-access",
       approvalPolicy: "never",
@@ -287,7 +287,7 @@ describe("ToolService", () => {
   });
 
   it("requires trust before exposing user-installed plugin tools", () => {
-    const homeDir = mkdtempSync(join(tmpdir(), "my-agent-home-"));
+    const homeDir = mkdtempSync(join(tmpdir(), "yellow-flow-home-"));
     const { database, workspace } = createWorkspace({
       sandboxMode: "danger-full-access",
       approvalPolicy: "never",
@@ -455,7 +455,7 @@ describe("ToolService", () => {
         res.end("{\"ok\":true}");
       }, 250);
     });
-    const homeDir = mkdtempSync(join(tmpdir(), "my-agent-home-"));
+    const homeDir = mkdtempSync(join(tmpdir(), "yellow-flow-home-"));
     const { database, workspace } = createWorkspace({
       sandboxMode: "danger-full-access",
       approvalPolicy: "never",
@@ -510,7 +510,7 @@ describe("ToolService", () => {
 });
 
 function createWorkspace(options: { sandboxMode: "read-only" | "workspace-write" | "danger-full-access"; approvalPolicy: "on-request" | "on-failure" | "never" }) {
-  const root = mkdtempSync(join(tmpdir(), "my-agent-tools-"));
+  const root = mkdtempSync(join(tmpdir(), "yellow-flow-tools-"));
   const database = new HarnessDatabase(join(root, "app.db"));
   const defaults = database.getDefaultConfig();
   const workspace = {

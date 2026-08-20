@@ -6,7 +6,7 @@ import { SkillService } from "../src/services/skill-service.js";
 
 describe("SkillService", () => {
   it("discovers system skills and can resolve explicit activation", () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-skills-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-skills-"));
     const systemRoot = join(root, "system");
     const homeRoot = join(root, "home");
     const skillRoot = join(systemRoot, "sample-skill");

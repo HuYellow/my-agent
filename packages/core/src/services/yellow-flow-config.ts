@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, watch, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { type ApiFlavor, type ProviderProfile } from "@my-agent/protocol";
+import { type ApiFlavor, type ProviderProfile } from "@yellow-flow/protocol";
 
 type TomlValue = string | boolean;
 
@@ -10,7 +10,7 @@ interface TomlDocument {
   sections: Record<string, Record<string, TomlValue>>;
 }
 
-interface ParsedMyAgentAuth {
+interface ParsedYellowFlowAuth {
   OPENAI_API_KEY?: string;
   [key: string]: unknown;
 }
@@ -19,15 +19,15 @@ export interface StoredProviderConfig {
   providerId: string;
   provider: ProviderProfile;
   source: {
-    myAgentHome: string;
+    yellowFlowHome: string;
     configPath: string;
     authPath?: string;
   };
 }
 
 export function loadStoredProviderConfig(): StoredProviderConfig | null {
-  const myAgentHome = getDefaultMyAgentHomeDir();
-  const configPath = join(myAgentHome, "config.toml");
+  const yellowFlowHome = getDefaultYellowFlowHomeDir();
+  const configPath = join(yellowFlowHome, "config.toml");
 
   if (!existsSync(configPath)) {
     return null;
@@ -46,8 +46,8 @@ export function loadStoredProviderConfig(): StoredProviderConfig | null {
     return null;
   }
 
-  const authPath = join(myAgentHome, "auth.json");
-  const auth = existsSync(authPath) ? parseMyAgentAuth(readFileSync(authPath, "utf8")) : {};
+  const authPath = join(yellowFlowHome, "auth.json");
+  const auth = existsSync(authPath) ? parseYellowFlowAuth(readFileSync(authPath, "utf8")) : {};
   const baseUrl = asString(providerSection.base_url);
   const model = asString(document.root.model);
 
@@ -58,7 +58,7 @@ export function loadStoredProviderConfig(): StoredProviderConfig | null {
   return {
     providerId,
     provider: {
-      id: `my-agent:${providerId}`,
+      id: `yellow-flow:${providerId}`,
       name: asString(providerSection.name) || providerId,
       baseUrl,
       apiKey: String(auth.OPENAI_API_KEY ?? ""),
@@ -67,7 +67,7 @@ export function loadStoredProviderConfig(): StoredProviderConfig | null {
       reasoningEffort: toReasoningEffort(asString(document.root.model_reasoning_effort)),
     },
     source: {
-      myAgentHome,
+      yellowFlowHome,
       configPath,
       authPath: existsSync(authPath) ? authPath : undefined,
     },
@@ -91,9 +91,9 @@ export function mergeStoredProviderConfig<TConfig extends { provider: ProviderPr
 }
 
 export function syncStoredProviderConfig(provider: ProviderProfile): void {
-  const myAgentHome = getDefaultMyAgentHomeDir();
-  const configPath = join(myAgentHome, "config.toml");
-  const authPath = join(myAgentHome, "auth.json");
+  const yellowFlowHome = getDefaultYellowFlowHomeDir();
+  const configPath = join(yellowFlowHome, "config.toml");
+  const authPath = join(yellowFlowHome, "auth.json");
   const existingDocument = existsSync(configPath) ? parseTomlDocument(readFileSync(configPath, "utf8")) : createEmptyTomlDocument();
   const existingStored = loadStoredProviderConfig();
   const providerId = existingStored?.providerId ?? slugifyProviderId(provider.name || provider.id || "default");
@@ -115,15 +115,15 @@ export function syncStoredProviderConfig(provider: ProviderProfile): void {
   mkdirSync(dirname(configPath), { recursive: true });
   writeFileSync(configPath, serializeTomlDocument(existingDocument), "utf8");
 
-  const auth = existsSync(authPath) ? parseMyAgentAuth(readFileSync(authPath, "utf8")) : {};
+  const auth = existsSync(authPath) ? parseYellowFlowAuth(readFileSync(authPath, "utf8")) : {};
   auth.OPENAI_API_KEY = provider.apiKey;
   mkdirSync(dirname(authPath), { recursive: true });
   writeFileSync(authPath, `${JSON.stringify(auth, null, 2)}\n`, "utf8");
 }
 
 export function ensureStoredProviderConfig(provider: ProviderProfile): void {
-  const configPath = join(getDefaultMyAgentHomeDir(), "config.toml");
-  const authPath = join(getDefaultMyAgentHomeDir(), "auth.json");
+  const configPath = join(getDefaultYellowFlowHomeDir(), "config.toml");
+  const authPath = join(getDefaultYellowFlowHomeDir(), "auth.json");
 
   if (existsSync(configPath) && existsSync(authPath)) {
     return;
@@ -133,8 +133,8 @@ export function ensureStoredProviderConfig(provider: ProviderProfile): void {
 }
 
 export function watchStoredConfig(onChange: () => void): () => void {
-  const myAgentHome = getDefaultMyAgentHomeDir();
-  mkdirSync(myAgentHome, { recursive: true });
+  const yellowFlowHome = getDefaultYellowFlowHomeDir();
+  mkdirSync(yellowFlowHome, { recursive: true });
 
   let timer: NodeJS.Timeout | undefined;
   const schedule = () => {
@@ -148,7 +148,7 @@ export function watchStoredConfig(onChange: () => void): () => void {
     timer.unref?.();
   };
 
-  const watcher = watch(myAgentHome, () => {
+  const watcher = watch(yellowFlowHome, () => {
     schedule();
   });
 
@@ -161,8 +161,8 @@ export function watchStoredConfig(onChange: () => void): () => void {
   };
 }
 
-export function getDefaultMyAgentHomeDir(): string {
-  return process.env.MY_AGENT_HOME ?? join(homedir(), ".my-agent");
+export function getDefaultYellowFlowHomeDir(): string {
+  return process.env.YELLOW_FLOW_HOME ?? join(homedir(), ".yellow-flow");
 }
 
 export function parseTomlDocument(input: string): TomlDocument {
@@ -235,9 +235,9 @@ function createEmptyTomlDocument(): TomlDocument {
   };
 }
 
-function parseMyAgentAuth(input: string): ParsedMyAgentAuth {
+function parseYellowFlowAuth(input: string): ParsedYellowFlowAuth {
   try {
-    return JSON.parse(input) as ParsedMyAgentAuth;
+    return JSON.parse(input) as ParsedYellowFlowAuth;
   } catch {
     return {};
   }
@@ -303,7 +303,7 @@ function toApiFlavor(wireApi: string): ApiFlavor {
       return "responses";
     default:
       if (wireApi === "ai_sdk") {
-        console.warn('[my-agent-config] "ai_sdk" is no longer supported. Falling back to "responses".');
+        console.warn('[yellow-flow-config] "ai_sdk" is no longer supported. Falling back to "responses".');
         return "responses";
       }
       return "chat_completions";
@@ -335,7 +335,7 @@ function toReasoningEffort(value: string): ProviderProfile["reasoningEffort"] | 
 
 function slugifyProviderId(value: string): string {
   const normalized = value
-    .replace(/^my-agent:/, "")
+    .replace(/^yellow-flow:/, "")
     .replace(/^codex:/, "")
     .trim()
     .toLowerCase()

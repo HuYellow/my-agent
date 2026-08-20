@@ -1,5 +1,5 @@
-name: "my-agent Runtime"
-description: "Run a my-agent automation, workflow, or non-interactive prompt in GitHub Actions."
+name: "Yellow Flow Runtime"
+description: "Run a Yellow Flow automation, workflow, or non-interactive prompt in GitHub Actions."
 inputs:
   automation_id:
     description: "Automation id to run."

@@ -42,7 +42,7 @@ import {
   type WorkflowRunRecord,
   type WorktreeRecord,
   type TemplateScaffoldParams,
-} from "@my-agent/protocol";
+} from "@yellow-flow/protocol";
 
 let bootstrapPromise: Promise<void> | null = null;
 let detachEventListener: (() => void) | null = null;
@@ -175,7 +175,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({ loading: true, bootError: undefined });
 
       try {
-        const initial = (await withTimeout(window.myAgent.initialize(), 10_000, "Harness initialization timed out.")) as InitializeResult;
+        const initial = (await withTimeout(window.yellowFlow.initialize(), 10_000, "Harness initialization timed out.")) as InitializeResult;
         const activeProjectId = initial.config.selectedProjectId ?? initial.projects[0]?.id;
         const activeRequirementId = initial.config.selectedRequirementId ?? initial.requirements?.[0]?.id;
         const activeThreadId = activeRequirementId
@@ -223,7 +223,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         await get().refreshRuntimeProjectState(activeProjectId);
 
         if (!detachEventListener) {
-          detachEventListener = window.myAgent.onEvent((event) => get().handleEvent(event));
+          detachEventListener = window.yellowFlow.onEvent((event) => get().handleEvent(event));
         }
       } catch (error) {
         set({
@@ -238,7 +238,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     await bootstrapPromise;
   },
   createProject: async (params) => {
-    const result = (await window.myAgent.createProject(params)) as { project: ProjectRecord };
+    const result = (await window.yellowFlow.createProject(params)) as { project: ProjectRecord };
     set((state) => ({
       projects: [result.project, ...state.projects.filter((project) => project.id !== result.project.id)],
       activeProjectId: result.project.id,
@@ -251,30 +251,30 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   createAutomation: async (params) => {
     const requirementId = params.requirementId ?? get().activeRequirementId;
-    const result = (await window.myAgent.createAutomation({ ...params, requirementId })) as { automation: AutomationRecord };
+    const result = (await window.yellowFlow.createAutomation({ ...params, requirementId })) as { automation: AutomationRecord };
     set((state) => ({
       automations: upsertAutomation(state.automations, result.automation),
     }));
   },
   updateAutomation: async (automationId, patch) => {
-    const result = (await window.myAgent.updateAutomation({ automationId, patch })) as { automation: AutomationRecord };
+    const result = (await window.yellowFlow.updateAutomation({ automationId, patch })) as { automation: AutomationRecord };
     set((state) => ({
       automations: upsertAutomation(state.automations, result.automation),
     }));
   },
   runAutomation: async (automationId) => {
-    const result = (await window.myAgent.runAutomation({ automationId })) as { automation: AutomationRecord; run: AutomationRunRecord };
+    const result = (await window.yellowFlow.runAutomation({ automationId })) as { automation: AutomationRecord; run: AutomationRunRecord };
     set((state) => ({
       automations: upsertAutomation(state.automations, result.automation),
       automationRuns: upsertAutomationRun(state.automationRuns, result.run),
     }));
-    const logs = await window.myAgent.listAutomationRunLogs({ runId: result.run.id }).then((payload) => payload.logs);
+    const logs = await window.yellowFlow.listAutomationRunLogs({ runId: result.run.id }).then((payload) => payload.logs);
     set((state) => ({
       automationRunLogs: upsertAutomationRunLogs(state.automationRunLogs, logs),
     }));
   },
   createRequirement: async (params) => {
-    const result = (await window.myAgent.createRequirement(params)) as { requirement: RequirementRecord; memory: RequirementMemoryRecord };
+    const result = (await window.yellowFlow.createRequirement(params)) as { requirement: RequirementRecord; memory: RequirementMemoryRecord };
     set((state) => ({
       requirements: upsertRequirement(state.requirements, result.requirement),
       requirementMemories: upsertRequirementMemory(state.requirementMemories, result.memory),
@@ -292,7 +292,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     await get().refreshRuntimeProjectState(result.requirement.primaryProjectId);
   },
   updateRequirement: async (requirementId, patch) => {
-    const result = (await window.myAgent.updateRequirement({ requirementId, patch })) as {
+    const result = (await window.yellowFlow.updateRequirement({ requirementId, patch })) as {
       requirement: RequirementRecord;
       memory: RequirementMemoryRecord;
     };
@@ -311,13 +311,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
   },
   updateProject: async (projectId, patch) => {
-    const result = (await window.myAgent.updateProject({ projectId, patch })) as { project: ProjectRecord };
+    const result = (await window.yellowFlow.updateProject({ projectId, patch })) as { project: ProjectRecord };
     set((state) => ({
       projects: state.projects.map((project) => (project.id === result.project.id ? result.project : project)),
     }));
   },
   updateThread: async (threadId, patch) => {
-    const result = (await window.myAgent.updateThread({ threadId, patch })) as { thread: ThreadRecord };
+    const result = (await window.yellowFlow.updateThread({ threadId, patch })) as { thread: ThreadRecord };
     set((state) => ({
       threads: state.threads.map((thread) => (thread.id === result.thread.id ? result.thread : thread)),
     }));
@@ -329,7 +329,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 
     if (current) {
-      const result = (await window.myAgent.writeConfig({
+      const result = (await window.yellowFlow.writeConfig({
         config: {
           selectedProjectId: projectId,
           selectedRequirementId: undefined,
@@ -356,7 +356,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const requirement = requirementId ? get().requirements.find((entry) => entry.id === requirementId) : undefined;
     const selectedProjectId = requirement?.primaryProjectId;
 
-    const result = (await window.myAgent.writeConfig({
+    const result = (await window.yellowFlow.writeConfig({
       config: {
         selectedRequirementId: requirementId,
         selectedProjectId,
@@ -377,7 +377,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const activeRequirementId = requirementId ?? get().activeRequirementId;
     const activeRequirement = activeRequirementId ? get().requirements.find((entry) => entry.id === activeRequirementId) : undefined;
     const ensuredProjectId = projectId ?? activeRequirement?.primaryProjectId ?? get().activeProjectId ?? get().config?.selectedProjectId;
-    const result = (await window.myAgent.startThread({
+    const result = (await window.yellowFlow.startThread({
       title,
       projectId: ensuredProjectId,
       requirementId: activeRequirementId,
@@ -399,7 +399,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
   },
   assignThreadToRequirement: async (requirementId, threadId) => {
-    const result = (await window.myAgent.assignThreadToRequirement({ requirementId, threadId })) as {
+    const result = (await window.yellowFlow.assignThreadToRequirement({ requirementId, threadId })) as {
       requirement: RequirementRecord;
       memory: RequirementMemoryRecord;
       thread: ThreadRecord;
@@ -420,7 +420,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
   },
   unassignThreadFromRequirement: async (threadId) => {
-    const result = (await window.myAgent.unassignThreadFromRequirement({ threadId })) as {
+    const result = (await window.yellowFlow.unassignThreadFromRequirement({ threadId })) as {
       thread: ThreadRecord;
       requirementId?: string;
       memory?: RequirementMemoryRecord;
@@ -457,7 +457,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       }));
     }
 
-    const result = (await window.myAgent.resumeThread(threadId)) as {
+    const result = (await window.yellowFlow.resumeThread(threadId)) as {
       thread: ThreadRecord;
       turns: TurnRecord[];
       items: ItemRecord[];
@@ -510,7 +510,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
 
     try {
-      const result = (await window.myAgent.startTurn({
+      const result = (await window.yellowFlow.startTurn({
         threadId,
         input,
         attachments,
@@ -536,7 +536,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   steerTurn: async (turnId, input, priority) => {
-    const result = (await window.myAgent.steerTurn({
+    const result = (await window.yellowFlow.steerTurn({
       turnId,
       input,
       priority,
@@ -544,7 +544,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     return result.steer;
   },
   interruptTurn: async (turnId) => {
-    const result = (await window.myAgent.interruptTurn({ turnId })) as { turn: TurnRecord };
+    const result = (await window.yellowFlow.interruptTurn({ turnId })) as { turn: TurnRecord };
 
     set((state) => ({
       threadSessions: updateThreadSession(state.threadSessions, result.turn.threadId, (session) => ({
@@ -558,14 +558,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   startReview: async (params) => {
     const thread = params.threadId ? get().threads.find((entry) => entry.id === params.threadId) : undefined;
     const requirementId = params.requirementId ?? thread?.requirementId ?? get().activeRequirementId;
-    const result = (await window.myAgent.startReview({ ...params, requirementId })) as { review: ReviewRecord };
+    const result = (await window.yellowFlow.startReview({ ...params, requirementId })) as { review: ReviewRecord };
     set((state) => ({
       reviews: upsertReview(state.reviews, result.review),
     }));
     return result.review;
   },
   respondApproval: async (approvalId, decision, scope) => {
-    const result = (await window.myAgent.respondApproval({
+    const result = (await window.yellowFlow.respondApproval({
       approvalId,
       decision,
       scope,
@@ -594,7 +594,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       disabled.add(skillId);
     }
 
-    const result = (await window.myAgent.writeSkillConfig([...disabled])) as { skills: SkillDescriptor[] };
+    const result = (await window.yellowFlow.writeSkillConfig([...disabled])) as { skills: SkillDescriptor[] };
 
     set({
       skills: result.skills,
@@ -605,7 +605,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
   },
   updateConfig: async (config) => {
-    const result = (await window.myAgent.writeConfig({ config })) as { config: AppConfig };
+    const result = (await window.yellowFlow.writeConfig({ config })) as { config: AppConfig };
     set({
       config: result.config,
       activeProjectId: result.config.selectedProjectId ?? get().activeProjectId,
@@ -615,7 +615,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   testProvider: async (provider) => {
     const currentProvider = get().config?.provider;
     const effectiveProvider = currentProvider ? { ...currentProvider, ...(provider ?? {}) } : undefined;
-    const result = (await window.myAgent.testProvider(effectiveProvider ? { provider: effectiveProvider } : undefined)) as {
+    const result = (await window.yellowFlow.testProvider(effectiveProvider ? { provider: effectiveProvider } : undefined)) as {
       ok: boolean;
       status: number;
       message: string;
@@ -643,7 +643,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
 
     try {
-      const result = (await window.myAgent.listProviderModels({ provider: effectiveProvider })) as {
+      const result = (await window.yellowFlow.listProviderModels({ provider: effectiveProvider })) as {
         models: ProviderModelRecord[];
       };
       set({
@@ -660,18 +660,18 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   refreshToolCatalog: async (params) => {
-    const result = await window.myAgent.listTools(params);
+    const result = await window.yellowFlow.listTools(params);
     set({
       runtimeTools: result.tools,
     });
   },
   installPlugin: async (params) => {
-    await window.myAgent.installPlugin(params);
+    await window.yellowFlow.installPlugin(params);
     await get().refreshToolCatalog({ projectId: get().activeProjectId });
   },
   scaffoldTemplate: async (params) => {
-    const result = await window.myAgent.scaffoldTemplate(params);
-    const templates = await window.myAgent.listTemplates().then((payload) => payload.templates);
+    const result = await window.yellowFlow.scaffoldTemplate(params);
+    const templates = await window.yellowFlow.listTemplates().then((payload) => payload.templates);
     set({
       templates,
     });
@@ -703,15 +703,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
 
     const [automations, automationRuns, automationRunLogs, worktrees, environments, executionContexts, workflows, workflowRuns, agentTasks] = await Promise.all([
-      window.myAgent.listAutomations({ projectId: activeProjectId }).then((result) => result.automations),
-      window.myAgent.listAutomationRuns({ projectId: activeProjectId }).then((result) => result.runs),
-      window.myAgent.listAutomationRunLogs({ projectId: activeProjectId }).then((result) => result.logs),
-      window.myAgent.listWorktrees(activeProjectId).then((result) => result.worktrees),
-      window.myAgent.listEnvironments(activeProjectId).then((result) => result.environments),
-      window.myAgent.listExecutionContexts(activeProjectId).then((result) => result.executionContexts),
-      window.myAgent.listWorkflows(activeProjectId).then((result) => result.workflows),
-      window.myAgent.listWorkflowRuns().then((result) => result.runs),
-      window.myAgent.listAgentTasks(activeProjectId).then((result) => result.tasks),
+      window.yellowFlow.listAutomations({ projectId: activeProjectId }).then((result) => result.automations),
+      window.yellowFlow.listAutomationRuns({ projectId: activeProjectId }).then((result) => result.runs),
+      window.yellowFlow.listAutomationRunLogs({ projectId: activeProjectId }).then((result) => result.logs),
+      window.yellowFlow.listWorktrees(activeProjectId).then((result) => result.worktrees),
+      window.yellowFlow.listEnvironments(activeProjectId).then((result) => result.environments),
+      window.yellowFlow.listExecutionContexts(activeProjectId).then((result) => result.executionContexts),
+      window.yellowFlow.listWorkflows(activeProjectId).then((result) => result.workflows),
+      window.yellowFlow.listWorkflowRuns().then((result) => result.runs),
+      window.yellowFlow.listAgentTasks(activeProjectId).then((result) => result.tasks),
     ]);
 
     set({

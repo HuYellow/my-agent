@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import { type PluginInstallParams, type PluginInstallResult, type PluginRecord, type ProjectRecord } from "@my-agent/protocol";
+import { type PluginInstallParams, type PluginInstallResult, type PluginRecord, type ProjectRecord } from "@yellow-flow/protocol";
 import { HarnessDatabase } from "../store/database.js";
 import { discoverPluginEntries } from "./plugin-registry.js";
 
@@ -10,7 +10,7 @@ export class PluginManager {
   constructor(
     private readonly database: HarnessDatabase,
     private readonly emit: (plugin: PluginRecord) => void,
-    private readonly homeDir = join(homedir(), ".my-agent"),
+    private readonly homeDir = join(homedir(), ".yellow-flow"),
   ) {}
 
   list(project?: ProjectRecord): PluginRecord[] {

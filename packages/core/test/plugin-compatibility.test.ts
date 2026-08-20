@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { PluginInstallParams, ProjectRecord } from "@my-agent/protocol";
+import type { PluginInstallParams, ProjectRecord } from "@yellow-flow/protocol";
 import { PluginManager } from "../src/services/plugin-manager.js";
 import { discoverPluginEntries } from "../src/services/plugin-registry.js";
 import { SkillService } from "../src/services/skill-service.js";
@@ -13,8 +13,8 @@ import { ToolBlockedError } from "../src/tools/types.js";
 
 describe("plugin compatibility discovery", () => {
   it("discovers Codex bundles with interface, skills, and MCP metadata without requiring a command tool", () => {
-    const homeRoot = mkdtempSync(join(tmpdir(), "my-agent-codex-home-"));
-    const repoRoot = mkdtempSync(join(tmpdir(), "my-agent-codex-repo-"));
+    const homeRoot = mkdtempSync(join(tmpdir(), "yellow-flow-codex-home-"));
+    const repoRoot = mkdtempSync(join(tmpdir(), "yellow-flow-codex-repo-"));
     mkdirSync(join(repoRoot, ".git"), { recursive: true });
     writeJson(join(repoRoot, ".agents", "plugins", "codex-helper", ".codex-plugin", "plugin.json"), {
       name: "codex-helper",
@@ -42,7 +42,7 @@ describe("plugin compatibility discovery", () => {
 
     const [entry] = discoverPluginEntries({
       workspaceRoot: repoRoot,
-      homeDir: join(homeRoot, ".my-agent"),
+      homeDir: join(homeRoot, ".yellow-flow"),
     });
 
     expect(entry?.record).toMatchObject({
@@ -68,8 +68,8 @@ describe("plugin compatibility discovery", () => {
   });
 
   it("surfaces local Codex marketplace plugins and keeps Git entries installable but untrusted", () => {
-    const homeRoot = mkdtempSync(join(tmpdir(), "my-agent-marketplace-home-"));
-    const repoRoot = mkdtempSync(join(tmpdir(), "my-agent-marketplace-repo-"));
+    const homeRoot = mkdtempSync(join(tmpdir(), "yellow-flow-marketplace-home-"));
+    const repoRoot = mkdtempSync(join(tmpdir(), "yellow-flow-marketplace-repo-"));
     mkdirSync(join(repoRoot, ".git"), { recursive: true });
     writeJson(join(repoRoot, "plugins", "local-helper", ".codex-plugin", "plugin.json"), {
       name: "local-helper",
@@ -114,7 +114,7 @@ describe("plugin compatibility discovery", () => {
 
     const entries = discoverPluginEntries({
       workspaceRoot: repoRoot,
-      homeDir: join(homeRoot, ".my-agent"),
+      homeDir: join(homeRoot, ".yellow-flow"),
     }).map((entry) => entry.record);
 
     expect(entries).toEqual(
@@ -141,7 +141,7 @@ describe("plugin compatibility discovery", () => {
   });
 
   it("discovers OpenCode JS plugins and exposes trusted tools through the tool catalog", async () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-opencode-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-opencode-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const workspace = createWorkspace(database, root);
     mkdirSync(join(root, ".opencode", "plugins"), { recursive: true });
@@ -170,7 +170,7 @@ export default async function () {
     const [entry] = discoverPluginEntries({ workspaceRoot: root, persisted: database.listPlugins() });
     database.upsertPlugin({ ...entry!.record, trusted: true });
 
-    const service = new ToolService(workspace, { database, homeDir: join(root, ".my-agent") });
+    const service = new ToolService(workspace, { database, homeDir: join(root, ".yellow-flow") });
     const definition = service.getDefinition("opencode_echo");
 
     expect(definition?.source.details?.format).toBe("opencode");
@@ -180,7 +180,7 @@ export default async function () {
   });
 
   it("loads OpenCode TypeScript named plugin exports, hook output mutations, and after hooks", async () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-opencode-ts-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-opencode-ts-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const workspace = createWorkspace(database, root);
     const afterPath = join(root, "after.txt");
@@ -215,7 +215,7 @@ export const NamedPlugin = async () => ({
     );
     const [entry] = discoverPluginEntries({ workspaceRoot: root, persisted: database.listPlugins() });
     database.upsertPlugin({ ...entry!.record, trusted: true });
-    const service = new ToolService(workspace, { database, homeDir: join(root, ".my-agent") });
+    const service = new ToolService(workspace, { database, homeDir: join(root, ".yellow-flow") });
 
     const output = await service.executeTool("opencode_named", { text: "hello" }, { workspace, emitCommandDelta: () => undefined });
 
@@ -232,19 +232,19 @@ export const NamedPlugin = async () => ({
   });
 
   it("discovers OpenCode npm plugin packages named in opencode.json without trusting them by default", () => {
-    const homeRoot = mkdtempSync(join(tmpdir(), "my-agent-opencode-npm-home-"));
-    const repoRoot = mkdtempSync(join(tmpdir(), "my-agent-opencode-npm-repo-"));
+    const homeRoot = mkdtempSync(join(tmpdir(), "yellow-flow-opencode-npm-home-"));
+    const repoRoot = mkdtempSync(join(tmpdir(), "yellow-flow-opencode-npm-repo-"));
     mkdirSync(join(repoRoot, ".git"), { recursive: true });
     writeJson(join(repoRoot, "opencode.json"), {
       plugin: ["@scope/custom-plugin"],
     });
-    writeJson(join(homeRoot, ".my-agent", "opencode-plugins", "node_modules", "@scope", "custom-plugin", "package.json"), {
+    writeJson(join(homeRoot, ".yellow-flow", "opencode-plugins", "node_modules", "@scope", "custom-plugin", "package.json"), {
       name: "@scope/custom-plugin",
       version: "2.3.4",
       main: "index.js",
     });
     writeText(
-      join(homeRoot, ".my-agent", "opencode-plugins", "node_modules", "@scope", "custom-plugin", "index.js"),
+      join(homeRoot, ".yellow-flow", "opencode-plugins", "node_modules", "@scope", "custom-plugin", "index.js"),
       `
 export const CustomPlugin = async () => ({
   tool: {
@@ -263,7 +263,7 @@ export const CustomPlugin = async () => ({
 
     const entries = discoverPluginEntries({
       workspaceRoot: repoRoot,
-      homeDir: join(homeRoot, ".my-agent"),
+      homeDir: join(homeRoot, ".yellow-flow"),
     }).map((entry) => entry.record);
 
     expect(entries).toEqual([
@@ -288,7 +288,7 @@ export const CustomPlugin = async () => ({
   });
 
   it("marks plugin tool name collisions as validation errors and keeps collided tools hidden", () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-opencode-collision-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-opencode-collision-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const workspace = createWorkspace(database, root);
     mkdirSync(join(root, ".opencode", "plugins"), { recursive: true });
@@ -309,7 +309,7 @@ export const CollisionPlugin = async () => ({
     );
     const [entry] = discoverPluginEntries({ workspaceRoot: root, persisted: database.listPlugins() });
     database.upsertPlugin({ ...entry!.record, trusted: true });
-    const service = new ToolService(workspace, { database, homeDir: join(root, ".my-agent") });
+    const service = new ToolService(workspace, { database, homeDir: join(root, ".yellow-flow") });
 
     expect(entry?.record.validationErrors).toEqual(expect.arrayContaining(["Tool name collision: read_file"]));
     expect(service.getCatalog().filter((tool) => tool.name === "read_file")).toHaveLength(1);
@@ -327,15 +327,15 @@ describe("plugin installation", () => {
   const originalUserProfile = process.env.USERPROFILE;
 
   it("installs Git plugins into the user plugin root and keeps them untrusted until the user trusts them", () => {
-    const homeRoot = mkdtempSync(join(tmpdir(), "my-agent-install-home-"));
-    const repoRoot = mkdtempSync(join(tmpdir(), "my-agent-install-repo-"));
+    const homeRoot = mkdtempSync(join(tmpdir(), "yellow-flow-install-home-"));
+    const repoRoot = mkdtempSync(join(tmpdir(), "yellow-flow-install-repo-"));
     const sourceRepo = createGitPluginRepo();
     process.env.HOME = homeRoot;
     process.env.USERPROFILE = homeRoot;
     mkdirSync(join(repoRoot, ".git"), { recursive: true });
     const database = new HarnessDatabase(join(repoRoot, "app.db"));
     const project = createProject(database, repoRoot);
-    const manager = new PluginManager(database, () => undefined, join(homeRoot, ".my-agent"));
+    const manager = new PluginManager(database, () => undefined, join(homeRoot, ".yellow-flow"));
     const params: PluginInstallParams = {
       source: "git",
       url: sourceRepo,
@@ -361,7 +361,7 @@ describe("plugin installation", () => {
 
 describe("plugin-owned runtime integrations", () => {
   it("adds trusted Codex plugin skills to the skill service", () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-plugin-skill-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-plugin-skill-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     mkdirSync(join(root, ".git"), { recursive: true });
     writeJson(join(root, ".agents", "plugins", "codex-skills", ".codex-plugin", "plugin.json"), {
@@ -375,7 +375,7 @@ describe("plugin-owned runtime integrations", () => {
     );
     const [plugin] = discoverPluginEntries({ workspaceRoot: root, persisted: database.listPlugins() });
     database.upsertPlugin({ ...plugin!.record, trusted: true });
-    const service = new SkillService(join(root, "system-skills"), join(root, ".my-agent"), () => undefined, database);
+    const service = new SkillService(join(root, "system-skills"), join(root, ".yellow-flow"), () => undefined, database);
 
     const skills = service.listSkills(root, []);
 
@@ -388,7 +388,7 @@ describe("plugin-owned runtime integrations", () => {
   });
 
   it("lets trusted OpenCode hooks block tool calls and inject shell environment", async () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-opencode-hooks-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-opencode-hooks-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const workspace = createWorkspace(database, root);
     writeFileSync(join(root, "note.txt"), "secret", "utf8");
@@ -402,7 +402,7 @@ export default async function () {
       if (input.tool === "read_file") return { block: "read_file blocked by plugin" };
     },
     "shell.env": async (_input, output) => {
-      output.env.MY_AGENT_PLUGIN_FLAG = "from-hook";
+      output.env.YELLOW_FLOW_PLUGIN_FLAG = "from-hook";
     }
   };
 }
@@ -411,13 +411,13 @@ export default async function () {
     );
     const [entry] = discoverPluginEntries({ workspaceRoot: root, persisted: database.listPlugins() });
     database.upsertPlugin({ ...entry!.record, trusted: true });
-    const service = new ToolService(workspace, { database, homeDir: join(root, ".my-agent") });
+    const service = new ToolService(workspace, { database, homeDir: join(root, ".yellow-flow") });
 
     await expect(
       service.executeTool("read_file", { path: "note.txt" }, { workspace, emitCommandDelta: () => undefined }),
     ).rejects.toBeInstanceOf(ToolBlockedError);
 
-    const command = process.platform === "win32" ? "Write-Output $env:MY_AGENT_PLUGIN_FLAG" : "printf $MY_AGENT_PLUGIN_FLAG";
+    const command = process.platform === "win32" ? "Write-Output $env:YELLOW_FLOW_PLUGIN_FLAG" : "printf $YELLOW_FLOW_PLUGIN_FLAG";
     const output = await service.executeTool("run_shell", { command }, { workspace, emitCommandDelta: () => undefined });
 
     expect(output).toContain("from-hook");
@@ -452,7 +452,7 @@ function createProject(database: HarnessDatabase, rootPath: string): ProjectReco
 }
 
 function createGitPluginRepo(): string {
-  const sourceRepo = mkdtempSync(join(tmpdir(), "my-agent-git-plugin-"));
+  const sourceRepo = mkdtempSync(join(tmpdir(), "yellow-flow-git-plugin-"));
   writeJson(join(sourceRepo, ".codex-plugin", "plugin.json"), {
     name: "git-installed-helper",
     version: "0.1.0",

@@ -1,4 +1,4 @@
-import { type ProviderCapabilities, type ProviderProfile, type RuntimeRunMode } from "@my-agent/protocol";
+import { type ProviderCapabilities, type ProviderProfile, type RuntimeRunMode } from "@yellow-flow/protocol";
 
 export function detectProviderCapabilities(provider: ProviderProfile): ProviderCapabilities {
   const normalizedBaseUrl = provider.baseUrl.trim().toLowerCase();

@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { type McpMountRecord, type McpPromptRecord, type McpResourceRecord, type McpSessionRecord, type McpToolRecord } from "@my-agent/protocol";
+import { type McpMountRecord, type McpPromptRecord, type McpResourceRecord, type McpSessionRecord, type McpToolRecord } from "@yellow-flow/protocol";
 import { HarnessDatabase } from "../store/database.js";
 import { McpSessionManager } from "./mcp-session-manager.js";
 import { resolvePluginMcpMounts } from "./plugin-registry.js";
@@ -86,21 +86,21 @@ export class McpManager {
   }
 
   private getSessionManager(): McpSessionManager {
-    const runtimeGlobal = globalThis as unknown as { __myAgentMcpSessionManager?: McpSessionManager };
+    const runtimeGlobal = globalThis as unknown as { __yellowFlowMcpSessionManager?: McpSessionManager };
 
-    if (!runtimeGlobal.__myAgentMcpSessionManager) {
-      runtimeGlobal.__myAgentMcpSessionManager = new McpSessionManager(
+    if (!runtimeGlobal.__yellowFlowMcpSessionManager) {
+      runtimeGlobal.__yellowFlowMcpSessionManager = new McpSessionManager(
         this.database,
         (session) => this.emitSession?.(session),
       );
     }
 
-    return runtimeGlobal.__myAgentMcpSessionManager!;
+    return runtimeGlobal.__yellowFlowMcpSessionManager!;
   }
 }
 
 function discoverMcpMounts(database: HarnessDatabase): McpMountRecord[] {
-  const configPath = join(homedir(), ".my-agent", "mcp.json");
+  const configPath = join(homedir(), ".yellow-flow", "mcp.json");
   const now = new Date().toISOString();
   const pluginMounts: McpMountRecord[] = database.listPlugins().flatMap((plugin) =>
     resolvePluginMcpMounts(plugin).map((mount) => ({

@@ -1,4 +1,4 @@
-$file = 'c:\Users\huyel\my-agent\apps\desktop\src\renderer\styles.css'
+$file = Join-Path $PSScriptRoot 'apps\desktop\src\renderer\styles.css'
 $c = Get-Content $file -Raw
 
 # === Swap accent roles in :root: cyan was primary, now orange is primary ===

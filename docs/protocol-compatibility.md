@@ -1,6 +1,6 @@
 # Protocol Compatibility
 
-This document defines the minimum compatibility rules for the `my-agent` runtime protocol.
+This document defines the minimum compatibility rules for the Yellow Flow runtime protocol.
 
 ## Stability Rules
 

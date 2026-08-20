@@ -1,5 +1,5 @@
 {
-  "name": "my-agent",
+  "name": "yellow-flow",
   "private": true,
   "version": "0.1.0",
   "workspaces": [
@@ -7,10 +7,10 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build --workspace @my-agent/protocol && npm run build --workspace @my-agent/core && npm run build --workspace @my-agent/app-server && npm run build --workspace @my-agent/mcp-server && npm run build --workspace @my-agent/github-action && npm run build --workspace @my-agent/desktop",
-    "dev": "npm run dev --workspace @my-agent/desktop",
-    "test": "npm run test --workspace @my-agent/core && npm run test --workspace @my-agent/app-server && npm run test --workspace @my-agent/mcp-server && npm run test --workspace @my-agent/github-action && npm run test --workspace @my-agent/desktop",
-    "typecheck": "npm run typecheck --workspace @my-agent/protocol && npm run typecheck --workspace @my-agent/core && npm run typecheck --workspace @my-agent/app-server && npm run typecheck --workspace @my-agent/mcp-server && npm run typecheck --workspace @my-agent/github-action && npm run typecheck --workspace @my-agent/desktop"
+    "build": "npm run build --workspace @yellow-flow/protocol && npm run build --workspace @yellow-flow/core && npm run build --workspace @yellow-flow/app-server && npm run build --workspace @yellow-flow/mcp-server && npm run build --workspace @yellow-flow/github-action && npm run build --workspace @yellow-flow/desktop",
+    "dev": "npm run dev --workspace @yellow-flow/desktop",
+    "test": "npm run test --workspace @yellow-flow/core && npm run test --workspace @yellow-flow/app-server && npm run test --workspace @yellow-flow/mcp-server && npm run test --workspace @yellow-flow/github-action && npm run test --workspace @yellow-flow/desktop",
+    "typecheck": "npm run typecheck --workspace @yellow-flow/protocol && npm run typecheck --workspace @yellow-flow/core && npm run typecheck --workspace @yellow-flow/app-server && npm run typecheck --workspace @yellow-flow/mcp-server && npm run typecheck --workspace @yellow-flow/github-action && npm run typecheck --workspace @yellow-flow/desktop"
   },
   "overrides": {
     "@hono/node-server": "1.19.13",

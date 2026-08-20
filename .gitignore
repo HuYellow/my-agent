@@ -7,5 +7,5 @@ coverage
 .DS_Store
 Thumbs.db
 npm-debug.log*
-.my-agent
+.yellow-flow
 .qoder

@@ -1,4 +1,4 @@
-import { type ApiFlavor } from "@my-agent/protocol";
+import { type ApiFlavor } from "@yellow-flow/protocol";
 
 export function normalizeProviderBaseUrl(baseUrl: string): string {
   const trimmed = baseUrl.trim();

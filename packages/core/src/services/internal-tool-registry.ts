@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { type InternalToolRecord } from "@my-agent/protocol";
+import { type InternalToolRecord } from "@yellow-flow/protocol";
 import { z } from "zod";
 import { findGitRoot } from "../utils/path-utils.js";
 
@@ -129,7 +129,7 @@ export function discoverInternalToolEntries(params: {
 
 function resolveInternalToolRoots(
   workspaceRoot: string,
-  homeDir = process.env.MY_AGENT_HOME ?? join(homedir(), ".my-agent"),
+  homeDir = process.env.YELLOW_FLOW_HOME ?? join(homedir(), ".yellow-flow"),
 ): Array<{ source: InternalToolRecord["source"]; path: string }> {
   const roots = new Map<string, InternalToolRecord["source"]>();
   roots.set(join(homeDir, "internal-tools"), "user");

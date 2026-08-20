@@ -1,5 +1,5 @@
 {
-  "name": "@my-agent/core",
+  "name": "@yellow-flow/core",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -16,16 +16,16 @@
     }
   },
   "bin": {
-    "my-agent-core": "dist/index.js"
+    "yellow-flow-core": "dist/index.js"
   },
   "scripts": {
-    "build": "npm run build --workspace @my-agent/protocol && node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
+    "build": "npm run build --workspace @yellow-flow/protocol && node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
     "dev": "tsc -p tsconfig.build.json --watch",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@my-agent/protocol": "file:../protocol",
+    "@yellow-flow/protocol": "file:../protocol",
     "@openai/agents": "^0.8.2",
     "node-pty": "^1.1.0",
     "tsx": "^4.21.0",
