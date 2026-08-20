@@ -1,7 +1,7 @@
 import { mkdirSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import { type ProjectRecord, type WorktreeRecord } from "@my-agent/protocol";
+import { type ProjectRecord, type WorktreeRecord } from "@yellow-flow/protocol";
 import { HarnessDatabase } from "../store/database.js";
 import { createId } from "../utils/ids.js";
 import { isPathInside } from "../utils/path-utils.js";
@@ -122,7 +122,7 @@ function buildDefaultBranchName(threadId?: string, agentId?: string): string {
 }
 
 function getManagedWorktreeRoot(projectRootPath: string): string {
-  return resolve(projectRootPath, ".my-agent", "worktrees");
+  return resolve(projectRootPath, ".yellow-flow", "worktrees");
 }
 
 function cleanupManagedWorktreePath(managedRoot: string, worktreePath: string): void {

@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
-import { type ApplyPatchResult, type WorkspaceProfile, type WritePatchResult } from "@my-agent/protocol";
+import { type ApplyPatchResult, type WorkspaceProfile, type WritePatchResult } from "@yellow-flow/protocol";
 import { executePatchDocument } from "./patch-apply.js";
 
 const IGNORED_DIR_NAMES = new Set([".git", "node_modules", "dist", "dist-electron", ".next", ".turbo", ".cache"]);

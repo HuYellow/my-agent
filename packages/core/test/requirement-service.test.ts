@@ -2,14 +2,14 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { ProjectRecord } from "@my-agent/protocol";
+import type { ProjectRecord } from "@yellow-flow/protocol";
 import { RequirementMemoryManager } from "../src/services/requirement-memory-manager.js";
 import { RequirementService } from "../src/services/requirement-service.js";
 import { HarnessDatabase } from "../src/store/database.js";
 
 describe("RequirementService", () => {
   it("creates and updates requirements with normalized related projects and manual memory", () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-requirement-service-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-requirement-service-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const primaryProject = createProject(database, "project-primary", root);
     const relatedProject = createProject(database, "project-related", join(root, "related"));
@@ -51,7 +51,7 @@ describe("RequirementService", () => {
   });
 
   it("assigns threads across projects and rebuilds memory when unassigning", () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-requirement-service-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-requirement-service-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const primaryProject = createProject(database, "project-primary", root);
     const relatedProject = createProject(database, "project-related", join(root, "related"));
@@ -95,7 +95,7 @@ describe("RequirementService", () => {
   });
 
   it("rebuilds source and target requirement memory when moving a thread", () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-requirement-service-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-requirement-service-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const project = createProject(database, "project-primary", root);
     const memoryManager = new RequirementMemoryManager(database, () => undefined);

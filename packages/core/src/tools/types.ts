@@ -8,7 +8,7 @@ import {
   type ToolSource,
   type ToolSourceRecord,
   type WorkspaceProfile,
-} from "@my-agent/protocol";
+} from "@yellow-flow/protocol";
 import { z, type ZodTypeAny } from "zod";
 
 export interface JsonSchemaObject {

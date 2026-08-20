@@ -4,7 +4,7 @@ import {
   type DistributionTarget,
   type DistributionTemplateRecord,
   type TemplateScaffoldResult,
-} from "@my-agent/protocol";
+} from "@yellow-flow/protocol";
 import { findGitRoot } from "../utils/path-utils.js";
 
 const TEMPLATE_VERSION = "1.0";
@@ -211,7 +211,7 @@ function buildSkillYaml(name: string): string {
 
 function buildWorkflowYaml(name: string, slug: string): string {
   return [
-    `apiVersion: "my-agent/v1alpha1"`,
+    `apiVersion: "yellow-flow/v1alpha1"`,
     `templateVersion: "${TEMPLATE_VERSION}"`,
     "compatibility:",
     `  protocolVersion: "${PROTOCOL_VERSION}"`,

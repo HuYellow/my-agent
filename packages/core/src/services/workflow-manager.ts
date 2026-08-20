@@ -12,7 +12,7 @@ import {
   type WorkflowRunRecord,
   type WorkflowRunResult,
   type WorkflowStep,
-} from "@my-agent/protocol";
+} from "@yellow-flow/protocol";
 import { HarnessDatabase } from "../store/database.js";
 import { createId } from "../utils/ids.js";
 import { ToolService } from "../tools/tool-service.js";
@@ -264,8 +264,8 @@ export class WorkflowManager {
 function discoverWorkflows(project?: ProjectRecord): WorkflowRecord[] {
   const roots: Array<{ source: WorkflowRecord["source"]; path: string }> = [
     { source: "system", path: getDefaultSystemWorkflowsRoot() },
-    { source: "user", path: join(homedir(), ".my-agent", "workflows") },
-    { source: "catalog", path: join(homedir(), ".my-agent", "catalogs", "workflows") },
+    { source: "user", path: join(homedir(), ".yellow-flow", "workflows") },
+    { source: "catalog", path: join(homedir(), ".yellow-flow", "catalogs", "workflows") },
   ];
   const repoRoot = project ? findGitRoot(project.rootPath) : undefined;
 

@@ -10,11 +10,11 @@ import {
   type TurnRecord,
   type WorkspaceProfile,
   type WorktreeRecord,
-} from "@my-agent/protocol";
+} from "@yellow-flow/protocol";
 import { OpenAiCompatibleRunner } from "../agents/openai-compatible-runner.js";
 import { HarnessDatabase } from "../store/database.js";
 import { createId } from "../utils/ids.js";
-import { type ApprovalResponseParams } from "@my-agent/protocol";
+import { type ApprovalResponseParams } from "@yellow-flow/protocol";
 import { EnvironmentManager } from "./environment-manager.js";
 import { ExecutionContextManager } from "./execution-context-manager.js";
 import { WorktreeManager } from "./worktree-manager.js";
@@ -27,9 +27,9 @@ interface AgentTaskRunOptions {
   discoveredSkills?: SkillDescriptor[];
   selectedSkills?: SkillDescriptor[];
   mcpContext?: Array<{
-    mount: import("@my-agent/protocol").McpMountRecord;
-    prompts: import("@my-agent/protocol").McpPromptRecord[];
-    resources: import("@my-agent/protocol").McpResourceRecord[];
+    mount: import("@yellow-flow/protocol").McpMountRecord;
+    prompts: import("@yellow-flow/protocol").McpPromptRecord[];
+    resources: import("@yellow-flow/protocol").McpResourceRecord[];
   }>;
 }
 
@@ -67,7 +67,7 @@ export class AgentTaskManager {
     input: string;
     inheritHistory?: boolean;
     globalInstructions?: string;
-    runtimeRunMode?: import("@my-agent/protocol").RuntimeRunMode;
+    runtimeRunMode?: import("@yellow-flow/protocol").RuntimeRunMode;
     requirementContext?: string;
     discoveredSkills?: SkillDescriptor[];
     selectedSkills?: SkillDescriptor[];

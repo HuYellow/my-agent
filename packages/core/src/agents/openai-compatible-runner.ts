@@ -33,7 +33,7 @@ import {
   type TurnSteerRecord,
   type TurnRecord,
   type WorkspaceProfile,
-} from "@my-agent/protocol";
+} from "@yellow-flow/protocol";
 import { HarnessDatabase } from "../store/database.js";
 import {
   ControlledRunAbortError,
@@ -68,9 +68,9 @@ interface RunnerContext {
   globalInstructions: string;
   runtimeRunMode?: RuntimeRunMode;
   mcpContext?: Array<{
-    mount: import("@my-agent/protocol").McpMountRecord;
-    prompts: import("@my-agent/protocol").McpPromptRecord[];
-    resources: import("@my-agent/protocol").McpResourceRecord[];
+    mount: import("@yellow-flow/protocol").McpMountRecord;
+    prompts: import("@yellow-flow/protocol").McpPromptRecord[];
+    resources: import("@yellow-flow/protocol").McpResourceRecord[];
   }>;
   requirementContext?: string;
   ideContext?: {
@@ -435,7 +435,7 @@ export class OpenAiCompatibleRunner {
     });
 
     return new Agent({
-      name: "my-agent",
+      name: "yellow-flow",
       instructions: params.systemPrompt,
       handoffDescription: "A local coding assistant with workspace tools, skills, and approval-aware execution.",
       model: params.provider.model,
@@ -470,7 +470,7 @@ export class OpenAiCompatibleRunner {
       modelProvider,
       tracingDisabled: true,
       traceIncludeSensitiveData: false,
-      workflowName: "my-agent-runtime",
+      workflowName: "yellow-flow-runtime",
       groupId: threadId,
     });
   }

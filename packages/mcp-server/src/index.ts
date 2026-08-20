@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 import { pathToFileURL } from "node:url";
-import { createRuntimeKernel, type RuntimeKernel } from "@my-agent/core/runtime-kernel";
-import { type InitializeResult } from "@my-agent/protocol";
+import { createRuntimeKernel, type RuntimeKernel } from "@yellow-flow/core/runtime-kernel";
+import { type InitializeResult } from "@yellow-flow/protocol";
 
 type McpMessage = { id?: string | number; method?: string; params?: any };
 type McpResponse = { jsonrpc: "2.0"; id?: string | number; result?: unknown; error?: { code: number; message: string } };
@@ -38,7 +38,7 @@ export async function handleMcpMessage(runtime: RuntimeKernel, message: McpMessa
         result: {
           protocolVersion: "2024-11-05",
           serverInfo: {
-            name: "my-agent-mcp-server",
+            name: "yellow-flow-mcp-server",
             version: "0.1.0",
           },
           capabilities: {

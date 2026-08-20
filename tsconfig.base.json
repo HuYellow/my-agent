@@ -16,13 +16,13 @@
     ],
     "baseUrl": ".",
     "paths": {
-      "@my-agent/core": [
+      "@yellow-flow/core": [
         "packages/core/src/index.ts"
       ],
-      "@my-agent/core/runtime-kernel": [
+      "@yellow-flow/core/runtime-kernel": [
         "packages/core/src/runtime-kernel.ts"
       ],
-      "@my-agent/protocol": [
+      "@yellow-flow/protocol": [
         "packages/protocol/src/index.ts"
       ]
     }

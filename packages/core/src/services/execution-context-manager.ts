@@ -1,4 +1,4 @@
-import { type EnvironmentRecord, type ExecutionContextRecord, type ProjectRecord, type WorktreeRecord } from "@my-agent/protocol";
+import { type EnvironmentRecord, type ExecutionContextRecord, type ProjectRecord, type WorktreeRecord } from "@yellow-flow/protocol";
 import { HarnessDatabase } from "../store/database.js";
 import { createId } from "../utils/ids.js";
 

@@ -1,18 +1,18 @@
 # Distribution And Templates
 
-This guide covers the P2-M3 extension surface for `my-agent`: how templates are scaffolded, how runtime discovery works, and how compatibility is expressed for workflows and plugins.
+This guide covers the P2-M3 extension surface for Yellow Flow: how templates are scaffolded, how runtime discovery works, and how compatibility is expressed for workflows and plugins.
 
 ## Discovery Roots
 
-`my-agent` now discovers extension assets from four stable locations:
+Yellow Flow now discovers extension assets from four stable locations:
 
 - System assets:
   - `packages/core/system-skills`
   - `packages/core/system-workflows`
 - User assets:
-  - `~/.my-agent/skills`
-  - `~/.my-agent/workflows`
-  - `~/.my-agent/plugins`
+  - `~/.yellow-flow/skills`
+  - `~/.yellow-flow/workflows`
+  - `~/.yellow-flow/plugins`
 - Repo assets:
   - `.agents/skills`
   - `.agents/workflows`
@@ -20,9 +20,9 @@ This guide covers the P2-M3 extension surface for `my-agent`: how templates are 
   - `.codex/workflows`
   - `.codex/plugins`
 - Catalog assets:
-  - `~/.my-agent/catalogs/skills`
-  - `~/.my-agent/catalogs/workflows`
-  - `~/.my-agent/catalogs/plugins`
+  - `~/.yellow-flow/catalogs/skills`
+  - `~/.yellow-flow/catalogs/workflows`
+  - `~/.yellow-flow/catalogs/plugins`
 
 The new `catalogs/*` roots are the reserved distribution entrypoint for sharing installable assets outside a repo checkout while still keeping them local and auditable.
 
@@ -55,7 +55,7 @@ Compatibility is intentionally explicit for distributable artifacts:
 
 Current expectations:
 
-- Workflow scaffold emits `apiVersion: "my-agent/v1alpha1"`
+- Workflow scaffold emits `apiVersion: "yellow-flow/v1alpha1"`
 - Plugin scaffold emits `schemaVersion: "1.0"`
 - Runtime protocol compatibility remains `0.1.0`
 

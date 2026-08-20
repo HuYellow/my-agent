@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { RequirementMemoryRecord, ReviewArtifactRecord, ReviewRecord, ToolCatalogRecord } from "@my-agent/protocol";
+import type { RequirementMemoryRecord, ReviewArtifactRecord, ReviewRecord, ToolCatalogRecord } from "@yellow-flow/protocol";
 import { useAppStore } from "./store";
 
 const initialSession = {
@@ -47,7 +47,7 @@ describe("desktop thread smoke", () => {
     const now = new Date().toISOString();
 
     (globalThis as any).window = {
-      myAgent: {
+      yellowFlow: {
         startThread: async (params: unknown) => {
           calls.startThread.push(params);
           return {
@@ -189,7 +189,7 @@ describe("desktop thread smoke", () => {
     };
 
     (globalThis as any).window = {
-      myAgent: {
+      yellowFlow: {
         unassignThreadFromRequirement: async () => ({
           thread: {
             id: "thread-1",

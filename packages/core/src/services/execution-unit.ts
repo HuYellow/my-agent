@@ -7,7 +7,7 @@ import {
   type WorkflowRunStepRecord,
   type WorkflowStep,
   type WorkspaceProfile,
-} from "@my-agent/protocol";
+} from "@yellow-flow/protocol";
 import { HarnessDatabase } from "../store/database.js";
 import { createId } from "../utils/ids.js";
 import { ToolService } from "../tools/tool-service.js";

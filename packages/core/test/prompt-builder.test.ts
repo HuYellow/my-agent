@@ -7,7 +7,7 @@ import { SkillService } from "../src/services/skill-service.js";
 
 describe("PromptBuilder", () => {
   it("includes AGENTS and activated skill bodies", () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-prompt-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-prompt-"));
     const systemRoot = join(root, "system");
     const homeRoot = join(root, "home");
     const workspace = join(root, "workspace");
@@ -58,7 +58,7 @@ describe("PromptBuilder", () => {
   });
 
   it("renders AGENTS from repo root to the deepest matching directory", () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-prompt-order-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-prompt-order-"));
     const systemRoot = join(root, "system");
     const homeRoot = join(root, "home");
     const workspace = join(root, "workspace");

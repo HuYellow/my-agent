@@ -16,7 +16,7 @@ afterEach(async () => {
 
 describe("InternalToolProvider", () => {
   it("loads manifests and executes internal tools over HTTP", async () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-internal-tools-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-internal-tools-"));
     const homeDir = join(root, "home");
     const workspaceRoot = join(root, "workspace");
     const manifestDir = join(homeDir, "internal-tools");

@@ -2,7 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createRuntimeKernel } from "@my-agent/core/runtime-kernel";
+import { createRuntimeKernel } from "@yellow-flow/core/runtime-kernel";
 import { createAppServer, type AppServerInstance } from "../src/index.js";
 
 const runningServers: AppServerInstance[] = [];
@@ -17,7 +17,7 @@ describe("app-server RPC bridge", () => {
   it("forwards initialize and tool/list with compatibility metadata over HTTP", async () => {
     const instance = createAppServer({
       authToken: "test-token",
-      homeDir: mkdtempSync(join(tmpdir(), "my-agent-app-server-")),
+      homeDir: mkdtempSync(join(tmpdir(), "yellow-flow-app-server-")),
       port: 0,
     });
     runningServers.push(instance);
@@ -52,7 +52,7 @@ describe("app-server RPC bridge", () => {
   it("streams tools/catalogUpdated over SSE when runtime config changes", async () => {
     const instance = createAppServer({
       authToken: "test-token",
-      homeDir: mkdtempSync(join(tmpdir(), "my-agent-app-server-")),
+      homeDir: mkdtempSync(join(tmpdir(), "yellow-flow-app-server-")),
       port: 0,
     });
     runningServers.push(instance);
@@ -121,7 +121,7 @@ describe("app-server RPC bridge", () => {
 
   it("schedules due automation runs in headless app-server mode", async () => {
     const runtime = createRuntimeKernel({
-      homeDir: mkdtempSync(join(tmpdir(), "my-agent-app-server-")),
+      homeDir: mkdtempSync(join(tmpdir(), "yellow-flow-app-server-")),
       emitEvent: () => undefined,
     });
     const now = new Date().toISOString();

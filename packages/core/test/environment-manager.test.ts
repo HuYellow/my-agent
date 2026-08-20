@@ -9,7 +9,7 @@ vi.mock("node:child_process", () => ({
   spawnSync: (...args: unknown[]) => spawnSyncMock(...args),
 }));
 
-import type { ProjectRecord } from "@my-agent/protocol";
+import type { ProjectRecord } from "@yellow-flow/protocol";
 import { EnvironmentManager } from "../src/services/environment-manager.js";
 import { HarnessDatabase } from "../src/store/database.js";
 
@@ -32,7 +32,7 @@ describe("EnvironmentManager", () => {
   });
 
   it("detects tool availability and captures selected environment metadata", () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-env-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-env-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const project = createProject(database, root);
     const emitted: string[] = [];

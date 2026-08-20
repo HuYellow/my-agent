@@ -2,13 +2,13 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { TurnRecord, TurnSteerRecord } from "@my-agent/protocol";
+import type { TurnRecord, TurnSteerRecord } from "@yellow-flow/protocol";
 import { OpenAiCompatibleRunner } from "../src/agents/openai-compatible-runner.js";
 import { HarnessDatabase } from "../src/store/database.js";
 
 describe("OpenAiCompatibleRunner steer injection", () => {
   it("injects queued steer instructions into model instructions", () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-runner-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-runner-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const runner = new OpenAiCompatibleRunner(database, {} as never, () => undefined);
     const turn: TurnRecord = {
@@ -54,7 +54,7 @@ describe("OpenAiCompatibleRunner steer injection", () => {
   });
 
   it("rejects steer after the runtime is finished", () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-runner-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-runner-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const runner = new OpenAiCompatibleRunner(database, {} as never, () => undefined);
     const turn: TurnSteerRecord = {

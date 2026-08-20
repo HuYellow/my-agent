@@ -13,7 +13,7 @@ afterEach(async () => {
 
 describe("McpSessionManager", () => {
   it("marks stdio mounts as failed when the command cannot be spawned", async () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-mcp-session-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-mcp-session-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const manager = new McpSessionManager(database, () => undefined);
     const now = new Date().toISOString();
@@ -38,7 +38,7 @@ describe("McpSessionManager", () => {
   });
 
   it("ignores stdio notifications and resolves the matching response id", async () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-mcp-session-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-mcp-session-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const script = writeMcpServer(root, `
       if (message.method === "initialize") {
@@ -70,7 +70,7 @@ describe("McpSessionManager", () => {
   });
 
   it("routes concurrent stdio responses by id when they arrive out of order", async () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-mcp-session-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-mcp-session-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const script = writeMcpServer(root, `
       if (message.method === "initialize") {
@@ -99,7 +99,7 @@ describe("McpSessionManager", () => {
   });
 
   it("rejects pending stdio requests when the server exits", async () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-mcp-session-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-mcp-session-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const script = writeMcpServer(root, `
       if (message.method === "initialize") {

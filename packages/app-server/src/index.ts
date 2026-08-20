@@ -3,8 +3,8 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
 import { pathToFileURL } from "node:url";
-import { createRuntimeKernel, type RuntimeKernel } from "@my-agent/core/runtime-kernel";
-import { type HarnessEvent, type JsonRpcRequest, type JsonRpcResponse } from "@my-agent/protocol";
+import { createRuntimeKernel, type RuntimeKernel } from "@yellow-flow/core/runtime-kernel";
+import { type HarnessEvent, type JsonRpcRequest, type JsonRpcResponse } from "@yellow-flow/protocol";
 import { AutomationScheduler } from "./automation-scheduler.js";
 
 export interface AppServerInstance {
@@ -32,9 +32,9 @@ export function createAppServer(options: {
       emitEvent: (event) => broadcastEvent(event),
     });
   const clients = new Set<ServerResponse>();
-  const authToken = options.authToken ?? process.env.MY_AGENT_SERVER_TOKEN ?? randomBytes(24).toString("hex");
+  const authToken = options.authToken ?? process.env.YELLOW_FLOW_SERVER_TOKEN ?? randomBytes(24).toString("hex");
   const host = options.host ?? "127.0.0.1";
-  const port = options.port ?? Number(process.env.MY_AGENT_APP_SERVER_PORT ?? 4318);
+  const port = options.port ?? Number(process.env.YELLOW_FLOW_APP_SERVER_PORT ?? 4318);
   const server = createServer(async (req, res) => {
     await handleHttpRequest({
       runtime,
@@ -46,7 +46,7 @@ export function createAppServer(options: {
   });
   const scheduler = new AutomationScheduler(
     runtime,
-    options.schedulerPollIntervalMs ?? Number(process.env.MY_AGENT_AUTOMATION_POLL_MS ?? 30_000),
+    options.schedulerPollIntervalMs ?? Number(process.env.YELLOW_FLOW_AUTOMATION_POLL_MS ?? 30_000),
   );
 
   function broadcastEvent(event: HarnessEvent): void {
@@ -76,7 +76,7 @@ export function createAppServer(options: {
         scheduler.start();
       }
       options.onListening?.({
-        server: "my-agent-app-server",
+        server: "yellow-flow-app-server",
         port: resolvedPort,
         authToken,
         homeDir: runtime.homeDir,
@@ -112,7 +112,7 @@ async function handleHttpRequest(params: {
   const url = new URL(params.req.url ?? "/", `http://${params.req.headers.host ?? "127.0.0.1"}`);
 
   if (params.req.method === "GET" && url.pathname === "/health") {
-    writeJson(params.res, 200, { ok: true, server: "my-agent-app-server" });
+    writeJson(params.res, 200, { ok: true, server: "yellow-flow-app-server" });
     return;
   }
 

@@ -13,7 +13,7 @@ describe("Codex-inspired shell composition", () => {
   });
 
   it("uses the reference sidebar width by default", () => {
-    expect(appSource).toContain('const SIDEBAR_WIDTH_STORAGE_KEY = "my-agent-sidebar-width-ratio-v2";');
+    expect(appSource).toContain('const SIDEBAR_WIDTH_STORAGE_KEY = "yellow-flow-sidebar-width-ratio-v2";');
     expect(appSource).toContain("const SIDEBAR_DEFAULT_RATIO = 0.20;");
   });
 

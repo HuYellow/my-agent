@@ -6,7 +6,7 @@
     "declaration": true,
     "sourceMap": true,
     "paths": {
-      "@my-agent/protocol": [
+      "@yellow-flow/protocol": [
         "../protocol/dist/index.d.ts"
       ]
     }

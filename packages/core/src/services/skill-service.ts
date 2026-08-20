@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync, watch, type FSWatcher } from "no
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type SkillDescriptor } from "@my-agent/protocol";
+import { type SkillDescriptor } from "@yellow-flow/protocol";
 import YAML from "yaml";
 import { HarnessDatabase } from "../store/database.js";
 import { findGitRoot, readTextIfExists } from "../utils/path-utils.js";
@@ -250,5 +250,5 @@ export function getDefaultSystemSkillsRoot(): string {
 }
 
 export function getDefaultHomeDir(): string {
-  return join(homedir(), ".my-agent");
+  return join(homedir(), ".yellow-flow");
 }

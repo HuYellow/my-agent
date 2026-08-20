@@ -7,7 +7,7 @@ import { HarnessDatabase } from "../src/store/database.js";
 
 describe("AgentTaskManager", () => {
   it("runs delegated tasks through a hidden child thread and records a summary", async () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-agent-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-agent-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const project = database.listProjects()[0]!;
     const now = new Date().toISOString();
@@ -145,7 +145,7 @@ describe("AgentTaskManager", () => {
     vi.useFakeTimers();
 
     try {
-      const root = mkdtempSync(join(tmpdir(), "my-agent-agent-"));
+      const root = mkdtempSync(join(tmpdir(), "yellow-flow-agent-"));
       const database = new HarnessDatabase(join(root, "app.db"));
       const project = database.listProjects()[0]!;
       const now = new Date().toISOString();

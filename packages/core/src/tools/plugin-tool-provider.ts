@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
-import { type WorkspaceProfile } from "@my-agent/protocol";
+import { type WorkspaceProfile } from "@yellow-flow/protocol";
 import { HarnessDatabase } from "../store/database.js";
 import { executeOpenCodePluginTool, inspectOpenCodePlugin } from "../services/opencode-plugin-runner.js";
 import { discoverPluginEntries, type PluginManifest } from "../services/plugin-registry.js";
@@ -10,7 +10,7 @@ import { ToolExecutionAbortedError, type RuntimeToolCapability, type RuntimeTool
 export class PluginToolProvider implements ToolProvider {
   constructor(
     private readonly database?: HarnessDatabase,
-    private readonly homeDir = process.env.MY_AGENT_HOME ?? join(homedir(), ".my-agent"),
+    private readonly homeDir = process.env.YELLOW_FLOW_HOME ?? join(homedir(), ".yellow-flow"),
   ) {}
 
   listTools(workspace: WorkspaceProfile): RuntimeToolDefinition[] {
@@ -64,7 +64,7 @@ export class PluginToolProvider implements ToolProvider {
   }
 }
 
-function buildOpenCodeDefinitions(record: import("@my-agent/protocol").PluginRecord): RuntimeToolDefinition[] {
+function buildOpenCodeDefinitions(record: import("@yellow-flow/protocol").PluginRecord): RuntimeToolDefinition[] {
   let inspected: ReturnType<typeof inspectOpenCodePlugin>;
 
   try {
@@ -186,12 +186,12 @@ function buildPluginSource(plugin: PluginManifest, pluginPath: string, manifestP
     details: {
       version: plugin.version,
       command: pluginPath,
-      format: "my-agent",
+      format: "yellow-flow",
     },
   };
 }
 
-function buildOpenCodeCapability(_plugin: import("@my-agent/protocol").PluginRecord): RuntimeToolCapability {
+function buildOpenCodeCapability(_plugin: import("@yellow-flow/protocol").PluginRecord): RuntimeToolCapability {
   return {
     writes: true,
     network: true,

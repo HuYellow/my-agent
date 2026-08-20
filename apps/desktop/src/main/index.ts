@@ -53,7 +53,7 @@ import {
   type WorktreeRemoveParams,
   type UpdateThreadParams,
   type UpdateProjectParams,
-} from "@my-agent/protocol";
+} from "@yellow-flow/protocol";
 
 type TitleBarTheme = "light" | "dark";
 type AppMenuId = "file" | "edit" | "view" | "window" | "help";
@@ -64,12 +64,12 @@ class HarnessClient {
   private nextId = 1;
   private readonly pending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
   private readonly listeners = new Set<(event: HarnessEvent) => void>();
-  private activeServerUrl: string | null = process.env.MY_AGENT_SERVER_URL?.replace(/\/$/, "") ?? null;
-  private activeServerToken: string | null = process.env.MY_AGENT_SERVER_TOKEN ?? null;
+  private activeServerUrl: string | null = process.env.YELLOW_FLOW_SERVER_URL?.replace(/\/$/, "") ?? null;
+  private activeServerToken: string | null = process.env.YELLOW_FLOW_SERVER_TOKEN ?? null;
   private serverAbortController: AbortController | null = null;
 
   start(coreEntry: string, appServerEntry: string): void {
-    const backendMode = process.env.MY_AGENT_BACKEND_MODE ?? "server";
+    const backendMode = process.env.YELLOW_FLOW_BACKEND_MODE ?? "server";
 
     if (this.activeServerUrl) {
       this.startRemoteEventStream();
@@ -83,7 +83,7 @@ class HarnessClient {
       }
 
       safeConsoleLog(
-        `[my-agent] App server entry not found at ${appServerEntry}; falling back to stdio harness.`,
+        `[yellow-flow] App server entry not found at ${appServerEntry}; falling back to stdio harness.`,
       );
     }
 
@@ -126,7 +126,7 @@ class HarnessClient {
     });
 
     this.child.stderr.on("data", (chunk) => {
-      safeConsoleError(`[my-agent-core] ${chunk.toString()}`);
+      safeConsoleError(`[yellow-flow-core] ${chunk.toString()}`);
     });
 
     this.child.on("exit", () => {
@@ -176,7 +176,7 @@ class HarnessClient {
       this.child.stdin.write(`${JSON.stringify(message)}\n`);
     } catch (error) {
       this.pending.delete(id);
-      throw wrapPipeError(error, "Failed to write to my-agent-core. The harness process may have exited.");
+      throw wrapPipeError(error, "Failed to write to yellow-flow-core. The harness process may have exited.");
     }
     return promise;
   }
@@ -203,14 +203,14 @@ class HarnessClient {
       return;
     }
 
-    const port = process.env.MY_AGENT_APP_SERVER_PORT ?? "4318";
-    const token = process.env.MY_AGENT_SERVER_TOKEN ?? `desktop-${Date.now()}`;
+    const port = process.env.YELLOW_FLOW_APP_SERVER_PORT ?? "4318";
+    const token = process.env.YELLOW_FLOW_SERVER_TOKEN ?? `desktop-${Date.now()}`;
     const child = spawn(resolveNodeBinary(), [appServerEntry], {
       stdio: ["ignore", "pipe", "pipe"],
       env: {
         ...process.env,
-        MY_AGENT_APP_SERVER_PORT: port,
-        MY_AGENT_SERVER_TOKEN: token,
+        YELLOW_FLOW_APP_SERVER_PORT: port,
+        YELLOW_FLOW_SERVER_TOKEN: token,
       },
     });
     this.serverChild = child;
@@ -231,7 +231,7 @@ class HarnessClient {
       }
     });
     child.stderr?.on("data", (chunk) => {
-      safeConsoleError(`[my-agent-app-server] ${chunk.toString()}`);
+      safeConsoleError(`[yellow-flow-app-server] ${chunk.toString()}`);
     });
     child.on("exit", () => {
       this.serverChild = null;
@@ -325,7 +325,7 @@ class HarnessClient {
         }
       } catch (error) {
         if (!controller.signal.aborted) {
-          safeConsoleError(`[my-agent-app-server] ${error instanceof Error ? error.message : String(error)}`);
+          safeConsoleError(`[yellow-flow-app-server] ${error instanceof Error ? error.message : String(error)}`);
         }
       } finally {
         this.serverAbortController = null;
@@ -343,7 +343,7 @@ const harness = new HarnessClient();
 
 async function createWindow(): Promise<void> {
   const preload = resolve(app.getAppPath(), "dist-electron", "preload", "index.cjs");
-  const devServerUrl = process.env.MY_AGENT_DEV_SERVER_URL;
+  const devServerUrl = process.env.YELLOW_FLOW_DEV_SERVER_URL;
 
   mainWindow = new BrowserWindow({
     width: 1560,
@@ -351,7 +351,7 @@ async function createWindow(): Promise<void> {
     minWidth: 1240,
     minHeight: 760,
     backgroundColor: "#efe7dc",
-    title: "my-agent",
+    title: "Yellow Flow",
     frame: false,
     titleBarStyle: "hidden",
     webPreferences: {
@@ -580,7 +580,7 @@ process.stdout.on("error", swallowBrokenPipeError);
 process.stderr.on("error", swallowBrokenPipeError);
 
 function resolveNodeBinary(): string {
-  const candidates = [process.env.MY_AGENT_NODE_BINARY, process.env.npm_node_execpath, "node"];
+  const candidates = [process.env.YELLOW_FLOW_NODE_BINARY, process.env.npm_node_execpath, "node"];
 
   for (const candidate of candidates) {
     if (!candidate) {
@@ -692,7 +692,7 @@ function getAppMenuSections(): Array<{ id: AppMenuId; label: string; submenu: Me
           type: "separator",
         },
         {
-          label: "Quit my-agent",
+          label: "Quit Yellow Flow",
           role: "quit",
         },
       ],
@@ -736,12 +736,12 @@ function getAppMenuSections(): Array<{ id: AppMenuId; label: string; submenu: Me
       label: "Help",
       submenu: [
         {
-          label: "About my-agent",
+          label: "About Yellow Flow",
           click: () => {
             const options = {
               type: "info",
-              title: "About my-agent",
-              message: "my-agent",
+              title: "About Yellow Flow",
+              message: "Yellow Flow",
               detail: "Mind Atlas for threads, context, skills, and runtime orchestration.",
             } as const;
 

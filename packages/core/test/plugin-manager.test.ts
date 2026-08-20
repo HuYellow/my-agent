@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { ProjectRecord } from "@my-agent/protocol";
+import type { ProjectRecord } from "@yellow-flow/protocol";
 import { PluginManager } from "../src/services/plugin-manager.js";
 import { discoverPluginEntries } from "../src/services/plugin-registry.js";
 import { HarnessDatabase } from "../src/store/database.js";
@@ -17,8 +17,8 @@ describe("PluginManager", () => {
   });
 
   it("discovers repo and user plugins through the manager and persists them without id collisions", () => {
-    const homeRoot = mkdtempSync(join(tmpdir(), "my-agent-plugin-home-"));
-    const repoRoot = mkdtempSync(join(tmpdir(), "my-agent-plugin-repo-"));
+    const homeRoot = mkdtempSync(join(tmpdir(), "yellow-flow-plugin-home-"));
+    const repoRoot = mkdtempSync(join(tmpdir(), "yellow-flow-plugin-repo-"));
     process.env.HOME = homeRoot;
     process.env.USERPROFILE = homeRoot;
     mkdirSync(join(repoRoot, ".git"), { recursive: true });
@@ -41,7 +41,7 @@ describe("PluginManager", () => {
         },
       },
     });
-    writePluginManifest(join(homeRoot, ".my-agent", "plugins", "user-helper", "plugin.json"), {
+    writePluginManifest(join(homeRoot, ".yellow-flow", "plugins", "user-helper", "plugin.json"), {
       schemaVersion: "1.0",
       name: "User Helper",
       version: "0.0.1",
@@ -82,10 +82,10 @@ describe("PluginManager", () => {
   });
 
   it("discovers user plugins through the registry with untrusted defaults and validation errors", () => {
-    const homeRoot = mkdtempSync(join(tmpdir(), "my-agent-plugin-home-"));
-    const repoRoot = mkdtempSync(join(tmpdir(), "my-agent-plugin-repo-"));
+    const homeRoot = mkdtempSync(join(tmpdir(), "yellow-flow-plugin-home-"));
+    const repoRoot = mkdtempSync(join(tmpdir(), "yellow-flow-plugin-repo-"));
     mkdirSync(join(repoRoot, ".git"), { recursive: true });
-    writePluginManifest(join(homeRoot, ".my-agent", "plugins", "user-helper", "plugin.json"), {
+    writePluginManifest(join(homeRoot, ".yellow-flow", "plugins", "user-helper", "plugin.json"), {
       schemaVersion: "1.0",
       name: "User Helper",
       version: "0.0.1",
@@ -94,7 +94,7 @@ describe("PluginManager", () => {
 
     const discovered = discoverPluginEntries({
       workspaceRoot: repoRoot,
-      homeDir: join(homeRoot, ".my-agent"),
+      homeDir: join(homeRoot, ".yellow-flow"),
     });
 
     expect(discovered).toEqual([
@@ -111,7 +111,7 @@ describe("PluginManager", () => {
   });
 
   it("updates persisted plugin state and rejects unknown plugin ids", () => {
-    const root = mkdtempSync(join(tmpdir(), "my-agent-plugin-update-"));
+    const root = mkdtempSync(join(tmpdir(), "yellow-flow-plugin-update-"));
     const database = new HarnessDatabase(join(root, "app.db"));
     const now = new Date().toISOString();
     const manager = new PluginManager(database, () => undefined);

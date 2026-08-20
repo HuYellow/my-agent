@@ -6,9 +6,9 @@
     "sourceMap": true,
     "baseUrl": ".",
     "paths": {
-      "@my-agent/core": ["../core/dist/index.d.ts"],
-      "@my-agent/core/runtime-kernel": ["../core/dist/runtime-kernel.d.ts"],
-      "@my-agent/protocol": ["../protocol/dist/index.d.ts"]
+      "@yellow-flow/core": ["../core/dist/index.d.ts"],
+      "@yellow-flow/core/runtime-kernel": ["../core/dist/runtime-kernel.d.ts"],
+      "@yellow-flow/protocol": ["../protocol/dist/index.d.ts"]
     }
   },
   "include": ["src/**/*.ts"]

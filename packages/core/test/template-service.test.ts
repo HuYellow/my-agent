@@ -6,8 +6,8 @@ import { TemplateService } from "../src/services/template-service.js";
 
 describe("TemplateService", () => {
   it("lists built-in templates and scaffolds a repo skill", () => {
-    const homeDir = mkdtempSync(join(tmpdir(), "my-agent-home-"));
-    const projectRoot = mkdtempSync(join(tmpdir(), "my-agent-project-"));
+    const homeDir = mkdtempSync(join(tmpdir(), "yellow-flow-home-"));
+    const projectRoot = mkdtempSync(join(tmpdir(), "yellow-flow-project-"));
     const service = new TemplateService(homeDir);
 
     const templates = service.listTemplates();
@@ -31,7 +31,7 @@ describe("TemplateService", () => {
   });
 
   it("scaffolds catalog plugins with runnable manifest metadata", () => {
-    const homeDir = mkdtempSync(join(tmpdir(), "my-agent-home-"));
+    const homeDir = mkdtempSync(join(tmpdir(), "yellow-flow-home-"));
     const service = new TemplateService(homeDir);
 
     const result = service.scaffold({

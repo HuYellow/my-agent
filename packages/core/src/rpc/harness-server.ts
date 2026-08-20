@@ -93,7 +93,7 @@ import {
   type UpdateProjectParams,
   type WritePatchParams,
   type UpdateThreadParams,
-} from "@my-agent/protocol";
+} from "@yellow-flow/protocol";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { basename, resolve } from "node:path";
@@ -104,7 +104,7 @@ import { EnvironmentManager } from "../services/environment-manager.js";
 import { ExecutionContextManager } from "../services/execution-context-manager.js";
 import { InternalToolManager } from "../services/internal-tool-manager.js";
 import { McpManager } from "../services/mcp-manager.js";
-import { ensureStoredProviderConfig, syncStoredProviderConfig, watchStoredConfig } from "../services/my-agent-config.js";
+import { ensureStoredProviderConfig, syncStoredProviderConfig, watchStoredConfig } from "../services/yellow-flow-config.js";
 import { PluginManager } from "../services/plugin-manager.js";
 import { PromptBuilder } from "../services/prompt-builder.js";
 import { ProviderService } from "../services/provider-service.js";
@@ -231,7 +231,7 @@ export class HarnessServer {
       this.requirementMemoryManager,
       (event) => this.emit(event),
     );
-    this.templateService = new TemplateService(process.env.MY_AGENT_HOME ?? getDefaultHomeDir());
+    this.templateService = new TemplateService(process.env.YELLOW_FLOW_HOME ?? getDefaultHomeDir());
     this.workflowManager = new WorkflowManager(
       this.database,
       this.worktreeManager,
@@ -483,7 +483,7 @@ export class HarnessServer {
     return {
       protocolVersion: "0.1.0",
       server: {
-        name: "my-agent-core",
+        name: "yellow-flow-core",
         version: "0.1.0",
       },
       compatibility: buildProtocolCompatibility(),
@@ -1909,7 +1909,7 @@ export class HarnessServer {
     status: string;
     finalOutput?: string;
     id: string;
-    summary?: import("@my-agent/protocol").AgentTaskSummary;
+    summary?: import("@yellow-flow/protocol").AgentTaskSummary;
   }) {
     if (!task.parentTurnId || task.status === "running") {
       return;
@@ -2211,7 +2211,7 @@ export class HarnessServer {
     }
   }
 
-  private enrichPendingApproval(workspace: ProjectRecord, threadId: string, approval: import("@my-agent/protocol").PendingApproval) {
+  private enrichPendingApproval(workspace: ProjectRecord, threadId: string, approval: import("@yellow-flow/protocol").PendingApproval) {
     if (approval.tool) {
       return approval;
     }

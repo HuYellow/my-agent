@@ -1,4 +1,4 @@
-import { type WorkspaceProfile } from "@my-agent/protocol";
+import { type WorkspaceProfile } from "@yellow-flow/protocol";
 import { isPathInside } from "../utils/path-utils.js";
 import { type ToolActionDescriptor, type ToolPermissionDecision } from "./types.js";
 

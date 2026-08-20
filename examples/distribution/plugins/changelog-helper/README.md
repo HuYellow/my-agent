@@ -1,6 +1,6 @@
 # Changelog Helper
 
-Example plugin distribution for `my-agent`.
+Example plugin distribution for Yellow Flow.
 
 ## Smoke Test
 

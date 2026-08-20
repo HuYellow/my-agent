@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createRequire } from "node:module";
 import { basename, resolve } from "node:path";
-import { type TerminalBackendCapability, type TerminalSessionRecord, type WorkspaceProfile } from "@my-agent/protocol";
+import { type TerminalBackendCapability, type TerminalSessionRecord, type WorkspaceProfile } from "@yellow-flow/protocol";
 import { HarnessDatabase } from "../store/database.js";
 import { createId } from "../utils/ids.js";
 import { isPathInside } from "../utils/path-utils.js";
@@ -63,7 +63,7 @@ export class TerminalManager {
     private readonly database: HarnessDatabase,
     private readonly onUpdate: (session: TerminalSessionRecord) => void,
     private readonly onOutput: (event: { sessionId: string; threadId?: string; delta: string; timestamp: string }) => void,
-    private readonly onArchived: (archive: import("@my-agent/protocol").TerminalOutputArchiveRecord) => void,
+    private readonly onArchived: (archive: import("@yellow-flow/protocol").TerminalOutputArchiveRecord) => void,
     private readonly onCleared: (event: { sessionId: string; threadId?: string; timestamp: string }) => void,
   ) {
     this.defaultBackend = this.resolvePreferredBackend();
@@ -358,7 +358,7 @@ export class TerminalManager {
   }
 
   private resolvePreferredBackend(): TerminalBackend {
-    const preferred = (process.env.MY_AGENT_TERMINAL_BACKEND ?? "auto").toLowerCase();
+    const preferred = (process.env.YELLOW_FLOW_TERMINAL_BACKEND ?? "auto").toLowerCase();
 
     if (preferred === "pipe") {
       return this.backends.find((backend) => backend.kind === "pipe") ?? this.backends[0]!;
@@ -394,8 +394,8 @@ export class TerminalManager {
   private archiveOutput(
     session: TerminalSessionRecord,
     output: string,
-    reason: import("@my-agent/protocol").TerminalOutputArchiveRecord["reason"],
-  ): import("@my-agent/protocol").TerminalOutputArchiveRecord {
+    reason: import("@yellow-flow/protocol").TerminalOutputArchiveRecord["reason"],
+  ): import("@yellow-flow/protocol").TerminalOutputArchiveRecord {
     const archive = this.database.createTerminalOutputArchive({
       id: createId("termarch"),
       sessionId: session.id,

@@ -1,11 +1,11 @@
-# my-agent
+# Yellow Flow
 
 Codex-like desktop agent scaffold built with Electron, React, TypeScript, and a local harness process.
 
 ## Workspace layout
 
 - `apps/desktop`: Electron shell, React renderer, and preload bridge.
-- `packages/core`: `my-agent-core` harness process that exposes JSON-RPC over stdio.
+- `packages/core`: `yellow-flow-core` harness process that exposes JSON-RPC over stdio.
 - `packages/protocol`: Shared protocol types used by the harness and desktop client.
 
 ## Quick start
@@ -34,6 +34,6 @@ P2-M3 adds a first-class extension packaging layer:
 
 - scaffoldable templates for skills, workflows, and plugins
 - compatibility metadata for workflow and plugin manifests
-- catalog roots under `~/.my-agent/catalogs/*` for shareable local distributions
+- catalog roots under `~/.yellow-flow/catalogs/*` for shareable local distributions
 
 See [docs/distribution-and-templates.md](docs/distribution-and-templates.md) for the authoring and packaging guide.

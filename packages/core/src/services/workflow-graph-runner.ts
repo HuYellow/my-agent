@@ -4,7 +4,7 @@ import {
   type WorkflowRunResult,
   type WorkflowRunStepRecord,
   type WorkflowStep,
-} from "@my-agent/protocol";
+} from "@yellow-flow/protocol";
 import { HarnessDatabase } from "../store/database.js";
 import {
   ExecutionUnitRunner,

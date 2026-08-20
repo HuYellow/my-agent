@@ -1,4 +1,4 @@
-import { type ToolCatalogRecord, type WorkspaceProfile } from "@my-agent/protocol";
+import { type ToolCatalogRecord, type WorkspaceProfile } from "@yellow-flow/protocol";
 import { ZodError } from "zod";
 import { HarnessDatabase } from "../store/database.js";
 import { InternalToolProvider } from "./internal-tool-provider.js";

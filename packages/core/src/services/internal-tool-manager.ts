@@ -1,4 +1,4 @@
-import { type InternalToolRecord, type ProjectRecord } from "@my-agent/protocol";
+import { type InternalToolRecord, type ProjectRecord } from "@yellow-flow/protocol";
 import { HarnessDatabase } from "../store/database.js";
 import { discoverInternalToolEntries } from "./internal-tool-registry.js";
 

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
-import { type PluginComponentRecord, type PluginFormat, type PluginInstallSourceRecord, type PluginRecord } from "@my-agent/protocol";
+import { type PluginComponentRecord, type PluginFormat, type PluginInstallSourceRecord, type PluginRecord } from "@yellow-flow/protocol";
 import { z } from "zod";
 import { findGitRoot } from "../utils/path-utils.js";
 
@@ -406,7 +406,7 @@ function discoverMarketplaceEntries(
   persistedById: Map<string, PluginRecord>,
 ): DiscoveredPluginEntry[] {
   const repoRoot = findGitRoot(workspaceRoot);
-  const resolvedHome = homeDir ?? join(homedir(), ".my-agent");
+  const resolvedHome = homeDir ?? join(homedir(), ".yellow-flow");
   const candidates: Array<{ path: string; baseRoot: string; source: PluginRecord["source"] }> = [];
 
   if (repoRoot) {
@@ -494,7 +494,7 @@ function discoverMarketplaceFile(
   }
 }
 
-function resolvePluginRoots(workspaceRoot: string, homeDir = join(homedir(), ".my-agent")): PluginRoot[] {
+function resolvePluginRoots(workspaceRoot: string, homeDir = join(homedir(), ".yellow-flow")): PluginRoot[] {
   const roots: PluginRoot[] = [
     { source: "user", path: join(homeDir, "plugins") },
     { source: "catalog", path: join(homeDir, "catalogs", "plugins") },
@@ -551,7 +551,7 @@ function collectOpenCodeNpmPackages(
   const configCandidates = [
     join(repoRoot, "opencode.json"),
     join(repoRoot, ".opencode", "opencode.json"),
-    join(homeDir ?? join(homedir(), ".my-agent"), "opencode.json"),
+    join(homeDir ?? join(homedir(), ".yellow-flow"), "opencode.json"),
     join(homedir(), ".config", "opencode", "opencode.json"),
   ];
 
@@ -782,7 +782,7 @@ function resolvePluginManifestPath(pluginPath: string): string | undefined {
 
 function detectManifestFormat(manifest: PluginManifest): PluginFormat {
   if (manifest.command || manifest.tool) {
-    return "my-agent";
+    return "yellow-flow";
   }
 
   return "codex";
@@ -807,7 +807,7 @@ function validatePluginManifest(manifest: PluginManifest, components: PluginComp
 
   const hasCodexComponents = components.skills > 0 || components.mcpServers > 0 || components.hooks > 0 || Boolean(components.apps) || Boolean(manifest.interface);
 
-  if (format === "my-agent" || !hasCodexComponents) {
+  if (format === "yellow-flow" || !hasCodexComponents) {
     if (!manifest.command?.trim()) {
       errors.push("Missing plugin command.");
     }
